@@ -42,6 +42,10 @@ type SetupResult struct {
 	Browsers []InstallResult `json:"browsers"`
 }
 
+type UninstallResult struct {
+	Browsers []InstallResult `json:"browsers"`
+}
+
 type InstallResult struct {
 	Name           string `json:"name"`
 	Version        string `json:"version"`
@@ -97,6 +101,40 @@ func (m *Manager) Setup(ctx context.Context) (SetupResult, error) {
 
 func (m *Manager) Update(ctx context.Context) (SetupResult, error) {
 	return m.install(ctx, true)
+}
+
+func (m *Manager) Uninstall(_ context.Context, names ...string) (UninstallResult, error) {
+	manifest, err := m.loadManifest()
+	if err != nil {
+		return UninstallResult{}, err
+	}
+
+	targets, err := normalizeBrowserNames(names)
+	if err != nil {
+		return UninstallResult{}, err
+	}
+
+	results := make([]InstallResult, 0, len(targets))
+	for _, name := range targets {
+		installation := manifest.Browsers[name]
+		targetDir := filepath.Join(m.browserRootDir(), name)
+		if err := os.RemoveAll(targetDir); err != nil {
+			return UninstallResult{}, err
+		}
+		delete(manifest.Browsers, name)
+		results = append(results, InstallResult{
+			Name:           name,
+			Version:        installation.Version,
+			ExecutablePath: installation.ExecutablePath,
+			Changed:        installation.ExecutablePath != "",
+		})
+	}
+
+	if err := m.saveManifest(manifest); err != nil {
+		return UninstallResult{}, err
+	}
+
+	return UninstallResult{Browsers: results}, nil
 }
 
 func (m *Manager) Status() (Status, error) {
@@ -470,6 +508,29 @@ func lightpandaAssetName() string {
 	default:
 		return ""
 	}
+}
+
+func normalizeBrowserNames(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return []string{BrowserChromium, BrowserLightpanda}, nil
+	}
+
+	targets := make([]string, 0, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		switch name {
+		case BrowserChromium, BrowserLightpanda:
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			targets = append(targets, name)
+		default:
+			return nil, fmt.Errorf("%w: %s", ErrUnknownBrowser, name)
+		}
+	}
+
+	return targets, nil
 }
 
 func unzip(src string, dst string) error {

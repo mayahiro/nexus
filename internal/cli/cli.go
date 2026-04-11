@@ -32,6 +32,7 @@ var newBrowserManager = func(paths config.Paths) browserManager {
 type browserManager interface {
 	Setup(ctx context.Context) (browsermgr.SetupResult, error)
 	Update(ctx context.Context) (browsermgr.SetupResult, error)
+	Uninstall(ctx context.Context, names ...string) (browsermgr.UninstallResult, error)
 	Status() (browsermgr.Status, error)
 	Resolve(name string) (browsermgr.Installation, error)
 }
@@ -235,6 +236,24 @@ func runBrowser(ctx context.Context, args []string, stdout io.Writer, stderr io.
 			return 1
 		}
 		printBrowserStatus(stdout, status)
+		return 0
+	case "uninstall":
+		fs := flag.NewFlagSet("browser uninstall", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		name := fs.String("name", "", "browser name")
+		if err := fs.Parse(args[1:]); err != nil {
+			return 1
+		}
+		names := []string{}
+		if *name != "" {
+			names = append(names, *name)
+		}
+		result, err := manager.Uninstall(ctx, names...)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		printBrowserResults(stdout, browsermgr.SetupResult{Browsers: result.Browsers})
 		return 0
 	default:
 		if args[0] == "help" {
@@ -2012,7 +2031,8 @@ func printBackHelp(w io.Writer) {
 }
 
 func printBrowserHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl browser <setup|update|status>")
+	fmt.Fprintln(w, "usage: nxctl browser <setup|update|status|uninstall>")
+	fmt.Fprintln(w, "   or: nxctl browser uninstall [--name chromium|lightpanda]")
 }
 
 func printClickHelp(w io.Writer) {

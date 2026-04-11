@@ -97,6 +97,25 @@ func TestHelp(t *testing.T) {
 	}
 }
 
+func TestBrowserUninstall(t *testing.T) {
+	original := newBrowserManager
+	defer func() {
+		newBrowserManager = original
+	}()
+
+	newBrowserManager = func(config.Paths) browserManager {
+		return fakeBrowserManager{}
+	}
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"browser", "uninstall", "--name", "chromium"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected browser uninstall exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "chromium") {
+		t.Fatalf("unexpected browser uninstall output: %s", stdout.String())
+	}
+}
+
 func TestDoctorStartsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
 
@@ -1650,6 +1669,14 @@ func (fakeBrowserManager) Update(context.Context) (browsermgr.SetupResult, error
 	return fakeBrowserManager{}.Setup(context.Background())
 }
 
+func (fakeBrowserManager) Uninstall(context.Context, ...string) (browsermgr.UninstallResult, error) {
+	return browsermgr.UninstallResult{
+		Browsers: []browsermgr.InstallResult{
+			{Name: "chromium", Version: "1.0.0", ExecutablePath: "/tmp/chromium", Changed: true},
+		},
+	}, nil
+}
+
 func (fakeBrowserManager) Status() (browsermgr.Status, error) {
 	return browsermgr.Status{
 		Browsers: []browsermgr.Installation{
@@ -1678,6 +1705,10 @@ func (missingBrowserManager) Setup(context.Context) (browsermgr.SetupResult, err
 
 func (missingBrowserManager) Update(context.Context) (browsermgr.SetupResult, error) {
 	return browsermgr.SetupResult{}, nil
+}
+
+func (missingBrowserManager) Uninstall(context.Context, ...string) (browsermgr.UninstallResult, error) {
+	return browsermgr.UninstallResult{}, nil
 }
 
 func (missingBrowserManager) Status() (browsermgr.Status, error) {

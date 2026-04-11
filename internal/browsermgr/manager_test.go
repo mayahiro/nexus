@@ -119,6 +119,47 @@ func TestResolveMissingBrowser(t *testing.T) {
 	}
 }
 
+func TestUninstall(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("browser setup is macOS only")
+	}
+
+	server := newBrowserTestServer(t)
+	defer server.Close()
+
+	paths := testPaths(t)
+	manager := New(paths)
+	manager.client = server.Client()
+	manager.chromeVersionsURL = server.URL + "/chrome.json"
+	manager.lightpandaLatestURL = server.URL + "/lightpanda.json"
+
+	if _, err := manager.Setup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.Uninstall(context.Background(), BrowserChromium)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Browsers) != 1 || result.Browsers[0].Name != BrowserChromium {
+		t.Fatalf("unexpected uninstall result: %+v", result)
+	}
+
+	status, err := manager.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, browser := range status.Browsers {
+		if browser.Name == BrowserChromium && browser.Installed {
+			t.Fatalf("chromium should be uninstalled: %+v", browser)
+		}
+		if browser.Name == BrowserLightpanda && !browser.Installed {
+			t.Fatalf("lightpanda should remain installed: %+v", browser)
+		}
+	}
+}
+
 type testServerState struct {
 	chromiumVersion   string
 	lightpandaVersion string
