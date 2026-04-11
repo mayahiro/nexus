@@ -66,6 +66,14 @@ func TestSetupAndStatus(t *testing.T) {
 	if !resolved.Installed || resolved.ExecutablePath == "" {
 		t.Fatalf("unexpected resolved browser: %+v", resolved)
 	}
+
+	entries, err := os.ReadDir(filepath.Join(paths.Cache, "downloads"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty download cache, got %d entries", len(entries))
+	}
 }
 
 func TestUpdateReplacesVersions(t *testing.T) {

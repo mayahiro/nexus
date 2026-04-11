@@ -237,6 +237,7 @@ func (m *Manager) installChromium(ctx context.Context, manifest manifest, force 
 	if err != nil {
 		return installState{}, err
 	}
+	defer os.Remove(archivePath)
 
 	stageDir, err := os.MkdirTemp(m.browserRootDir(), "chromium-stage-")
 	if err != nil {
