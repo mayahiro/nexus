@@ -193,7 +193,7 @@ func TestAttachSessionsDetach(t *testing.T) {
 		return fakeBrowserManager{}
 	}
 
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda", "--url", "https://example.com"}, &attachOut, &attachOut); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda", "--url", "https://example.com", "--viewport", "1440x900"}, &attachOut, &attachOut); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, attachOut.String())
 	}
 	if !strings.Contains(attachOut.String(), "attached browser web1 (lightpanda) /tmp/lightpanda") {
@@ -214,6 +214,12 @@ func TestAttachSessionsDetach(t *testing.T) {
 		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
 	if !strings.Contains(sessionsOut.String(), "\"initial_url\": \"https://example.com\"") {
+		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
+	}
+	if !strings.Contains(sessionsOut.String(), "\"viewport_width\": \"1440\"") {
+		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
+	}
+	if !strings.Contains(sessionsOut.String(), "\"viewport_height\": \"900\"") {
 		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
 
@@ -319,11 +325,22 @@ func TestOpenAndState(t *testing.T) {
 	}
 
 	var openOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda"}, &openOut, &openOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda", "--viewport", "1280x720"}, &openOut, &openOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, openOut.String())
 	}
 	if !strings.Contains(openOut.String(), "attached browser default (lightpanda) /tmp/lightpanda") {
 		t.Fatalf("unexpected open output: %s", openOut.String())
+	}
+
+	var sessionsOut bytes.Buffer
+	if code := Run(context.Background(), []string{"sessions", "--json"}, &sessionsOut, &sessionsOut); code != 0 {
+		t.Fatalf("unexpected sessions exit code: %d\n%s", code, sessionsOut.String())
+	}
+	if !strings.Contains(sessionsOut.String(), "\"viewport_width\": \"1280\"") {
+		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
+	}
+	if !strings.Contains(sessionsOut.String(), "\"viewport_height\": \"720\"") {
+		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
 
 	var stateOut bytes.Buffer
@@ -809,6 +826,59 @@ func TestBack(t *testing.T) {
 	}
 }
 
+func TestViewport(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, viewportRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"viewport", "1280x720"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected viewport exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "set viewport 1280x720" {
+		t.Fatalf("unexpected viewport output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"viewport", "1440x900", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected viewport --json exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"message": "set viewport 1440x900"`) {
+		t.Fatalf("unexpected viewport --json output: %s", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestWait(t *testing.T) {
 	configureXDGTestEnv(t)
 
@@ -1175,6 +1245,7 @@ type keysRPCHandler struct{}
 type screenshotRPCHandler struct{}
 type scrollRPCHandler struct{}
 type backRPCHandler struct{}
+type viewportRPCHandler struct{}
 type waitRPCHandler struct{}
 type getRPCHandler struct{}
 type selectUploadRPCHandler struct{}
@@ -1519,6 +1590,51 @@ func (backRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 			OK:      true,
 			Changed: true,
 			Message: "went back",
+		},
+	}, nil
+}
+
+func (viewportRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
+	return api.PingResponse{}, nil
+}
+
+func (viewportRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
+	return api.AttachSessionResponse{}, nil
+}
+
+func (viewportRPCHandler) ListSessions(context.Context, api.ListSessionsRequest) (api.ListSessionsResponse, error) {
+	return api.ListSessionsResponse{}, nil
+}
+
+func (viewportRPCHandler) DetachSession(context.Context, api.DetachSessionRequest) (api.DetachSessionResponse, error) {
+	return api.DetachSessionResponse{}, nil
+}
+
+func (viewportRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api.StopDaemonResponse, error) {
+	return api.StopDaemonResponse{Stopped: true}, nil
+}
+
+func (viewportRPCHandler) ObserveSession(context.Context, api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	return api.ObserveSessionResponse{}, nil
+}
+
+func (viewportRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	if req.Action.Kind != "viewport" {
+		return api.ActSessionResponse{}, nil
+	}
+	if req.Action.Args["width"] == "" || req.Action.Args["height"] == "" {
+		return api.ActSessionResponse{}, nil
+	}
+
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: "set viewport " + req.Action.Args["width"] + "x" + req.Action.Args["height"],
+			Value: map[string]interface{}{
+				"width":  req.Action.Args["width"],
+				"height": req.Action.Args["height"],
+			},
 		},
 	}, nil
 }

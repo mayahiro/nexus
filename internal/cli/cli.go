@@ -23,6 +23,8 @@ import (
 )
 
 const daemonStartTimeout = 3 * time.Second
+const defaultViewportWidth = 1920
+const defaultViewportHeight = 1080
 
 var startDaemonProcess = startDaemon
 var newBrowserManager = func(paths config.Paths) browserManager {
@@ -86,6 +88,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runType(ctx, args[1:], stdout, stderr)
 	case "upload":
 		return runUpload(ctx, args[1:], stdout, stderr)
+	case "viewport":
+		return runViewport(ctx, args[1:], stdout, stderr)
 	case "wait":
 		return runWait(ctx, args[1:], stdout, stderr)
 	case "rightclick":
@@ -359,6 +363,7 @@ func runOpen(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	sessionID := fs.String("session", "default", "session id")
 	backend := fs.String("backend", "chromium", "browser backend")
 	targetRef := fs.String("target-ref", "", "target ref")
+	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 	urlArg := ""
 
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -384,6 +389,9 @@ func runOpen(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		"--session", *sessionID,
 		"--backend", *backend,
 		"--url", urlArg,
+	}
+	if *viewport != "" {
+		openArgs = append(openArgs, "--viewport", *viewport)
 	}
 	if *targetRef != "" {
 		openArgs = append(openArgs, "--target-ref", *targetRef)
@@ -1534,6 +1542,7 @@ func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stde
 	backend := fs.String("backend", "chromium", "browser backend")
 	targetRef := fs.String("target-ref", "", "target ref")
 	initialURL := fs.String("url", "", "initial url")
+	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -1569,6 +1578,14 @@ func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stde
 	if *initialURL != "" {
 		options["initial_url"] = *initialURL
 	}
+	width, height, err := resolvedViewport(*viewport)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		printAttachBrowserHelp(stderr)
+		return 1
+	}
+	options["viewport_width"] = strconv.Itoa(width)
+	options["viewport_height"] = strconv.Itoa(height)
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -1590,6 +1607,89 @@ func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stde
 	}
 
 	fmt.Fprintf(stdout, "attached %s %s (%s) %s\n", res.Session.TargetType, res.Session.ID, res.Session.Backend, res.Session.TargetRef)
+	return 0
+}
+
+func runViewport(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printViewportHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("viewport", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	value := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		value = args[0]
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if value == "" && fs.NArg() == 1 {
+		value = fs.Arg(0)
+	}
+	if value == "" || fs.NArg() > 1 {
+		fmt.Fprintln(stderr, "viewport requires WIDTHxHEIGHT")
+		printViewportHelp(stderr)
+		return 1
+	}
+
+	width, height, err := parseViewport(value)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		printViewportHelp(stderr)
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	res, err := client.ActSession(ctx, api.ActSessionRequest{
+		SessionID: *sessionID,
+		Action: api.Action{
+			Kind: "viewport",
+			Args: map[string]string{
+				"width":  strconv.Itoa(width),
+				"height": strconv.Itoa(height),
+			},
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !res.Result.OK {
+		if res.Result.Message != "" {
+			fmt.Fprintln(stderr, res.Result.Message)
+		}
+		return 1
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(res.Result); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	if res.Result.Message != "" {
+		fmt.Fprintln(stdout, res.Result.Message)
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "set viewport %dx%d\n", width, height)
 	return 0
 }
 
@@ -1945,6 +2045,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  state")
 	fmt.Fprintln(w, "  type")
 	fmt.Fprintln(w, "  upload")
+	fmt.Fprintln(w, "  viewport")
 	fmt.Fprintln(w, "  wait")
 	fmt.Fprintln(w, "  detach")
 	fmt.Fprintln(w, "  daemon")
@@ -2001,6 +2102,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printTypeHelp(w)
 	case "upload":
 		printUploadHelp(w)
+	case "viewport":
+		printViewportHelp(w)
 	case "wait":
 		printWaitHelp(w)
 	case "detach":
@@ -2016,14 +2119,15 @@ func printCommandHelp(w io.Writer, command string) bool {
 }
 
 func printAttachHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl attach browser --session <id> --backend <name> [--url <url>] [--target-ref <path>]")
+	fmt.Fprintln(w, "usage: nxctl attach browser --session <id> --backend <name> [--url <url>] [--viewport <width>x<height>] [--target-ref <path>]")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "targets:")
 	fmt.Fprintln(w, "  browser")
 }
 
 func printAttachBrowserHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl attach browser --session <id> --backend chromium|lightpanda [--url <url>] [--target-ref <path>]")
+	fmt.Fprintf(w, "usage: nxctl attach browser --session <id> --backend chromium|lightpanda [--url <url>] [--viewport <width>x<height>] [--target-ref <path>]\n")
+	fmt.Fprintf(w, "default viewport: %dx%d\n", defaultViewportWidth, defaultViewportHeight)
 }
 
 func printBackHelp(w io.Writer) {
@@ -2089,7 +2193,8 @@ func printObserveHelp(w io.Writer) {
 }
 
 func printOpenHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl open <url> [--session <id>] [--backend chromium|lightpanda] [--json]")
+	fmt.Fprintf(w, "usage: nxctl open <url> [--session <id>] [--backend chromium|lightpanda] [--viewport <width>x<height>] [--json]\n")
+	fmt.Fprintf(w, "default viewport: %dx%d\n", defaultViewportWidth, defaultViewportHeight)
 }
 
 func printScrollHelp(w io.Writer) {
@@ -2118,6 +2223,11 @@ func printTypeHelp(w io.Writer) {
 
 func printUploadHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl upload <index> <path> [--session <id>] [--json]")
+}
+
+func printViewportHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl viewport <width>x<height> [--session <id>] [--json]")
+	fmt.Fprintf(w, "default viewport: %dx%d\n", defaultViewportWidth, defaultViewportHeight)
 }
 
 func printWaitHelp(w io.Writer) {
@@ -2163,4 +2273,30 @@ func printEvalValue(w io.Writer, value interface{}) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(value)
 	}
+}
+
+func resolvedViewport(value string) (int, int, error) {
+	if strings.TrimSpace(value) == "" {
+		return defaultViewportWidth, defaultViewportHeight, nil
+	}
+	return parseViewport(value)
+}
+
+func parseViewport(value string) (int, int, error) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	parts := strings.Split(normalized, "x")
+	if len(parts) != 2 {
+		return 0, 0, errors.New("viewport must be WIDTHxHEIGHT")
+	}
+
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || width <= 0 {
+		return 0, 0, errors.New("viewport width must be a positive integer")
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || height <= 0 {
+		return 0, 0, errors.New("viewport height must be a positive integer")
+	}
+
+	return width, height, nil
 }

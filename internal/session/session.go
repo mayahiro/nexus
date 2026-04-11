@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -176,8 +177,35 @@ func (m *Manager) Act(ctx context.Context, sessionID string, action api.Action) 
 	if result == nil {
 		return api.ActionResult{}, errors.New("empty action result")
 	}
+	if result.OK {
+		m.applyActionOptions(sessionID, action)
+	}
 
 	return *result, nil
+}
+
+func (m *Manager) applyActionOptions(sessionID string, action api.Action) {
+	if action.Kind != "viewport" || action.Args == nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.sessions[sessionID]
+	if !ok {
+		return
+	}
+	if entry.session.Options == nil {
+		entry.session.Options = map[string]string{}
+	}
+	if width := strings.TrimSpace(action.Args["width"]); width != "" {
+		entry.session.Options["viewport_width"] = width
+	}
+	if height := strings.TrimSpace(action.Args["height"]); height != "" {
+		entry.session.Options["viewport_height"] = height
+	}
+	m.sessions[sessionID] = entry
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {

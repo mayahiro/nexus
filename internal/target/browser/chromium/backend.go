@@ -30,6 +30,8 @@ const startupTimeout = 5 * time.Second
 const shutdownTimeout = 5 * time.Second
 const maxLogEntries = 200
 const pageTargetTimeout = 5 * time.Second
+const defaultViewportWidth = 1920
+const defaultViewportHeight = 1080
 
 const observeTreeJS = `(function () {
   const selector = [
@@ -694,6 +696,7 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 		"--remote-debugging-port=0",
 		"--no-first-run",
 		"--no-default-browser-check",
+		fmt.Sprintf("--window-size=%d,%d", viewportWidth(cfg.Options), viewportHeight(cfg.Options)),
 		"--user-data-dir=" + userDataDir,
 		initialURL(cfg.Options),
 	}
@@ -842,6 +845,8 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult
 		return b.uploadViaCDP(ctx, url, action)
 	case "eval":
 		return b.evalViaCDP(ctx, url, action)
+	case "viewport":
+		return b.viewportViaCDP(ctx, url, action)
 	default:
 		return nil, fmt.Errorf("%w: %s", spec.ErrUnsupported, action.Kind)
 	}
@@ -953,6 +958,27 @@ func initialURL(options map[string]string) string {
 	return "about:blank"
 }
 
+func viewportWidth(options map[string]string) int {
+	return viewportOption(options, "viewport_width", defaultViewportWidth)
+}
+
+func viewportHeight(options map[string]string) int {
+	return viewportOption(options, "viewport_height", defaultViewportHeight)
+}
+
+func viewportOption(options map[string]string, key string, fallback int) int {
+	if options == nil {
+		return fallback
+	}
+
+	value, err := strconv.Atoi(strings.TrimSpace(options[key]))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+
+	return value
+}
+
 type pageTargetInfo struct {
 	ID                   string `json:"id"`
 	Type                 string `json:"type"`
@@ -1043,6 +1069,50 @@ func (b *Backend) evalViaCDP(ctx context.Context, devtoolsURL string, action api
 		OK:      true,
 		Changed: false,
 		Value:   value,
+		Meta: map[string]string{
+			"devtools_url":   devtoolsURL,
+			"page_target_id": targetInfo.ID,
+		},
+	}, nil
+}
+
+func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
+	if action.Args == nil {
+		return nil, errors.New("viewport width and height are required")
+	}
+
+	width, err := strconv.Atoi(strings.TrimSpace(action.Args["width"]))
+	if err != nil || width <= 0 {
+		return nil, errors.New("viewport width must be a positive integer")
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(action.Args["height"]))
+	if err != nil || height <= 0 {
+		return nil, errors.New("viewport height must be a positive integer")
+	}
+
+	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
+	if err != nil {
+		return nil, err
+	}
+
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
+	defer allocCancel()
+
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
+	defer targetCancel()
+
+	if err := chromedp.Run(targetCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
+		return nil, err
+	}
+
+	return &api.ActionResult{
+		OK:      true,
+		Changed: true,
+		Message: fmt.Sprintf("set viewport %dx%d", width, height),
+		Value: map[string]interface{}{
+			"width":  width,
+			"height": height,
+		},
 		Meta: map[string]string{
 			"devtools_url":   devtoolsURL,
 			"page_target_id": targetInfo.ID,

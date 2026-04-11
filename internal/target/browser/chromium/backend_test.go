@@ -58,9 +58,42 @@ func TestAttachAndDetach(t *testing.T) {
 	if !strings.Contains(string(argsData), "https://example.com") {
 		t.Fatalf("initial url was not passed to chromium: %s", string(argsData))
 	}
+	if !strings.Contains(string(argsData), "--window-size=1920,1080") {
+		t.Fatalf("default viewport was not passed to chromium: %s", string(argsData))
+	}
 
 	if err := backend.Detach(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAttachRespectsViewportOption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell script required")
+	}
+
+	executable, argsPath := writeFakeChromium(t)
+	backend := New()
+
+	err := backend.Attach(context.Background(), spec.SessionConfig{
+		SessionID: "web1",
+		TargetRef: executable,
+		Options: map[string]string{
+			"viewport_width":  "1440",
+			"viewport_height": "900",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Detach(context.Background())
+
+	argsData, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(argsData), "--window-size=1440,900") {
+		t.Fatalf("custom viewport was not passed to chromium: %s", string(argsData))
 	}
 }
 
@@ -363,6 +396,26 @@ func TestGetExpressions(t *testing.T) {
 	script = getNodeExpression("bbox", 3)
 	if !strings.Contains(script, `"bbox"`) || !strings.Contains(script, "3") {
 		t.Fatalf("unexpected node script: %s", script)
+	}
+}
+
+func TestViewportOptions(t *testing.T) {
+	if viewportWidth(nil) != 1920 {
+		t.Fatalf("unexpected default viewport width: %d", viewportWidth(nil))
+	}
+	if viewportHeight(nil) != 1080 {
+		t.Fatalf("unexpected default viewport height: %d", viewportHeight(nil))
+	}
+
+	options := map[string]string{
+		"viewport_width":  "1440",
+		"viewport_height": "900",
+	}
+	if viewportWidth(options) != 1440 {
+		t.Fatalf("unexpected viewport width: %d", viewportWidth(options))
+	}
+	if viewportHeight(options) != 900 {
+		t.Fatalf("unexpected viewport height: %d", viewportHeight(options))
 	}
 }
 
