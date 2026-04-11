@@ -16,6 +16,8 @@ import (
 	"github.com/mayahiro/nexus/internal/config"
 	"github.com/mayahiro/nexus/internal/daemon"
 	"github.com/mayahiro/nexus/internal/rpc"
+	"github.com/mayahiro/nexus/internal/target/browser"
+	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
 func TestDoctor(t *testing.T) {
@@ -168,6 +170,10 @@ func TestDoctorStartsDaemon(t *testing.T) {
 
 func TestAttachSessionsDetach(t *testing.T) {
 	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
 
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -245,6 +251,10 @@ func TestAttachSessionsDetach(t *testing.T) {
 
 func TestObserveJSON(t *testing.T) {
 	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
 
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -300,6 +310,10 @@ func TestObserveJSON(t *testing.T) {
 
 func TestOpenAndState(t *testing.T) {
 	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
 
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -1053,6 +1067,10 @@ func TestSelectAndUpload(t *testing.T) {
 
 func TestCloseStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
 
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -1102,6 +1120,10 @@ func TestCloseStopsDaemon(t *testing.T) {
 
 func TestCloseAllStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
 
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -1236,6 +1258,7 @@ func waitForSocket(t *testing.T, path string) {
 }
 
 type fakeBrowserManager struct{}
+type fakeLightpandaBackend struct{}
 
 type evalRPCHandler struct{}
 type clickRPCHandler struct{}
@@ -1249,6 +1272,42 @@ type viewportRPCHandler struct{}
 type waitRPCHandler struct{}
 type getRPCHandler struct{}
 type selectUploadRPCHandler struct{}
+
+func (fakeLightpandaBackend) Name() spec.BackendName {
+	return spec.BackendLightpanda
+}
+
+func (fakeLightpandaBackend) Capabilities() spec.Capabilities {
+	return spec.Capabilities{Observe: true}
+}
+
+func (fakeLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Detach(context.Context) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+	return &api.Observation{
+		URLOrScreen: "https://example.com",
+		Title:       "Example",
+		Text:        "Example text",
+	}, nil
+}
+
+func (fakeLightpandaBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
+	return nil, nil
+}
+
+func (fakeLightpandaBackend) Screenshot(context.Context, string) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
+	return nil, nil
+}
 
 func (evalRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
 	return api.PingResponse{}, nil

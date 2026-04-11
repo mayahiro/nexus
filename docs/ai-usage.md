@@ -45,6 +45,7 @@ Use `sessions --json` when you need to inspect current state across multiple ses
 ### lightpanda
 
 - experimental backend
+- supports `open`, `observe`, and `state`
 - treat it as observation-first
 - do not assume the same success rate or feature coverage as `chromium`
 

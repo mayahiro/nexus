@@ -10,7 +10,7 @@ Nexus is currently in an early usable stage.
 
 - macOS only
 - Chromium is the primary backend
-- Lightpanda is supported as an experimental backend
+- Lightpanda is supported as an experimental backend for observation-oriented workflows
 - The current install path is `go install`
 
 ## Install

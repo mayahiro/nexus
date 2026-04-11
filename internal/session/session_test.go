@@ -6,9 +6,16 @@ import (
 	"testing"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/target/browser"
+	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
 func TestAttachListDetach(t *testing.T) {
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
+
 	manager := NewManager()
 
 	first, err := manager.Attach(context.Background(), api.AttachSessionRequest{
@@ -53,6 +60,11 @@ func TestAttachListDetach(t *testing.T) {
 }
 
 func TestAttachDuplicateSession(t *testing.T) {
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
+
 	manager := NewManager()
 
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
@@ -84,6 +96,11 @@ func TestDetachMissingSession(t *testing.T) {
 }
 
 func TestObserveSession(t *testing.T) {
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
+
 	manager := NewManager()
 
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
@@ -112,6 +129,11 @@ func TestObserveSession(t *testing.T) {
 }
 
 func TestActSessionUnsupported(t *testing.T) {
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
+
 	manager := NewManager()
 
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
@@ -131,4 +153,42 @@ func TestActSessionUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+}
+
+type fakeLightpandaBackend struct{}
+
+func (fakeLightpandaBackend) Name() spec.BackendName {
+	return spec.BackendLightpanda
+}
+
+func (fakeLightpandaBackend) Capabilities() spec.Capabilities {
+	return spec.Capabilities{Observe: true}
+}
+
+func (fakeLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Detach(context.Context) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+	return &api.Observation{
+		URLOrScreen: "https://example.com",
+		Title:       "Example",
+		Text:        "Example text",
+	}, nil
+}
+
+func (fakeLightpandaBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
+	return nil, errors.New("unsupported operation")
+}
+
+func (fakeLightpandaBackend) Screenshot(context.Context, string) error {
+	return nil
+}
+
+func (fakeLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
+	return nil, nil
 }

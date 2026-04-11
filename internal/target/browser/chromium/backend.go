@@ -987,13 +987,13 @@ type pageTargetInfo struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions) (*api.Observation, error) {
+func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions, allocatorOptions ...chromedp.RemoteAllocatorOption) (*api.Observation, error) {
 	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
 	if err != nil {
 		return nil, err
 	}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL, allocatorOptions...)
 	defer allocCancel()
 
 	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
@@ -1042,6 +1042,20 @@ func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts ap
 			"page_target_id": targetInfo.ID,
 		},
 	}, nil
+}
+
+func NavigateViaCDP(ctx context.Context, devtoolsURL string, navigateURL string, allocatorOptions ...chromedp.RemoteAllocatorOption) error {
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL, allocatorOptions...)
+	defer allocCancel()
+
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx)
+	defer targetCancel()
+
+	return chromedp.Run(targetCtx, chromedp.Navigate(navigateURL))
+}
+
+func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions) (*api.Observation, error) {
+	return ObserveViaCDP(ctx, devtoolsURL, opts)
 }
 
 func (b *Backend) evalViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
