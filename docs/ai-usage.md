@@ -96,4 +96,4 @@ When behavior is not what you expect, inspect in this order:
 
 ## 9. References
 
-- public overview: [`README.md`](README.md)
+- public overview: [`README.md`](../README.md)
