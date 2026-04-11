@@ -1,0 +1,7 @@
+[tasks.format]
+description = "Format and Import Optimization"
+run = [
+  "go fmt ./...",
+  "find . -type f -name '*.go' -exec go tool goimports -w -local \"github.com/mayahiro/nexus\" {} +",
+  "go vet ./...",
+]
