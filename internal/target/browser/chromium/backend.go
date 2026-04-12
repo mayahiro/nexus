@@ -99,6 +99,13 @@ const observeTreeJS = `(function () {
         .trim();
       if (text) return text;
     }
+    if (el.labels && el.labels.length) {
+      const text = Array.from(el.labels)
+        .map((label) => (label.innerText || label.textContent || '').trim())
+        .join(' ')
+        .trim();
+      if (text) return text;
+    }
     const text = (el.innerText || el.textContent || '').trim();
     if (text) return text;
     const value = valueFor(el);
@@ -1581,7 +1588,7 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 
 	targetType := strings.TrimSpace(action.Args["target"])
 	value := strings.TrimSpace(action.Args["value"])
-	if targetType == "" || value == "" {
+	if targetType == "" {
 		return nil, errors.New("wait target is required")
 	}
 
@@ -1605,9 +1612,15 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
 	defer targetCancel()
 
-	var expression string
+	var (
+		expression string
+		waitErr    error
+	)
 	switch targetType {
 	case "selector":
+		if value == "" {
+			return nil, errors.New("wait selector value is required")
+		}
 		state := strings.TrimSpace(action.Args["state"])
 		if state == "" {
 			state = "visible"
@@ -1617,15 +1630,31 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 			return nil, err
 		}
 	case "text":
+		if value == "" {
+			return nil, errors.New("wait text value is required")
+		}
 		expression = waitTextExpression(value)
 	case "url":
+		if value == "" {
+			return nil, errors.New("wait url value is required")
+		}
 		expression = waitURLExpression(value)
+	case "navigation":
+		waitErr = waitForNavigation(targetCtx, timeout)
+	case "function":
+		if value == "" {
+			return nil, errors.New("wait function value is required")
+		}
+		waitErr = waitForFunction(targetCtx, value, timeout)
 	default:
 		return nil, fmt.Errorf("unsupported wait target: %s", targetType)
 	}
 
-	if err := waitForExpression(targetCtx, expression, timeout); err != nil {
-		return nil, err
+	if expression != "" {
+		waitErr = waitForExpression(targetCtx, expression, timeout)
+	}
+	if waitErr != nil {
+		return nil, waitErr
 	}
 
 	return &api.ActionResult{
@@ -1637,6 +1666,41 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 			"page_target_id": targetInfo.ID,
 		},
 	}, nil
+}
+
+func waitForNavigation(ctx context.Context, timeout time.Duration) error {
+	var initialURL string
+	if err := chromedp.Run(ctx, chromedp.Location(&initialURL)); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(timeout)
+	for {
+		var currentURL string
+		err := chromedp.Run(ctx, chromedp.Location(&currentURL))
+		if err == nil && currentURL != "" && currentURL != initialURL {
+			return nil
+		}
+		if err != nil && !isRetryableWaitError(err) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("wait timed out after %s", timeout)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func waitForFunction(ctx context.Context, source string, timeout time.Duration) error {
+	return waitForExpression(ctx, evalExpression(source), timeout)
 }
 
 func waitForExpression(ctx context.Context, expression string, timeout time.Duration) error {
@@ -1989,8 +2053,9 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 
 	nodes := make([]api.Node, 0, len(raw))
 	for _, node := range raw {
-		nodes = append(nodes, api.Node{
+		parsed := api.Node{
 			ID:          node.ID,
+			Ref:         formatNodeRef(node.ID),
 			Fingerprint: strings.TrimSpace(node.Fingerprint),
 			Role:        node.Role,
 			Name:        strings.TrimSpace(node.Name),
@@ -2006,8 +2071,113 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			Scrollable:  node.Scrollable,
 			Children:    node.Children,
 			Attrs:       node.Attrs,
-		})
+		}
+		parsed.LocatorHints = buildLocatorHints(parsed)
+		nodes = append(nodes, parsed)
 	}
 
 	return nodes, nil
+}
+
+func formatNodeRef(id int) string {
+	return fmt.Sprintf("@e%d", id)
+}
+
+func buildLocatorHints(node api.Node) []api.LocatorHint {
+	hints := make([]api.LocatorHint, 0, 5)
+	seen := map[string]struct{}{}
+
+	add := func(hint api.LocatorHint) {
+		hint.Kind = strings.TrimSpace(hint.Kind)
+		hint.Value = strings.TrimSpace(hint.Value)
+		hint.Name = strings.TrimSpace(hint.Name)
+		hint.Command = strings.TrimSpace(hint.Command)
+		if hint.Kind == "" || hint.Command == "" {
+			return
+		}
+		key := hint.Kind + "|" + hint.Value + "|" + hint.Name + "|" + hint.Command
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		hints = append(hints, hint)
+	}
+
+	role := strings.TrimSpace(node.Role)
+	name := preferredLocatorText(node)
+	if role != "" && name != "" {
+		add(api.LocatorHint{
+			Kind:    "role",
+			Value:   role,
+			Name:    name,
+			Command: fmt.Sprintf("role %s --name %s", role, strconv.Quote(name)),
+		})
+	}
+
+	if text := preferredTextHint(node); text != "" {
+		add(api.LocatorHint{
+			Kind:    "text",
+			Value:   text,
+			Command: fmt.Sprintf("text %s", strconv.Quote(text)),
+		})
+	}
+
+	if (node.Editable || node.Selectable || role == "textbox" || role == "combobox") && strings.TrimSpace(node.Name) != "" {
+		label := strings.TrimSpace(node.Name)
+		add(api.LocatorHint{
+			Kind:    "label",
+			Value:   label,
+			Command: fmt.Sprintf("label %s", strconv.Quote(label)),
+		})
+	}
+
+	if testID := strings.TrimSpace(locatorTestID(node)); testID != "" {
+		add(api.LocatorHint{
+			Kind:    "testid",
+			Value:   testID,
+			Command: fmt.Sprintf("testid %s", strconv.Quote(testID)),
+		})
+	}
+
+	if role == "link" {
+		if href := strings.TrimSpace(node.Attrs["href"]); href != "" {
+			add(api.LocatorHint{
+				Kind:    "href",
+				Value:   href,
+				Command: fmt.Sprintf("href %s", strconv.Quote(href)),
+			})
+		}
+	}
+
+	return hints
+}
+
+func preferredLocatorText(node api.Node) string {
+	if value := strings.TrimSpace(node.Name); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(node.Text); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(node.Attrs["aria-label"]); value != "" {
+		return value
+	}
+	return ""
+}
+
+func preferredTextHint(node api.Node) string {
+	if value := strings.TrimSpace(node.Text); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(node.Name); value != "" {
+		return value
+	}
+	return ""
+}
+
+func locatorTestID(node api.Node) string {
+	if value := strings.TrimSpace(node.Attrs["data-testid"]); value != "" {
+		return value
+	}
+	return strings.TrimSpace(node.Attrs["data-test"])
 }

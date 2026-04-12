@@ -21,8 +21,13 @@ nxctl state
 The default execution loop is:
 
 ```text
-open -> state -> click/type/input/keys -> wait -> get/state -> close
+open -> state/find -> click/type/input/keys -> wait -> get/state -> close
 ```
+
+`state` emits element refs such as `@e1`. Reuse those refs in node-targeting commands instead of relying on raw indexes when possible.
+When a stable semantic locator is clearer than a ref, prefer `find role`, `find text`, `find label`, `find testid`, or `find href`.
+`state` also includes short locator hints for each node so you can promote a recent `@eN` observation into a semantic locator without re-deriving it yourself.
+If `find` reports multiple matches, narrow the query or fall back to `@eN` from the latest `state`.
 
 ## 3. Session Model
 
@@ -54,13 +59,21 @@ Use `sessions --json` when you need to inspect current state across multiple ses
 ```text
 nxctl open https://example.com
 nxctl state
-nxctl click 3
-nxctl input 4 "hello@example.com"
+nxctl click @e3
+nxctl find role button click --name "Submit"
+nxctl find role button --all
+nxctl find role link get attributes --name "Docs"
+nxctl find label "Email" input "hello@example.com"
+nxctl input @e4 "hello@example.com"
+nxctl batch --cmd "state" --cmd "find role button --all"
 nxctl keys "Enter"
 nxctl wait selector ".ready"
 nxctl wait url "/done"
-nxctl get title
+nxctl wait navigation
+nxctl wait function "window.appReady === true"
+nxctl get attributes @e3
 nxctl screenshot
+nxctl screenshot annotated.png --annotate
 nxctl viewport 1280x720
 nxctl close
 ```
@@ -83,6 +96,7 @@ nxctl viewport 1280x720
 - `open` or `attach browser` fails before `browser setup` has installed managed browsers
 - `lightpanda` may not support the same action commands as `chromium`
 - dynamic DOM updates can change `state` indexes
+- prefer `@eN` refs from the latest `state` output over raw numeric indexes
 - action commands are often more reliable when followed by `wait`
 
 ## 8. Recommended Inspection Order

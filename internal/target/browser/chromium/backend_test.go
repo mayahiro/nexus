@@ -190,6 +190,18 @@ func TestParseTreeJSON(t *testing.T) {
 	if tree[0].Name != "Submit" {
 		t.Fatalf("unexpected node: %+v", tree[0])
 	}
+	if tree[0].Ref != "@e1" || tree[1].Ref != "@e2" {
+		t.Fatalf("expected refs: %+v", tree)
+	}
+	if len(tree[0].LocatorHints) == 0 || tree[0].LocatorHints[0].Kind != "role" || tree[0].LocatorHints[0].Command != `role button --name "Submit"` {
+		t.Fatalf("expected locator hints: %+v", tree[0])
+	}
+	if len(tree[0].LocatorHints) < 2 || tree[0].LocatorHints[1].Kind != "text" || tree[0].LocatorHints[1].Command != `text "Submit"` {
+		t.Fatalf("expected text locator hint: %+v", tree[0])
+	}
+	if len(tree[1].LocatorHints) == 0 || tree[1].LocatorHints[0].Kind != "role" || tree[1].LocatorHints[0].Command != `role textbox --name "Search"` {
+		t.Fatalf("expected locator hints: %+v", tree[1])
+	}
 	if tree[0].Fingerprint == "" || tree[1].Fingerprint == "" {
 		t.Fatalf("expected fingerprints: %+v", tree)
 	}

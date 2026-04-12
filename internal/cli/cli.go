@@ -1,12 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -14,6 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/browsermgr"
@@ -50,6 +59,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runAttach(ctx, args[1:], stdout, stderr)
 	case "back":
 		return runBack(ctx, args[1:], stdout, stderr)
+	case "batch":
+		return runBatch(ctx, args[1:], stdout, stderr)
 	case "browser":
 		return runBrowser(ctx, args[1:], stdout, stderr)
 	case "click":
@@ -60,6 +71,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runDblclick(ctx, args[1:], stdout, stderr)
 	case "eval":
 		return runEval(ctx, args[1:], stdout, stderr)
+	case "find":
+		return runFind(ctx, args[1:], stdout, stderr)
 	case "get":
 		return runGet(ctx, args[1:], stdout, stderr)
 	case "help":
@@ -332,6 +345,114 @@ func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	return 0
 }
 
+type batchCommands []string
+
+func (b *batchCommands) String() string {
+	return strings.Join(*b, ", ")
+}
+
+func (b *batchCommands) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return errors.New("batch command must not be empty")
+	}
+	*b = append(*b, trimmed)
+	return nil
+}
+
+type batchStepResult struct {
+	Command  string   `json:"command"`
+	Args     []string `json:"args"`
+	ExitCode int      `json:"exit_code"`
+	Stdout   string   `json:"stdout,omitempty"`
+	Stderr   string   `json:"stderr,omitempty"`
+}
+
+func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printBatchHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var commands batchCommands
+	asJSON := fs.Bool("json", false, "print as json")
+	fs.Var(&commands, "cmd", "subcommand to execute")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if len(commands) == 0 {
+		fmt.Fprintln(stderr, "batch requires at least one --cmd")
+		printBatchHelp(stderr)
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "batch does not accept positional arguments")
+		printBatchHelp(stderr)
+		return 1
+	}
+
+	results := make([]batchStepResult, 0, len(commands))
+	for _, raw := range commands {
+		argv, err := splitBatchCommand(raw)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(argv) == 0 {
+			fmt.Fprintln(stderr, "batch command must not be empty")
+			return 1
+		}
+
+		var stepStdout bytes.Buffer
+		var stepStderr bytes.Buffer
+		exitCode := Run(ctx, argv, &stepStdout, &stepStderr)
+		results = append(results, batchStepResult{
+			Command:  raw,
+			Args:     argv,
+			ExitCode: exitCode,
+			Stdout:   stepStdout.String(),
+			Stderr:   stepStderr.String(),
+		})
+
+		if *asJSON {
+			if exitCode != 0 {
+				break
+			}
+			continue
+		}
+
+		fmt.Fprintf(stdout, "==> %s\n", raw)
+		if stepStdout.Len() > 0 {
+			io.Copy(stdout, &stepStdout)
+		}
+		if stepStderr.Len() > 0 {
+			io.Copy(stderr, &stepStderr)
+		}
+		if exitCode != 0 {
+			fmt.Fprintf(stderr, "batch stopped at: %s\n", raw)
+			return exitCode
+		}
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(results); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(results) > 0 && results[len(results)-1].ExitCode != 0 {
+			return results[len(results)-1].ExitCode
+		}
+		return 0
+	}
+
+	return 0
+}
+
 func runAttach(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpArgs(args) {
 		printAttachHelp(stdout)
@@ -474,6 +595,309 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	return 0
 }
 
+func runFind(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printFindHelp(stdout)
+		return 0
+	}
+	if len(args) == 0 {
+		printFindHelp(stderr)
+		return 1
+	}
+
+	switch args[0] {
+	case "role":
+		return runFindRole(ctx, args[1:], stdout, stderr)
+	case "text":
+		return runFindText(ctx, args[1:], stdout, stderr)
+	case "label":
+		return runFindLabel(ctx, args[1:], stdout, stderr)
+	case "testid":
+		return runFindAttr(ctx, "testid", []string{"data-testid", "data-test"}, args[1:], stdout, stderr)
+	case "href":
+		return runFindAttr(ctx, "href", []string{"href"}, args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "find target must be role, text, label, testid, or href\n")
+		printFindHelp(stderr)
+		return 1
+	}
+}
+
+func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("find role", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	matchAll := fs.Bool("all", false, "list all matching nodes")
+	name := fs.String("name", "", "accessible name")
+	role := ""
+	actionName := ""
+	actionValue := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		role = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionName = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionValue = args[0]
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if role == "" || (!*matchAll && actionName == "") {
+		fmt.Fprintln(stderr, "find role requires <role> <click|input|get> or --all")
+		printFindHelp(stderr)
+		return 1
+	}
+	if *matchAll && actionName != "" {
+		fmt.Fprintln(stderr, "find role --all does not accept an action")
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	observation, err := observeTreeForFind(ctx, client, *sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	nodes := selectNodes(observation.Tree, func(node api.Node) bool {
+		if !strings.EqualFold(strings.TrimSpace(node.Role), strings.TrimSpace(role)) {
+			return false
+		}
+		if strings.TrimSpace(*name) == "" {
+			return true
+		}
+		return nodeMatches(node, *name)
+	})
+	if *matchAll {
+		return renderFindMatches(nodes, *asJSON, stdout, stderr)
+	}
+	node, err := chooseNode(nodes, *name)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	return executeFoundAction(ctx, client, *sessionID, node, actionName, actionValue, *asJSON, stdout, stderr)
+}
+
+func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("find text", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	matchAll := fs.Bool("all", false, "list all matching nodes")
+	textValue := ""
+	actionName := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		textValue = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionName = args[0]
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if textValue == "" || (!*matchAll && actionName == "") {
+		fmt.Fprintln(stderr, "find text requires <text> <click|get> or --all")
+		printFindHelp(stderr)
+		return 1
+	}
+	if *matchAll && actionName != "" {
+		fmt.Fprintln(stderr, "find text --all does not accept an action")
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	observation, err := observeTreeForFind(ctx, client, *sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	nodes := selectNodes(observation.Tree, func(node api.Node) bool {
+		return nodeMatches(node, textValue)
+	})
+	if *matchAll {
+		return renderFindMatches(nodes, *asJSON, stdout, stderr)
+	}
+	node, err := chooseNode(nodes, textValue)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	return executeFoundAction(ctx, client, *sessionID, node, actionName, "", *asJSON, stdout, stderr)
+}
+
+func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("find label", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	matchAll := fs.Bool("all", false, "list all matching nodes")
+	label := ""
+	actionName := ""
+	actionValue := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		label = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionName = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionValue = args[0]
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if label == "" || (!*matchAll && actionName == "") {
+		fmt.Fprintln(stderr, `find label requires "label" input "text", get <target>, or --all`)
+		printFindHelp(stderr)
+		return 1
+	}
+	if *matchAll && actionName != "" {
+		fmt.Fprintln(stderr, "find label --all does not accept an action")
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	observation, err := observeTreeForFind(ctx, client, *sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	nodes := selectNodes(observation.Tree, func(node api.Node) bool {
+		if !node.Editable && !node.Selectable && !strings.EqualFold(node.Role, "textbox") && !strings.EqualFold(node.Role, "combobox") {
+			return false
+		}
+		return nodeMatches(node, label)
+	})
+	if *matchAll {
+		return renderFindMatches(nodes, *asJSON, stdout, stderr)
+	}
+	node, err := chooseNode(nodes, label)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	return executeFoundAction(ctx, client, *sessionID, node, actionName, actionValue, *asJSON, stdout, stderr)
+}
+
+func runFindAttr(ctx context.Context, kind string, attrs []string, args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("find "+kind, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	matchAll := fs.Bool("all", false, "list all matching nodes")
+	attrValue := ""
+	actionName := ""
+	actionValue := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		attrValue = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionName = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionValue = args[0]
+		args = args[1:]
+	}
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if attrValue == "" || (!*matchAll && actionName == "") {
+		fmt.Fprintf(stderr, "find %s requires <value> <click|get> or --all\n", kind)
+		printFindHelp(stderr)
+		return 1
+	}
+	if *matchAll && actionName != "" {
+		fmt.Fprintf(stderr, "find %s --all does not accept an action\n", kind)
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	observation, err := observeTreeForFind(ctx, client, *sessionID)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	nodes := selectNodes(observation.Tree, func(node api.Node) bool {
+		needle := normalizeFindValue(attrValue)
+		for _, attr := range attrs {
+			if strings.Contains(normalizeFindValue(node.Attrs[attr]), needle) {
+				return true
+			}
+		}
+		return false
+	})
+	if *matchAll {
+		return renderFindMatches(nodes, *asJSON, stdout, stderr)
+	}
+	node, err := chooseNode(nodes, attrValue)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	return executeFoundAction(ctx, client, *sessionID, node, actionName, actionValue, *asJSON, stdout, stderr)
+}
+
 func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpArgs(args) {
 		printGetHelp(stdout)
@@ -551,9 +975,9 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 			fmt.Fprintf(stderr, "get %s does not support --selector\n", target)
 			return 1
 		}
-		nodeID, err := strconv.Atoi(positionals[1])
-		if err != nil || nodeID <= 0 {
-			fmt.Fprintf(stderr, "get %s requires a positive integer index\n", target)
+		nodeID, _, err := parseNodeSelector(positionals[1])
+		if err != nil {
+			fmt.Fprintf(stderr, "get %s requires a positive integer index or @eN ref\n", target)
 			return 1
 		}
 		action.NodeID = &nodeID
@@ -631,14 +1055,20 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 
 	action := api.Action{Kind: "invoke"}
 	fallbackMessage := ""
+	useNodeRefMessage := false
 	if len(positionals) == 1 {
-		nodeID, err := strconv.Atoi(positionals[0])
-		if err != nil || nodeID <= 0 {
-			fmt.Fprintln(stderr, "click requires a positive integer index")
+		nodeID, nodeRef, err := parseNodeSelector(positionals[0])
+		if err != nil {
+			fmt.Fprintln(stderr, "click requires a positive integer index or @eN ref")
 			return 1
 		}
 		action.NodeID = &nodeID
-		fallbackMessage = fmt.Sprintf("clicked %d", nodeID)
+		if nodeRef != "" {
+			fallbackMessage = fmt.Sprintf("clicked %s", nodeRef)
+			useNodeRefMessage = true
+		} else {
+			fallbackMessage = fmt.Sprintf("clicked %d", nodeID)
+		}
 	} else {
 		x, err := strconv.Atoi(positionals[0])
 		if err != nil || x < 0 {
@@ -689,7 +1119,7 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 0
 	}
 
-	if res.Result.Message != "" {
+	if !useNodeRefMessage && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
 		return 0
 	}
@@ -741,9 +1171,9 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 		return 1
 	}
 
-	nodeID, err := strconv.Atoi(indexArg)
-	if err != nil || nodeID <= 0 {
-		fmt.Fprintf(stderr, "%s requires a positive integer index\n", command)
+	nodeID, nodeRef, err := parseNodeSelector(indexArg)
+	if err != nil {
+		fmt.Fprintf(stderr, "%s requires a positive integer index or @eN ref\n", command)
 		return 1
 	}
 
@@ -782,8 +1212,13 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 		return 0
 	}
 
-	if res.Result.Message != "" {
+	if nodeRef == "" && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
+		return 0
+	}
+
+	if nodeRef != "" {
+		fmt.Fprintf(stdout, strings.ReplaceAll(fallbackFormat, "%d", "%s")+"\n", nodeRef)
 		return 0
 	}
 
@@ -891,9 +1326,9 @@ func runInput(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	indexArg = positionals[0]
 	textArg = positionals[1]
 
-	nodeID, err := strconv.Atoi(indexArg)
-	if err != nil || nodeID <= 0 {
-		fmt.Fprintln(stderr, "input requires a positive integer index")
+	nodeID, _, err := parseNodeSelector(indexArg)
+	if err != nil {
+		fmt.Fprintln(stderr, "input requires a positive integer index or @eN ref")
 		return 1
 	}
 
@@ -990,6 +1425,7 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 
 	sessionID := fs.String("session", "default", "session id")
 	full := fs.Bool("full", false, "capture full page")
+	annotate := fs.Bool("annotate", false, "draw node refs on top of the screenshot")
 	pathArg := ""
 
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -1023,6 +1459,7 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 		SessionID: *sessionID,
 		Options: api.ObserveOptions{
 			WithScreenshot: true,
+			WithTree:       *annotate,
 			FullScreenshot: *full,
 		},
 	})
@@ -1039,6 +1476,13 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *annotate {
+		data, err = annotateScreenshot(data, res.Observation.Tree)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 	if err := os.WriteFile(pathArg, data, 0o644); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -1089,9 +1533,9 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	nodeID, err := strconv.Atoi(positionals[0])
-	if err != nil || nodeID <= 0 {
-		fmt.Fprintln(stderr, "select requires a positive integer index")
+	nodeID, nodeRef, err := parseNodeSelector(positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, "select requires a positive integer index or @eN ref")
 		return 1
 	}
 
@@ -1131,8 +1575,13 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 0
 	}
 
-	if res.Result.Message != "" {
+	if nodeRef == "" && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
+		return 0
+	}
+
+	if nodeRef != "" {
+		fmt.Fprintf(stdout, "selected %s on %s\n", positionals[1], nodeRef)
 		return 0
 	}
 
@@ -1277,9 +1726,9 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	nodeID, err := strconv.Atoi(positionals[0])
-	if err != nil || nodeID <= 0 {
-		fmt.Fprintln(stderr, "upload requires a positive integer index")
+	nodeID, nodeRef, err := parseNodeSelector(positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, "upload requires a positive integer index or @eN ref")
 		return 1
 	}
 
@@ -1319,8 +1768,13 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 0
 	}
 
-	if res.Result.Message != "" {
+	if nodeRef == "" && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
+		return 0
+	}
+
+	if nodeRef != "" {
+		fmt.Fprintf(stdout, "uploaded %s to %s\n", positionals[1], nodeRef)
 		return 0
 	}
 
@@ -1456,16 +1910,28 @@ func runWait(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	}
 	positionals = append(positionals, fs.Args()...)
 
-	if len(positionals) != 2 {
+	if len(positionals) == 0 {
 		fmt.Fprintln(stderr, "wait requires a target and value")
 		printWaitHelp(stderr)
 		return 1
 	}
-
 	targetType = positionals[0]
-	value = positionals[1]
-	if targetType != "selector" && targetType != "text" && targetType != "url" {
-		fmt.Fprintln(stderr, "wait target must be selector, text, or url")
+	switch targetType {
+	case "navigation":
+		if len(positionals) != 1 {
+			fmt.Fprintln(stderr, "wait navigation does not accept a value")
+			printWaitHelp(stderr)
+			return 1
+		}
+	case "selector", "text", "url", "function":
+		if len(positionals) != 2 {
+			fmt.Fprintln(stderr, "wait requires a target and value")
+			printWaitHelp(stderr)
+			return 1
+		}
+		value = positionals[1]
+	default:
+		fmt.Fprintln(stderr, "wait target must be selector, text, url, navigation, or function")
 		return 1
 	}
 	if *timeout < 0 {
@@ -1895,16 +2361,369 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 
 	fmt.Fprintln(stdout, "")
 	for _, node := range res.Observation.Tree {
-		fmt.Fprintf(stdout, "[%d] %s", node.ID, node.Role)
-		if node.Name != "" {
-			fmt.Fprintf(stdout, " %q", node.Name)
-		} else if node.Text != "" {
-			fmt.Fprintf(stdout, " %q", node.Text)
-		}
-		fmt.Fprintln(stdout)
+		printNode(stdout, node)
 	}
 
 	return 0
+}
+
+func observeTreeForFind(ctx context.Context, client *rpc.Client, sessionID string) (api.Observation, error) {
+	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+		SessionID: sessionID,
+		Options: api.ObserveOptions{
+			WithTree: true,
+			WithText: true,
+		},
+	})
+	if err != nil {
+		return api.Observation{}, err
+	}
+	return res.Observation, nil
+}
+
+func selectNodes(nodes []api.Node, match func(api.Node) bool) []api.Node {
+	matches := make([]api.Node, 0, len(nodes))
+	for _, node := range nodes {
+		if match(node) {
+			matches = append(matches, node)
+		}
+	}
+	return matches
+}
+
+func chooseNode(matches []api.Node, query string) (api.Node, error) {
+	if len(matches) == 0 {
+		return api.Node{}, errors.New("matching node not found")
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	needle := normalizeFindValue(query)
+	if needle == "" {
+		return api.Node{}, ambiguousNodeError(matches)
+	}
+
+	bestScore := 0
+	bestMatches := make([]api.Node, 0, len(matches))
+	for _, node := range matches {
+		score := nodeMatchScore(node, needle)
+		switch {
+		case score > bestScore:
+			bestScore = score
+			bestMatches = []api.Node{node}
+		case score == bestScore:
+			bestMatches = append(bestMatches, node)
+		}
+	}
+
+	if bestScore > 0 && len(bestMatches) == 1 {
+		return bestMatches[0], nil
+	}
+	if bestScore > 0 {
+		return api.Node{}, ambiguousNodeError(bestMatches)
+	}
+
+	return api.Node{}, ambiguousNodeError(matches)
+}
+
+func nodeMatches(node api.Node, value string) bool {
+	return nodeMatchScore(node, normalizeFindValue(value)) > 0
+}
+
+func normalizeFindValue(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func nodeMatchScore(node api.Node, needle string) int {
+	if needle == "" {
+		return 0
+	}
+
+	best := 0
+	for _, candidate := range nodeMatchCandidates(node) {
+		normalized := normalizeFindValue(candidate)
+		switch {
+		case normalized == "":
+		case normalized == needle:
+			return 3
+		case strings.HasPrefix(normalized, needle):
+			if best < 2 {
+				best = 2
+			}
+		case strings.Contains(normalized, needle):
+			if best < 1 {
+				best = 1
+			}
+		}
+	}
+	return best
+}
+
+func nodeMatchCandidates(node api.Node) []string {
+	return []string{
+		node.Name,
+		node.Text,
+		node.Value,
+		node.Attrs["aria-label"],
+		node.Attrs["placeholder"],
+		node.Attrs["name"],
+		node.Attrs["data-testid"],
+		node.Attrs["data-test"],
+		node.Attrs["href"],
+	}
+}
+
+func ambiguousNodeError(nodes []api.Node) error {
+	parts := make([]string, 0, len(nodes))
+	for i, node := range nodes {
+		if i == 5 {
+			parts = append(parts, "...")
+			break
+		}
+
+		label := displayNodeRef(node)
+		text := node.Name
+		if text == "" {
+			text = node.Text
+		}
+		if text != "" {
+			parts = append(parts, fmt.Sprintf("%s %s %q", label, node.Role, text))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", label, node.Role))
+	}
+	return fmt.Errorf("multiple matching nodes found: %s. narrow the query or use @eN from `nxctl state`", strings.Join(parts, ", "))
+}
+
+func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID string, node api.Node, actionName string, actionValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {
+	action := api.Action{}
+	fallbackMessage := ""
+
+	switch actionName {
+	case "click":
+		if actionValue != "" {
+			fmt.Fprintln(stderr, "click action does not accept an extra value")
+			return 1
+		}
+		action = api.Action{Kind: "invoke", NodeID: &node.ID}
+		fallbackMessage = fmt.Sprintf("clicked %s", displayNodeRef(node))
+	case "input":
+		if actionValue == "" {
+			fmt.Fprintln(stderr, `input action requires "text"`)
+			return 1
+		}
+		action = api.Action{Kind: "type", NodeID: &node.ID, Text: actionValue}
+		fallbackMessage = fmt.Sprintf("typed into %s", displayNodeRef(node))
+	case "get":
+		if !isFindGetTarget(actionValue) {
+			fmt.Fprintln(stderr, "get action requires text, value, attributes, or bbox")
+			return 1
+		}
+		action = api.Action{
+			Kind:   "get",
+			NodeID: &node.ID,
+			Args: map[string]string{
+				"target": actionValue,
+			},
+		}
+	default:
+		fmt.Fprintf(stderr, "unsupported find action: %s\n", actionName)
+		return 1
+	}
+
+	res, err := client.ActSession(ctx, api.ActSessionRequest{
+		SessionID: sessionID,
+		Action:    action,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !res.Result.OK {
+		if res.Result.Message != "" {
+			fmt.Fprintln(stderr, res.Result.Message)
+		}
+		return 1
+	}
+
+	if asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(map[string]interface{}{
+			"match":  node,
+			"result": res.Result,
+		}); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	if action.Kind == "get" {
+		if err := printEvalValue(stdout, res.Result.Value); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	fmt.Fprintln(stdout, fallbackMessage)
+	return 0
+}
+
+func isFindGetTarget(value string) bool {
+	switch value {
+	case "text", "value", "attributes", "bbox":
+		return true
+	default:
+		return false
+	}
+}
+
+func displayNodeRef(node api.Node) string {
+	if node.Ref != "" {
+		return node.Ref
+	}
+	return fmt.Sprintf("%d", node.ID)
+}
+
+func renderFindMatches(nodes []api.Node, asJSON bool, stdout io.Writer, stderr io.Writer) int {
+	if len(nodes) == 0 {
+		fmt.Fprintln(stderr, "matching node not found")
+		return 1
+	}
+	if asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(nodes); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+	for _, node := range nodes {
+		printNode(stdout, node)
+	}
+	return 0
+}
+
+func annotateScreenshot(data []byte, nodes []api.Node) ([]byte, error) {
+	source, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode screenshot: %w", err)
+	}
+
+	bounds := source.Bounds()
+	canvas := image.NewRGBA(bounds)
+	draw.Draw(canvas, bounds, source, bounds.Min, draw.Src)
+
+	palette := []color.RGBA{
+		{R: 255, G: 59, B: 48, A: 255},
+		{R: 0, G: 122, B: 255, A: 255},
+		{R: 52, G: 199, B: 89, A: 255},
+		{R: 255, G: 149, B: 0, A: 255},
+		{R: 175, G: 82, B: 222, A: 255},
+	}
+
+	for _, node := range nodes {
+		if node.Bounds.W <= 0 || node.Bounds.H <= 0 {
+			continue
+		}
+
+		rect := image.Rect(
+			node.Bounds.X,
+			node.Bounds.Y,
+			node.Bounds.X+node.Bounds.W,
+			node.Bounds.Y+node.Bounds.H,
+		).Intersect(bounds)
+		if rect.Dx() <= 0 || rect.Dy() <= 0 {
+			continue
+		}
+
+		boxColor := palette[(node.ID-1)%len(palette)]
+		drawOutline(canvas, rect, boxColor, 2)
+
+		label := node.Ref
+		if label == "" {
+			label = fmt.Sprintf("%d", node.ID)
+		}
+		drawNodeLabel(canvas, rect, label, boxColor)
+	}
+
+	var output bytes.Buffer
+	if err := png.Encode(&output, canvas); err != nil {
+		return nil, fmt.Errorf("encode screenshot: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func drawOutline(img *image.RGBA, rect image.Rectangle, stroke color.RGBA, thickness int) {
+	for offset := 0; offset < thickness; offset++ {
+		top := image.Rect(rect.Min.X, rect.Min.Y+offset, rect.Max.X, rect.Min.Y+offset+1)
+		bottom := image.Rect(rect.Min.X, rect.Max.Y-offset-1, rect.Max.X, rect.Max.Y-offset)
+		left := image.Rect(rect.Min.X+offset, rect.Min.Y, rect.Min.X+offset+1, rect.Max.Y)
+		right := image.Rect(rect.Max.X-offset-1, rect.Min.Y, rect.Max.X-offset, rect.Max.Y)
+		fillRect(img, top, stroke)
+		fillRect(img, bottom, stroke)
+		fillRect(img, left, stroke)
+		fillRect(img, right, stroke)
+	}
+}
+
+func fillRect(img *image.RGBA, rect image.Rectangle, fill color.RGBA) {
+	rect = rect.Intersect(img.Bounds())
+	if rect.Dx() <= 0 || rect.Dy() <= 0 {
+		return
+	}
+	draw.Draw(img, rect, &image.Uniform{C: fill}, image.Point{}, draw.Src)
+}
+
+func drawNodeLabel(img *image.RGBA, rect image.Rectangle, label string, accent color.RGBA) {
+	face := basicfont.Face7x13
+	textWidth := font.MeasureString(face, label).Round()
+	labelHeight := face.Metrics().Height.Round() + 4
+	labelRect := image.Rect(rect.Min.X, rect.Min.Y-labelHeight, rect.Min.X+textWidth+6, rect.Min.Y)
+	if labelRect.Min.Y < img.Bounds().Min.Y {
+		labelRect = image.Rect(rect.Min.X, rect.Min.Y, rect.Min.X+textWidth+6, rect.Min.Y+labelHeight)
+	}
+	labelRect = labelRect.Intersect(img.Bounds())
+	if labelRect.Dx() <= 0 || labelRect.Dy() <= 0 {
+		return
+	}
+
+	fillRect(img, labelRect, accent)
+	drawer := font.Drawer{
+		Dst:  img,
+		Src:  image.White,
+		Face: face,
+		Dot: fixed.Point26_6{
+			X: fixed.I(labelRect.Min.X + 3),
+			Y: fixed.I(labelRect.Min.Y + face.Metrics().Ascent.Round() + 2),
+		},
+	}
+	drawer.DrawString(label)
+}
+
+func printNode(w io.Writer, node api.Node) {
+	label := node.Ref
+	if label == "" {
+		label = fmt.Sprintf("%d", node.ID)
+	}
+	fmt.Fprintf(w, "[%s] %s", label, node.Role)
+	if node.Name != "" {
+		fmt.Fprintf(w, " %q", node.Name)
+	} else if node.Text != "" {
+		fmt.Fprintf(w, " %q", node.Text)
+	}
+	fmt.Fprintln(w)
+	if len(node.LocatorHints) > 0 {
+		commands := make([]string, 0, len(node.LocatorHints))
+		for _, hint := range node.LocatorHints {
+			commands = append(commands, hint.Command)
+		}
+		fmt.Fprintf(w, "  find: %s\n", strings.Join(commands, " | "))
+	}
 }
 
 func ensureDaemon(ctx context.Context, paths config.Paths) (*rpc.Client, bool, error) {
@@ -2025,12 +2844,14 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "commands:")
 	fmt.Fprintln(w, "  attach")
 	fmt.Fprintln(w, "  back")
+	fmt.Fprintln(w, "  batch")
 	fmt.Fprintln(w, "  browser")
 	fmt.Fprintln(w, "  click")
 	fmt.Fprintln(w, "  close")
 	fmt.Fprintln(w, "  help")
 	fmt.Fprintln(w, "  eval")
 	fmt.Fprintln(w, "  dblclick")
+	fmt.Fprintln(w, "  find")
 	fmt.Fprintln(w, "  get")
 	fmt.Fprintln(w, "  hover")
 	fmt.Fprintln(w, "  input")
@@ -2064,6 +2885,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printAttachHelp(w)
 	case "back":
 		printBackHelp(w)
+	case "batch":
+		printBatchHelp(w)
 	case "browser":
 		printBrowserHelp(w)
 	case "click":
@@ -2074,6 +2897,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printNodeActionHelp(w, "dblclick")
 	case "eval":
 		printEvalHelp(w)
+	case "find":
+		printFindHelp(w)
 	case "get":
 		printGetHelp(w)
 	case "hover":
@@ -2134,13 +2959,18 @@ func printBackHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl back [--session <id>] [--json]")
 }
 
+func printBatchHelp(w io.Writer) {
+	fmt.Fprintln(w, `usage: nxctl batch --cmd "open https://example.com" --cmd "state" [--json]`)
+	fmt.Fprintln(w, `   or: nxctl batch --cmd "find role button --all" --cmd "screenshot annotated.png --annotate" [--json]`)
+}
+
 func printBrowserHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl browser <setup|update|status|uninstall>")
 	fmt.Fprintln(w, "   or: nxctl browser uninstall [--name chromium|lightpanda]")
 }
 
 func printClickHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl click <index> [--session <id>] [--json]")
+	fmt.Fprintln(w, "usage: nxctl click <index|@eN> [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl click <x> <y> [--session <id>] [--json]")
 }
 
@@ -2163,14 +2993,31 @@ func printEvalHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl eval "js code" [--session <id>] [--json]`)
 }
 
+func printFindHelp(w io.Writer) {
+	fmt.Fprintln(w, `usage: nxctl find role <role> click [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> input "text" [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> get text|value|attributes|bbox [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> --all [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" click [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" get text|value|attributes|bbox [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" --all [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" input "text" [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" get value|attributes|bbox [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" --all [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find testid "value" click|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find testid "value" --all [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find href "value" click|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find href "value" --all [--session <id>] [--json]`)
+}
+
 func printGetHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl get title [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl get html [--selector <css>] [--session <id>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl get text|value|attributes|bbox <index> [--session <id>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl get text|value|attributes|bbox <index|@eN> [--session <id>] [--json]")
 }
 
 func printInputHelp(w io.Writer) {
-	fmt.Fprintln(w, `usage: nxctl input <index> "text" [--session <id>] [--json]`)
+	fmt.Fprintln(w, `usage: nxctl input <index|@eN> "text" [--session <id>] [--json]`)
 }
 
 func printKeysHelp(w io.Writer) {
@@ -2180,11 +3027,11 @@ func printKeysHelp(w io.Writer) {
 func printNodeActionHelp(w io.Writer, command string) {
 	switch command {
 	case "hover":
-		fmt.Fprintln(w, "usage: nxctl hover <index> [--session <id>] [--json]")
+		fmt.Fprintln(w, "usage: nxctl hover <index|@eN> [--session <id>] [--json]")
 	case "dblclick":
-		fmt.Fprintln(w, "usage: nxctl dblclick <index> [--session <id>] [--json]")
+		fmt.Fprintln(w, "usage: nxctl dblclick <index|@eN> [--session <id>] [--json]")
 	case "rightclick":
-		fmt.Fprintln(w, "usage: nxctl rightclick <index> [--session <id>] [--json]")
+		fmt.Fprintln(w, "usage: nxctl rightclick <index|@eN> [--session <id>] [--json]")
 	}
 }
 
@@ -2202,11 +3049,11 @@ func printScrollHelp(w io.Writer) {
 }
 
 func printScreenshotHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl screenshot [path] [--session <id>] [--full]")
+	fmt.Fprintln(w, "usage: nxctl screenshot [path] [--session <id>] [--full] [--annotate]")
 }
 
 func printSelectHelp(w io.Writer) {
-	fmt.Fprintln(w, `usage: nxctl select <index> "value" [--session <id>] [--json]`)
+	fmt.Fprintln(w, `usage: nxctl select <index|@eN> "value" [--session <id>] [--json]`)
 }
 
 func printSessionsHelp(w io.Writer) {
@@ -2222,7 +3069,7 @@ func printTypeHelp(w io.Writer) {
 }
 
 func printUploadHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl upload <index> <path> [--session <id>] [--json]")
+	fmt.Fprintln(w, "usage: nxctl upload <index|@eN> <path> [--session <id>] [--json]")
 }
 
 func printViewportHelp(w io.Writer) {
@@ -2234,6 +3081,8 @@ func printWaitHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl wait selector "<css>" [--state attached|detached|visible|hidden] [--timeout <ms>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl wait text "value" [--timeout <ms>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl wait url "value" [--timeout <ms>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl wait navigation [--timeout <ms>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl wait function "js expr" [--timeout <ms>] [--session <id>] [--json]`)
 }
 
 func printDetachHelp(w io.Writer) {
@@ -2299,4 +3148,75 @@ func parseViewport(value string) (int, int, error) {
 	}
 
 	return width, height, nil
+}
+
+func parseNodeSelector(value string) (int, string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return 0, "", errors.New("node selector is required")
+	}
+	if strings.HasPrefix(trimmed, "@e") {
+		nodeID, err := strconv.Atoi(strings.TrimPrefix(trimmed, "@e"))
+		if err != nil || nodeID <= 0 {
+			return 0, "", errors.New("invalid node ref")
+		}
+		return nodeID, formatNodeRef(nodeID), nil
+	}
+
+	nodeID, err := strconv.Atoi(trimmed)
+	if err != nil || nodeID <= 0 {
+		return 0, "", errors.New("invalid node index")
+	}
+	return nodeID, "", nil
+}
+
+func formatNodeRef(id int) string {
+	return fmt.Sprintf("@e%d", id)
+}
+
+func splitBatchCommand(value string) ([]string, error) {
+	args := []string{}
+	var current strings.Builder
+	var quote rune
+	escaped := false
+
+	flush := func() {
+		if current.Len() == 0 {
+			return
+		}
+		args = append(args, current.String())
+		current.Reset()
+	}
+
+	for _, r := range value {
+		switch {
+		case escaped:
+			current.WriteRune(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			} else {
+				current.WriteRune(r)
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ' ' || r == '\t' || r == '\n':
+			flush()
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if escaped {
+		return nil, errors.New("unterminated escape in batch command")
+	}
+	if quote != 0 {
+		return nil, errors.New("unterminated quote in batch command")
+	}
+
+	flush()
+	return args, nil
 }

@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"image"
+	"image/color"
+	"image/png"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -91,11 +95,79 @@ func TestHelp(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "find"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help find exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `usage: nxctl find role <role> click`) {
+		t.Fatalf("unexpected help find output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `find testid "value" click|get`) {
+		t.Fatalf("unexpected help find output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "batch"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help batch exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `usage: nxctl batch --cmd "open https://example.com"`) {
+		t.Fatalf("unexpected help batch output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected wait without args to fail\n%s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `usage: nxctl wait selector`) {
 		t.Fatalf("unexpected wait missing-args output: %s", stdout.String())
+	}
+}
+
+func TestSplitBatchCommand(t *testing.T) {
+	args, err := splitBatchCommand(`find text "Sign In" --all`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := []string{"find", "text", "Sign In", "--all"}
+	if len(args) != len(expected) {
+		t.Fatalf("unexpected arg length: %#v", args)
+	}
+	for i := range expected {
+		if args[i] != expected[i] {
+			t.Fatalf("unexpected args: %#v", args)
+		}
+	}
+}
+
+func TestBatch(t *testing.T) {
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "help find"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected batch exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "==> help wait") {
+		t.Fatalf("unexpected batch output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "==> help find") {
+		t.Fatalf("unexpected batch output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "unknown"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected batch failure\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
+		t.Fatalf("unexpected batch failure output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "help find", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected batch json exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"command": "help wait"`) {
+		t.Fatalf("unexpected batch json output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"exit_code": 0`) {
+		t.Fatalf("unexpected batch json output: %s", stdout.String())
 	}
 }
 
@@ -367,6 +439,12 @@ func TestOpenAndState(t *testing.T) {
 	if !strings.Contains(stateOut.String(), "Title:") {
 		t.Fatalf("unexpected state output: %s", stateOut.String())
 	}
+	if !strings.Contains(stateOut.String(), "[@e1] link \"Docs\"") {
+		t.Fatalf("unexpected state output: %s", stateOut.String())
+	}
+	if !strings.Contains(stateOut.String(), `find: role link --name "Docs"`) {
+		t.Fatalf("unexpected state output: %s", stateOut.String())
+	}
 
 	cancel()
 
@@ -472,6 +550,14 @@ func TestClick(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "clicked 120 240" {
 		t.Fatalf("unexpected coordinate click output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"click", "@e3"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected click ref exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e3" {
+		t.Fatalf("unexpected click ref output: %s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -594,6 +680,14 @@ func TestTypeAndInput(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "typed into 3" {
 		t.Fatalf("unexpected input output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"input", "@e3", "hello"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected input ref exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "typed into 3" {
+		t.Fatalf("unexpected input ref output: %s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -720,6 +814,75 @@ func TestScreenshot(t *testing.T) {
 	}
 	if strings.TrimSpace(stdout.String()) != "saved screenshot "+customPath {
 		t.Fatalf("unexpected full screenshot output: %s", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestScreenshotAnnotate(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, annotateScreenshotRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "annotated.png")
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"screenshot", outputPath, "--annotate"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected screenshot --annotate exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "saved screenshot "+outputPath {
+		t.Fatalf("unexpected screenshot --annotate output: %s", stdout.String())
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("expected annotated png: %v", err)
+	}
+
+	rgba := image.NewRGBA(img.Bounds())
+	drawBounds := img.Bounds()
+	for y := drawBounds.Min.Y; y < drawBounds.Max.Y; y++ {
+		for x := drawBounds.Min.X; x < drawBounds.Max.X; x++ {
+			rgba.Set(x, y, img.At(x, y))
+		}
+	}
+
+	if !hasNonWhitePixel(rgba) {
+		t.Fatalf("expected annotation pixels in output")
 	}
 
 	cancel()
@@ -942,6 +1105,22 @@ func TestWait(t *testing.T) {
 		t.Fatalf("unexpected wait url output: %s", stdout.String())
 	}
 
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"wait", "navigation"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected wait navigation exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "waited for navigation" {
+		t.Fatalf("unexpected wait navigation output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"wait", "function", "window.appReady === true", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected wait function exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"message": "waited for function"`) {
+		t.Fatalf("unexpected wait function output: %s", stdout.String())
+	}
+
 	cancel()
 
 	select {
@@ -988,11 +1167,146 @@ func TestGet(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "attributes", "@e3", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get attributes ref exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"href": "/docs"`) {
+		t.Fatalf("unexpected get attributes ref output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"get", "attributes", "3", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected get attributes exit code: %d\n%s", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"href": "/docs"`) {
 		t.Fatalf("unexpected get attributes output: %s", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestFind(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, findRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"find", "role", "button", "click", "--name", "Submit"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find role exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e1" {
+		t.Fatalf("unexpected find role output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "text", "Sign In", "click", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find text exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e2"`) {
+		t.Fatalf("unexpected find text output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"message": "clicked 2"`) {
+		t.Fatalf("unexpected find text output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "--all"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find --all exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `[@e1] button "Submit"`) {
+		t.Fatalf("unexpected find --all output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `[@e4] button "Cancel"`) {
+		t.Fatalf("unexpected find --all output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "testid", "submit-primary", "--all", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find testid --all exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"kind": "testid"`) {
+		t.Fatalf("unexpected find testid --all output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"command": "testid \"submit-primary\""`) {
+		t.Fatalf("unexpected find testid --all output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "link", "get", "attributes", "--name", "Sign In", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find get exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e2"`) {
+		t.Fatalf("unexpected find get output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"href": "/signin"`) {
+		t.Fatalf("unexpected find get output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "testid", "submit-primary", "click"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find testid exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e1" {
+		t.Fatalf("unexpected find testid output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "href", "/signin", "get", "attributes", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find href exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e2"`) {
+		t.Fatalf("unexpected find href output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"href": "/signin"`) {
+		t.Fatalf("unexpected find href output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "label", "Email", "input", "hello@example.com"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find label exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "typed into @e3" {
+		t.Fatalf("unexpected find label output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "click"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected ambiguous find role to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "multiple matching nodes found") {
+		t.Fatalf("unexpected ambiguous find output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "@e1 button") || !strings.Contains(stdout.String(), "@e4 button") {
+		t.Fatalf("unexpected ambiguous find output: %s", stdout.String())
 	}
 
 	cancel()
@@ -1046,11 +1360,27 @@ func TestSelectAndUpload(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"select", "@e3", "two"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected select ref exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "selected two on @e3" {
+		t.Fatalf("unexpected select ref output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"upload", "4", uploadFile, "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected upload exit code: %d\n%s", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"message": "uploaded `) {
 		t.Fatalf("unexpected upload output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"upload", "@e4", uploadFile}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected upload ref exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(strings.TrimSpace(stdout.String()), "uploaded "+uploadFile+" to @e4") {
+		t.Fatalf("unexpected upload ref output: %s", stdout.String())
 	}
 
 	cancel()
@@ -1257,6 +1587,31 @@ func waitForSocket(t *testing.T, path string) {
 	t.Fatalf("socket not ready: %s", path)
 }
 
+func hasNonWhitePixel(img *image.RGBA) bool {
+	bounds := img.Bounds()
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, a := img.At(x, y).RGBA()
+			if r != 0xffff || g != 0xffff || b != 0xffff || a != 0xffff {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func testPNGBase64() string {
+	img := image.NewRGBA(image.Rect(0, 0, 40, 40))
+	for y := 0; y < 40; y++ {
+		for x := 0; x < 40; x++ {
+			img.Set(x, y, color.White)
+		}
+	}
+	var buf bytes.Buffer
+	png.Encode(&buf, img)
+	return base64.StdEncoding.EncodeToString(buf.Bytes())
+}
+
 type fakeBrowserManager struct{}
 type fakeLightpandaBackend struct{}
 
@@ -1266,11 +1621,13 @@ type mouseRPCHandler struct{}
 type typeRPCHandler struct{}
 type keysRPCHandler struct{}
 type screenshotRPCHandler struct{}
+type annotateScreenshotRPCHandler struct{}
 type scrollRPCHandler struct{}
 type backRPCHandler struct{}
 type viewportRPCHandler struct{}
 type waitRPCHandler struct{}
 type getRPCHandler struct{}
+type findRPCHandler struct{}
 type selectUploadRPCHandler struct{}
 
 func (fakeLightpandaBackend) Name() spec.BackendName {
@@ -1294,6 +1651,21 @@ func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.
 		URLOrScreen: "https://example.com",
 		Title:       "Example",
 		Text:        "Example text",
+		Tree: []api.Node{
+			{
+				ID:      1,
+				Ref:     "@e1",
+				Role:    "link",
+				Name:    "Docs",
+				Visible: true,
+				Enabled: true,
+				LocatorHints: []api.LocatorHint{
+					{Kind: "role", Value: "link", Name: "Docs", Command: `role link --name "Docs"`},
+					{Kind: "text", Value: "Docs", Command: `text "Docs"`},
+					{Kind: "href", Value: "/docs", Command: `href "/docs"`},
+				},
+			},
+		},
 	}, nil
 }
 
@@ -1574,6 +1946,52 @@ func (screenshotRPCHandler) ActSession(context.Context, api.ActSessionRequest) (
 	return api.ActSessionResponse{}, nil
 }
 
+func (annotateScreenshotRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
+	return api.PingResponse{}, nil
+}
+
+func (annotateScreenshotRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
+	return api.AttachSessionResponse{}, nil
+}
+
+func (annotateScreenshotRPCHandler) ListSessions(context.Context, api.ListSessionsRequest) (api.ListSessionsResponse, error) {
+	return api.ListSessionsResponse{}, nil
+}
+
+func (annotateScreenshotRPCHandler) DetachSession(context.Context, api.DetachSessionRequest) (api.DetachSessionResponse, error) {
+	return api.DetachSessionResponse{}, nil
+}
+
+func (annotateScreenshotRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api.StopDaemonResponse, error) {
+	return api.StopDaemonResponse{Stopped: true}, nil
+}
+
+func (annotateScreenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	if !req.Options.WithScreenshot {
+		return api.ObserveSessionResponse{}, nil
+	}
+	return api.ObserveSessionResponse{
+		Observation: api.Observation{
+			Screenshot: testPNGBase64(),
+			Tree: []api.Node{
+				{
+					ID:      1,
+					Ref:     "@e1",
+					Role:    "button",
+					Name:    "Submit",
+					Visible: true,
+					Enabled: true,
+					Bounds:  api.Rect{X: 4, Y: 6, W: 18, H: 12},
+				},
+			},
+		},
+	}, nil
+}
+
+func (annotateScreenshotRPCHandler) ActSession(context.Context, api.ActSessionRequest) (api.ActSessionResponse, error) {
+	return api.ActSessionResponse{}, nil
+}
+
 func (scrollRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
 	return api.PingResponse{}, nil
 }
@@ -1776,6 +2194,109 @@ func (getRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (a
 				OK: true,
 				Value: map[string]interface{}{
 					"href": "/docs",
+				},
+			},
+		}, nil
+	default:
+		return api.ActSessionResponse{}, nil
+	}
+}
+
+func (findRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
+	return api.PingResponse{}, nil
+}
+
+func (findRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
+	return api.AttachSessionResponse{}, nil
+}
+
+func (findRPCHandler) ListSessions(context.Context, api.ListSessionsRequest) (api.ListSessionsResponse, error) {
+	return api.ListSessionsResponse{}, nil
+}
+
+func (findRPCHandler) DetachSession(context.Context, api.DetachSessionRequest) (api.DetachSessionResponse, error) {
+	return api.DetachSessionResponse{}, nil
+}
+
+func (findRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api.StopDaemonResponse, error) {
+	return api.StopDaemonResponse{Stopped: true}, nil
+}
+
+func (findRPCHandler) ObserveSession(context.Context, api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	return api.ObserveSessionResponse{
+		Observation: api.Observation{
+			Tree: []api.Node{
+				{
+					ID:      1,
+					Ref:     "@e1",
+					Role:    "button",
+					Name:    "Submit",
+					Visible: true,
+					Enabled: true,
+					Attrs:   map[string]string{"data-testid": "submit-primary"},
+					LocatorHints: []api.LocatorHint{
+						{Kind: "role", Value: "button", Name: "Submit", Command: `role button --name "Submit"`},
+						{Kind: "text", Value: "Submit", Command: `text "Submit"`},
+						{Kind: "testid", Value: "submit-primary", Command: `testid "submit-primary"`},
+					},
+				},
+				{
+					ID:      2,
+					Ref:     "@e2",
+					Role:    "link",
+					Text:    "Sign In",
+					Visible: true,
+					Enabled: true,
+					Attrs:   map[string]string{"href": "/signin"},
+					LocatorHints: []api.LocatorHint{
+						{Kind: "role", Value: "link", Name: "Sign In", Command: `role link --name "Sign In"`},
+						{Kind: "text", Value: "Sign In", Command: `text "Sign In"`},
+						{Kind: "href", Value: "/signin", Command: `href "/signin"`},
+					},
+				},
+				{
+					ID:       3,
+					Ref:      "@e3",
+					Role:     "textbox",
+					Name:     "Email",
+					Visible:  true,
+					Enabled:  true,
+					Editable: true,
+					LocatorHints: []api.LocatorHint{
+						{Kind: "role", Value: "textbox", Name: "Email", Command: `role textbox --name "Email"`},
+						{Kind: "label", Value: "Email", Command: `label "Email"`},
+					},
+				},
+				{ID: 4, Ref: "@e4", Role: "button", Name: "Cancel", Visible: true, Enabled: true},
+			},
+		},
+	}, nil
+}
+
+func (findRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	switch req.Action.Kind {
+	case "invoke":
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK:      true,
+				Changed: true,
+				Message: "clicked " + strconv.Itoa(*req.Action.NodeID),
+			},
+		}, nil
+	case "type":
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK:      true,
+				Changed: true,
+				Message: "typed into " + strconv.Itoa(*req.Action.NodeID),
+			},
+		}, nil
+	case "get":
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK: true,
+				Value: map[string]interface{}{
+					"href": "/signin",
 				},
 			},
 		}, nil

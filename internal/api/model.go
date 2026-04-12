@@ -93,22 +93,31 @@ type Observation struct {
 }
 
 type Node struct {
-	ID          int               `json:"id"`
-	Fingerprint string            `json:"fingerprint,omitempty"`
-	Role        string            `json:"role"`
-	Name        string            `json:"name,omitempty"`
-	Text        string            `json:"text,omitempty"`
-	Value       string            `json:"value,omitempty"`
-	Bounds      Rect              `json:"bounds,omitempty"`
-	Visible     bool              `json:"visible"`
-	Enabled     bool              `json:"enabled"`
-	Focused     bool              `json:"focused"`
-	Editable    bool              `json:"editable"`
-	Selectable  bool              `json:"selectable"`
-	Invokable   bool              `json:"invokable"`
-	Scrollable  bool              `json:"scrollable"`
-	Children    []int             `json:"children,omitempty"`
-	Attrs       map[string]string `json:"attrs,omitempty"`
+	ID           int               `json:"id"`
+	Ref          string            `json:"ref,omitempty"`
+	Fingerprint  string            `json:"fingerprint,omitempty"`
+	LocatorHints []LocatorHint     `json:"locator_hints,omitempty"`
+	Role         string            `json:"role"`
+	Name         string            `json:"name,omitempty"`
+	Text         string            `json:"text,omitempty"`
+	Value        string            `json:"value,omitempty"`
+	Bounds       Rect              `json:"bounds,omitempty"`
+	Visible      bool              `json:"visible"`
+	Enabled      bool              `json:"enabled"`
+	Focused      bool              `json:"focused"`
+	Editable     bool              `json:"editable"`
+	Selectable   bool              `json:"selectable"`
+	Invokable    bool              `json:"invokable"`
+	Scrollable   bool              `json:"scrollable"`
+	Children     []int             `json:"children,omitempty"`
+	Attrs        map[string]string `json:"attrs,omitempty"`
+}
+
+type LocatorHint struct {
+	Kind    string `json:"kind"`
+	Value   string `json:"value"`
+	Name    string `json:"name,omitempty"`
+	Command string `json:"command"`
 }
 
 type Action struct {

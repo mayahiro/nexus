@@ -7,6 +7,7 @@ tool golang.org/x/tools/cmd/goimports
 require (
 	github.com/chromedp/cdproto v0.0.0-20260405000525-47a8ff65b46a
 	github.com/chromedp/chromedp v0.15.1
+	golang.org/x/image v0.39.0
 )
 
 require (
