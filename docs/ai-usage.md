@@ -73,6 +73,7 @@ nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector @e3 --mask-selector testid=user-id
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -82,6 +83,7 @@ nxctl close
 
 When you need to compare migrated screens, use `compare` with two URLs or two existing sessions.
 Start with `--wait-selector` on a stable ready marker and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
+Use `--ignore-selector` to drop nodes from comparison and `--mask-selector` to keep the node while suppressing text and value differences.
 
 When `state` gets too large, filter the tree before reading it.
 Start with `--role`, `--name`, `--text`, `--testid`, `--href`, and `--limit`.

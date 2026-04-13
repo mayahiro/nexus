@@ -109,6 +109,7 @@ nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector @e3 --mask-selector testid=user-id
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate

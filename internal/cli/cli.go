@@ -3151,8 +3151,9 @@ func printClickHelp(w io.Writer) {
 }
 
 func printCompareHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--wait-selector <css>] [--wait-timeout <ms>] [--ignore-text-regex <regex>]... [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--ignore-text-regex <regex>]... [--json]")
+	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--wait-selector <css>] [--wait-timeout <ms>] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--json]")
+	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>")
 }
 
 func printCloseHelp(w io.Writer) {

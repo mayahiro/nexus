@@ -807,11 +807,17 @@ func TestCompare(t *testing.T) {
 	if report.Summary.TitleChanged != 1 || report.Summary.TextChanged != 2 || report.Summary.MissingNodes != 1 || report.Summary.NewNodes != 1 || report.Summary.StateChanged != 1 {
 		t.Fatalf("unexpected summary: %+v", report.Summary)
 	}
+	if report.Summary.Critical != 1 || report.Summary.Warning != 5 || report.Summary.Info != 0 {
+		t.Fatalf("unexpected severity summary: %+v", report.Summary)
+	}
 	if report.Summary.PageTextChanged != 0 {
 		t.Fatalf("unexpected page_text_changed summary: %+v", report.Summary)
 	}
 	if report.Old.SessionID != "old" || report.New.SessionID != "new" {
 		t.Fatalf("unexpected report sessions: %+v", report)
+	}
+	if report.Findings[0].Severity == "" || report.Findings[0].Impact == "" {
+		t.Fatalf("expected severity and impact in findings: %+v", report.Findings[0])
 	}
 
 	cancel()
@@ -903,11 +909,85 @@ func TestCompareURLs(t *testing.T) {
 	if report.Summary.TitleChanged != 1 {
 		t.Fatalf("unexpected compare url summary: %+v", report.Summary)
 	}
+	if report.Summary.Warning != 1 {
+		t.Fatalf("unexpected compare url severity summary: %+v", report.Summary)
+	}
 	if len(handler.attachIDs) != 2 {
 		t.Fatalf("unexpected attach count: %#v", handler.attachIDs)
 	}
 	if handler.attachIDs[0] == handler.attachIDs[1] {
 		t.Fatalf("compare url used duplicate temp session ids: %#v", handler.attachIDs)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareIgnoreAndMaskSelectors(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, compareRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--ignore-selector", "@e3",
+		"--mask-selector", "@e2",
+		"--ignore-text-regex", `20\d\d-\d\d-\d\d`,
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare selector exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare selector json: %v\n%s", err, stdout.String())
+	}
+
+	if report.Summary.TotalFindings != 3 {
+		t.Fatalf("unexpected compare selector findings: %+v", report.Summary)
+	}
+	if report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 {
+		t.Fatalf("unexpected compare selector node summary: %+v", report.Summary)
+	}
+	if report.Summary.TextChanged != 1 || report.Summary.StateChanged != 1 || report.Summary.TitleChanged != 1 {
+		t.Fatalf("unexpected compare selector summary: %+v", report.Summary)
+	}
+	for _, finding := range report.Findings {
+		if finding.Field == "value" {
+			t.Fatalf("masked value should not appear in findings: %+v", finding)
+		}
 	}
 
 	cancel()
@@ -2248,10 +2328,10 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 				Title:       "Orders",
 				Text:        "Orders 2026-04-13",
 				Tree: []api.Node{
-					{ID: 1, Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
-					{ID: 2, Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
-					{ID: 3, Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/legacy"}},
-					{ID: 4, Fingerprint: "status", Role: "status", Text: "Ready 2026-04-13", Visible: true, Enabled: true},
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
+					{ID: 3, Ref: "@e3", Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/legacy"}},
+					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-13", Visible: true, Enabled: true},
 				},
 			},
 		}, nil
@@ -2263,10 +2343,10 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 				Title:       "Orders v2",
 				Text:        "Orders 2026-04-14",
 				Tree: []api.Node{
-					{ID: 1, Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
-					{ID: 2, Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
-					{ID: 3, Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/next"}},
-					{ID: 4, Fingerprint: "status", Role: "status", Text: "Ready 2026-04-14", Visible: true, Enabled: true},
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
+					{ID: 3, Ref: "@e3", Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/next"}},
+					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-14", Visible: true, Enabled: true},
 				},
 			},
 		}, nil

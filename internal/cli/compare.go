@@ -52,6 +52,7 @@ type compareSnapshot struct {
 
 type compareSnapshotNode struct {
 	Fingerprint string `json:"fingerprint"`
+	Ref         string `json:"ref,omitempty"`
 	Role        string `json:"role"`
 	Label       string `json:"label,omitempty"`
 	Name        string `json:"name,omitempty"`
@@ -75,10 +76,15 @@ type compareSummary struct {
 	NewNodes        int  `json:"new_nodes"`
 	StateChanged    int  `json:"state_changed"`
 	PageTextChanged int  `json:"page_text_changed"`
+	Critical        int  `json:"critical"`
+	Warning         int  `json:"warning"`
+	Info            int  `json:"info"`
 }
 
 type compareFinding struct {
 	Kind        string `json:"kind"`
+	Severity    string `json:"severity,omitempty"`
+	Impact      string `json:"impact,omitempty"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 	Role        string `json:"role,omitempty"`
 	Label       string `json:"label,omitempty"`
@@ -97,6 +103,17 @@ type compareReport struct {
 type preparedCompareSession struct {
 	SessionID string
 	Detach    bool
+}
+
+type compareSelectorRule struct {
+	Kind  string
+	Value string
+}
+
+type compareSnapshotOptions struct {
+	IgnoreText []*regexp.Regexp
+	IgnoreNode []compareSelectorRule
+	MaskNode   []compareSelectorRule
 }
 
 const compareURLReadyTimeout = 10 * time.Second
@@ -126,7 +143,11 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
 	var ignoreRegex compareStringValues
+	var ignoreSelector compareStringValues
+	var maskSelector compareStringValues
 	fs.Var(&ignoreRegex, "ignore-text-regex", "regex to strip from text before compare")
+	fs.Var(&ignoreSelector, "ignore-selector", "node selector to ignore such as @e3, role=button, text=Save")
+	fs.Var(&maskSelector, "mask-selector", "node selector to mask such as @e3, role=textbox, testid=user-id")
 
 	if err := parseCommandFlags(fs, args, stderr, "compare"); err != nil {
 		return 1
@@ -162,6 +183,16 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 
 	ignorePatterns, err := compileCompareRegexps(ignoreRegex)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	ignoreRules, err := compileCompareSelectorRules(ignoreSelector)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	maskRules, err := compileCompareSelectorRules(maskSelector)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -225,8 +256,16 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 
 	report := buildCompareReport(
-		buildCompareSnapshot(oldObservation, ignorePatterns),
-		buildCompareSnapshot(newObservation, ignorePatterns),
+		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
+			IgnoreText: ignorePatterns,
+			IgnoreNode: ignoreRules,
+			MaskNode:   maskRules,
+		}),
+		buildCompareSnapshot(newObservation, compareSnapshotOptions{
+			IgnoreText: ignorePatterns,
+			IgnoreNode: ignoreRules,
+			MaskNode:   maskRules,
+		}),
 	)
 
 	if *asJSON {
@@ -264,6 +303,43 @@ func compileCompareRegexps(values []string) ([]*regexp.Regexp, error) {
 		patterns = append(patterns, pattern)
 	}
 	return patterns, nil
+}
+
+func compileCompareSelectorRules(values []string) ([]compareSelectorRule, error) {
+	rules := make([]compareSelectorRule, 0, len(values))
+	for _, value := range values {
+		rule, err := parseCompareSelectorRule(value)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
+}
+
+func parseCompareSelectorRule(value string) (compareSelectorRule, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return compareSelectorRule{}, errors.New("compare selector must not be empty")
+	}
+	if strings.HasPrefix(trimmed, "@e") {
+		return compareSelectorRule{Kind: "ref", Value: trimmed}, nil
+	}
+	kind, raw, ok := strings.Cut(trimmed, "=")
+	if !ok {
+		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: use @eN or role/name/text/testid/href=<value>", value)
+	}
+	kind = strings.TrimSpace(kind)
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: value must not be empty", value)
+	}
+	switch kind {
+	case "role", "name", "text", "testid", "href":
+		return compareSelectorRule{Kind: kind, Value: raw}, nil
+	default:
+		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: supported kinds are role, name, text, testid, href, or @eN", value)
+	}
 }
 
 func prepareCompareSessions(ctx context.Context, client *rpc.Client, paths config.Paths, oldEndpoint compareEndpoint, newEndpoint compareEndpoint, backend string, targetRef string, viewport string) (preparedCompareSession, preparedCompareSession, error) {
@@ -382,9 +458,13 @@ func waitForCompareURLReady(ctx context.Context, client *rpc.Client, sessionID s
 	}
 }
 
-func buildCompareSnapshot(observation api.Observation, ignore []*regexp.Regexp) compareSnapshot {
+func buildCompareSnapshot(observation api.Observation, options compareSnapshotOptions) compareSnapshot {
 	nodes := make([]compareSnapshotNode, 0, len(observation.Tree))
 	for _, node := range observation.Tree {
+		if matchesCompareSelectorRule(node, options.IgnoreNode) {
+			continue
+		}
+
 		fingerprint := strings.TrimSpace(node.Fingerprint)
 		if fingerprint == "" {
 			fingerprint = strings.Join([]string{
@@ -395,14 +475,20 @@ func buildCompareSnapshot(observation api.Observation, ignore []*regexp.Regexp) 
 			}, "|")
 		}
 
-		name := normalizeCompareString(node.Name, ignore)
-		text := normalizeCompareString(node.Text, ignore)
-		value := normalizeCompareString(node.Value, ignore)
-		href := normalizeCompareString(node.Attrs["href"], ignore)
-		testID := normalizeCompareString(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), ignore)
+		name := normalizeCompareString(node.Name, options.IgnoreText)
+		text := normalizeCompareString(node.Text, options.IgnoreText)
+		value := normalizeCompareString(node.Value, options.IgnoreText)
+		href := normalizeCompareString(node.Attrs["href"], options.IgnoreText)
+		testID := normalizeCompareString(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), options.IgnoreText)
+		if matchesCompareSelectorRule(node, options.MaskNode) {
+			name = ""
+			text = ""
+			value = ""
+		}
 
 		nodes = append(nodes, compareSnapshotNode{
 			Fingerprint: fingerprint,
+			Ref:         strings.TrimSpace(node.Ref),
 			Role:        strings.TrimSpace(node.Role),
 			Label:       compareNodeLabel(name, text, value, href, testID),
 			Name:        name,
@@ -435,11 +521,47 @@ func buildCompareSnapshot(observation api.Observation, ignore []*regexp.Regexp) 
 
 	return compareSnapshot{
 		SessionID: observation.SessionID,
-		URL:       normalizeCompareString(observation.URLOrScreen, ignore),
-		Title:     normalizeCompareString(observation.Title, ignore),
-		Text:      normalizeCompareString(observation.Text, ignore),
+		URL:       normalizeCompareString(observation.URLOrScreen, options.IgnoreText),
+		Title:     normalizeCompareString(observation.Title, options.IgnoreText),
+		Text:      normalizeCompareString(observation.Text, options.IgnoreText),
 		Nodes:     nodes,
 	}
+}
+
+func matchesCompareSelectorRule(node api.Node, rules []compareSelectorRule) bool {
+	for _, rule := range rules {
+		switch rule.Kind {
+		case "ref":
+			if strings.TrimSpace(node.Ref) == rule.Value {
+				return true
+			}
+		case "role":
+			if normalizeFindValue(node.Role) == normalizeFindValue(rule.Value) {
+				return true
+			}
+		case "name":
+			if compareSelectorContains(node.Name, rule.Value) {
+				return true
+			}
+		case "text":
+			if compareSelectorContains(node.Text, rule.Value) {
+				return true
+			}
+		case "testid":
+			if compareSelectorContains(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), rule.Value) {
+				return true
+			}
+		case "href":
+			if compareSelectorContains(node.Attrs["href"], rule.Value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func compareSelectorContains(value string, needle string) bool {
+	return strings.Contains(normalizeFindValue(value), normalizeFindValue(needle))
 }
 
 func normalizeCompareString(value string, ignore []*regexp.Regexp) string {
@@ -476,6 +598,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 	}
 
 	add := func(finding compareFinding) {
+		finding.Severity, finding.Impact = classifyCompareFinding(finding)
 		report.Findings = append(report.Findings, finding)
 		report.Summary.TotalFindings++
 		switch finding.Kind {
@@ -491,6 +614,14 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 			report.Summary.StateChanged++
 		case "page_text_changed":
 			report.Summary.PageTextChanged++
+		}
+		switch finding.Severity {
+		case "critical":
+			report.Summary.Critical++
+		case "warning":
+			report.Summary.Warning++
+		default:
+			report.Summary.Info++
 		}
 	}
 
@@ -665,6 +796,48 @@ func summarizeCompareValue(value string) string {
 	return trimmed[:117] + "..."
 }
 
+func classifyCompareFinding(finding compareFinding) (string, string) {
+	switch finding.Kind {
+	case "title_changed":
+		return "warning", "page_title_changed"
+	case "page_text_changed":
+		return "info", "content_changed"
+	case "new_node":
+		return "warning", "new_content"
+	case "missing_node":
+		switch {
+		case finding.Role == "button":
+			return "critical", "primary_action_missing"
+		case finding.Role == "link":
+			return "warning", "navigation_changed"
+		case finding.Role == "textbox" || finding.Role == "combobox":
+			return "critical", "form_input_changed"
+		default:
+			return "warning", "content_changed"
+		}
+	case "state_changed":
+		if finding.Field == "state" && strings.Contains(finding.Old, "true/true") && strings.Contains(finding.New, "true/false") {
+			if finding.Role == "textbox" || finding.Role == "combobox" {
+				return "critical", "form_input_disabled"
+			}
+			if finding.Role == "button" {
+				return "critical", "primary_action_missing"
+			}
+		}
+		return "warning", "content_changed"
+	case "text_changed":
+		if finding.Role == "textbox" || finding.Role == "combobox" {
+			return "warning", "form_input_changed"
+		}
+		if finding.Role == "link" {
+			return "warning", "navigation_changed"
+		}
+		return "warning", "content_changed"
+	default:
+		return "info", "content_changed"
+	}
+}
+
 func printCompareReport(w io.Writer, report compareReport) {
 	fmt.Fprintf(w, "old: %s", firstNonEmpty(report.Old.URL, report.Old.SessionID))
 	if report.Old.Title != "" {
@@ -683,6 +856,9 @@ func printCompareReport(w io.Writer, report compareReport) {
 		fmt.Fprintln(w, "no significant differences")
 		return
 	}
+	fmt.Fprintf(w, "critical: %d\n", report.Summary.Critical)
+	fmt.Fprintf(w, "warning: %d\n", report.Summary.Warning)
+	fmt.Fprintf(w, "info: %d\n", report.Summary.Info)
 
 	if report.Summary.TitleChanged > 0 {
 		fmt.Fprintf(w, "title_changed: %d\n", report.Summary.TitleChanged)
@@ -707,17 +883,17 @@ func printCompareReport(w io.Writer, report compareReport) {
 	for _, finding := range report.Findings {
 		switch finding.Kind {
 		case "title_changed":
-			fmt.Fprintf(w, "[title_changed] %q -> %q\n", finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [title_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Old, finding.New)
 		case "page_text_changed":
-			fmt.Fprintf(w, "[page_text_changed] %q -> %q\n", finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [page_text_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Old, finding.New)
 		case "missing_node":
-			fmt.Fprintf(w, "[missing_node] %s %q\n", finding.Role, finding.Label)
+			fmt.Fprintf(w, "[%s] [missing_node] %s %s %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label)
 		case "new_node":
-			fmt.Fprintf(w, "[new_node] %s %q\n", finding.Role, finding.Label)
+			fmt.Fprintf(w, "[%s] [new_node] %s %s %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label)
 		case "text_changed":
-			fmt.Fprintf(w, "[text_changed] %s %q %s: %q -> %q\n", finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [text_changed] %s %s %q %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		case "state_changed":
-			fmt.Fprintf(w, "[state_changed] %s %q: %s -> %s\n", finding.Role, finding.Label, finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q: %s -> %s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
 		}
 	}
 }
