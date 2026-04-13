@@ -89,6 +89,43 @@ Use `--ignore-selector` to drop nodes from comparison and `--mask-selector` to k
 Rules support `@eN`, `field=value`, and simple AND conditions such as `role=textbox&name=Email`.
 For multi-page audits, put URL or session pairs into a manifest JSON file and run `compare --manifest`.
 
+Use this manifest shape for multi-page compare:
+
+```json
+{
+  "defaults": {
+    "wait_selector": ".ready",
+    "wait_timeout": 10000,
+    "ignore_text_regex": ["20\\d\\d-\\d\\d-\\d\\d"],
+    "ignore_selector": ["role=link&text=Legacy"],
+    "mask_selector": ["role=textbox&name=Email"]
+  },
+  "pages": [
+    {
+      "name": "orders-url",
+      "old_url": "https://old.example.com/orders",
+      "new_url": "https://new.example.com/orders"
+    },
+    {
+      "name": "orders-session",
+      "old_session": "old",
+      "new_session": "new",
+      "ignore_selector": ["role=link"]
+    }
+  ]
+}
+```
+
+Manifest rules:
+
+- `pages` must contain at least one entry
+- each page must provide either `old_url/new_url` or `old_session/new_session`
+- `wait_selector` and `wait_timeout` override defaults per page
+- `ignore_text_regex`, `ignore_selector`, and `mask_selector` are appended to defaults per page
+- `--continue-on-error` keeps processing later pages after one page fails
+- `--limit <n>` only runs the first `n` pages
+- `screenshot` and `full` are not implemented yet
+
 When `state` gets too large, filter the tree before reading it.
 Start with `--role`, `--name`, `--text`, `--testid`, `--href`, and `--limit`.
 
