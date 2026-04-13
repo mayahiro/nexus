@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -678,6 +680,102 @@ func TestCompare(t *testing.T) {
 	}
 	if report.Old.SessionID != "old" || report.New.SessionID != "new" {
 		t.Fatalf("unexpected report sessions: %+v", report)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareURLs(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalManager := newBrowserManager
+	originalSuffix := newCompareSessionSuffix
+	defer func() {
+		newBrowserManager = originalManager
+		newCompareSessionSuffix = originalSuffix
+	}()
+
+	newBrowserManager = func(config.Paths) browserManager {
+		return fakeBrowserManager{}
+	}
+	newCompareSessionSuffix = func() string {
+		return "same"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/dashboard": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders stable",
+			},
+			"https://new.example.test/dashboard": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Orders v2",
+				Text:        "Orders stable",
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"https://old.example.test/dashboard",
+		"https://new.example.test/dashboard",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare url exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare url json: %v\n%s", err, stdout.String())
+	}
+	if report.Old.URL != "https://old.example.test/dashboard" || report.New.URL != "https://new.example.test/dashboard" {
+		t.Fatalf("unexpected compare url report: %+v", report)
+	}
+	if report.Summary.TitleChanged != 1 {
+		t.Fatalf("unexpected compare url summary: %+v", report.Summary)
+	}
+	if len(handler.attachIDs) != 2 {
+		t.Fatalf("unexpected attach count: %#v", handler.attachIDs)
+	}
+	if handler.attachIDs[0] == handler.attachIDs[1] {
+		t.Fatalf("compare url used duplicate temp session ids: %#v", handler.attachIDs)
 	}
 
 	cancel()
@@ -1799,6 +1897,13 @@ type autoStartLightpandaBackend struct{}
 
 type evalRPCHandler struct{}
 type compareRPCHandler struct{}
+type compareURLRPCHandler struct {
+	mu           sync.Mutex
+	attachIDs    []string
+	sessionURLs  map[string]string
+	observations map[string]api.Observation
+	observeCount map[string]int
+}
 type clickRPCHandler struct{}
 type mouseRPCHandler struct{}
 type typeRPCHandler struct{}
@@ -2047,6 +2152,86 @@ func (compareRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest
 			OK:      true,
 			Changed: false,
 			Message: "waited",
+		},
+	}, nil
+}
+
+func (h *compareURLRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
+	return api.PingResponse{}, nil
+}
+
+func (h *compareURLRPCHandler) AttachSession(_ context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	for _, existing := range h.attachIDs {
+		if existing == req.SessionID {
+			return api.AttachSessionResponse{}, errors.New("duplicate session id")
+		}
+	}
+
+	h.attachIDs = append(h.attachIDs, req.SessionID)
+	if h.sessionURLs == nil {
+		h.sessionURLs = map[string]string{}
+	}
+	h.sessionURLs[req.SessionID] = req.Options["initial_url"]
+
+	return api.AttachSessionResponse{
+		Session: api.Session{
+			ID:         req.SessionID,
+			TargetType: req.TargetType,
+			TargetRef:  req.TargetRef,
+			Backend:    req.Backend,
+			Options:    req.Options,
+		},
+	}, nil
+}
+
+func (h *compareURLRPCHandler) ListSessions(context.Context, api.ListSessionsRequest) (api.ListSessionsResponse, error) {
+	return api.ListSessionsResponse{}, nil
+}
+
+func (h *compareURLRPCHandler) DetachSession(context.Context, api.DetachSessionRequest) (api.DetachSessionResponse, error) {
+	return api.DetachSessionResponse{}, nil
+}
+
+func (h *compareURLRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api.StopDaemonResponse, error) {
+	return api.StopDaemonResponse{Stopped: true}, nil
+}
+
+func (h *compareURLRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	url := h.sessionURLs[req.SessionID]
+	observation, ok := h.observations[url]
+	if !ok {
+		return api.ObserveSessionResponse{}, errors.New("unknown session")
+	}
+	if h.observeCount == nil {
+		h.observeCount = map[string]int{}
+	}
+	h.observeCount[req.SessionID]++
+	if h.observeCount[req.SessionID] == 1 {
+		return api.ObserveSessionResponse{
+			Observation: api.Observation{
+				SessionID:   req.SessionID,
+				URLOrScreen: "about:blank",
+			},
+		}, nil
+	}
+	observation.SessionID = req.SessionID
+	return api.ObserveSessionResponse{Observation: observation}, nil
+}
+
+func (h *compareURLRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	if req.Action.Kind != "wait" {
+		return api.ActSessionResponse{}, nil
+	}
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK:      true,
+			Changed: false,
 		},
 	}, nil
 }

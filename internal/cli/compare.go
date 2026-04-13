@@ -18,6 +18,10 @@ import (
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
+var newCompareSessionSuffix = func() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
 type compareStringValues []string
 
 func (v *compareStringValues) String() string {
@@ -95,6 +99,8 @@ type preparedCompareSession struct {
 	Detach    bool
 }
 
+const compareURLReadyTimeout = 10 * time.Second
+
 func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpArgs(args) {
 		printCompareHelp(stdout)
@@ -102,6 +108,12 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+
+	positional := make([]string, 0, 2)
+	for len(args) > 0 && len(positional) < 2 && !strings.HasPrefix(args[0], "-") {
+		positional = append(positional, args[0])
+		args = args[1:]
+	}
 
 	oldSession := fs.String("old-session", "", "old session id")
 	newSession := fs.String("new-session", "", "new session id")
@@ -120,7 +132,10 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	if fs.NArg() == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
+	if len(positional) == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
+		*oldURL = positional[0]
+		*newURL = positional[1]
+	} else if fs.NArg() == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
 		*oldURL = fs.Arg(0)
 		*newURL = fs.Arg(1)
 	} else if fs.NArg() != 0 {
@@ -172,6 +187,22 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 	defer cleanupCompareSession(context.Background(), client, oldPrepared)
 	defer cleanupCompareSession(context.Background(), client, newPrepared)
+
+	for _, endpoint := range []struct {
+		prepared preparedCompareSession
+		source   compareEndpoint
+	}{
+		{prepared: oldPrepared, source: oldEndpoint},
+		{prepared: newPrepared, source: newEndpoint},
+	} {
+		if endpoint.source.URL == "" {
+			continue
+		}
+		if err := waitForCompareURLReady(ctx, client, endpoint.prepared.SessionID); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 
 	if strings.TrimSpace(*waitSelector) != "" {
 		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
@@ -250,11 +281,11 @@ func prepareCompareSessions(ctx context.Context, client *rpc.Client, paths confi
 		return preparedCompareSession{}, preparedCompareSession{}, err
 	}
 
-	oldPrepared, err := prepareCompareSession(ctx, client, oldEndpoint, backend, resolvedTargetRef, width, height)
+	oldPrepared, err := prepareCompareSession(ctx, client, "old", oldEndpoint, backend, resolvedTargetRef, width, height)
 	if err != nil {
 		return preparedCompareSession{}, preparedCompareSession{}, err
 	}
-	newPrepared, err := prepareCompareSession(ctx, client, newEndpoint, backend, resolvedTargetRef, width, height)
+	newPrepared, err := prepareCompareSession(ctx, client, "new", newEndpoint, backend, resolvedTargetRef, width, height)
 	if err != nil {
 		cleanupCompareSession(context.Background(), client, oldPrepared)
 		return preparedCompareSession{}, preparedCompareSession{}, err
@@ -263,12 +294,12 @@ func prepareCompareSessions(ctx context.Context, client *rpc.Client, paths confi
 	return oldPrepared, newPrepared, nil
 }
 
-func prepareCompareSession(ctx context.Context, client *rpc.Client, endpoint compareEndpoint, backend string, targetRef string, width int, height int) (preparedCompareSession, error) {
+func prepareCompareSession(ctx context.Context, client *rpc.Client, label string, endpoint compareEndpoint, backend string, targetRef string, width int, height int) (preparedCompareSession, error) {
 	if endpoint.SessionID != "" {
 		return preparedCompareSession{SessionID: endpoint.SessionID}, nil
 	}
 
-	sessionID := fmt.Sprintf("compare-%d", time.Now().UnixNano())
+	sessionID := fmt.Sprintf("compare-%s-%s", label, newCompareSessionSuffix())
 	res, err := client.AttachSession(ctx, api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  sessionID,
@@ -327,6 +358,28 @@ func observeCompareSession(ctx context.Context, client *rpc.Client, sessionID st
 		return api.Observation{}, err
 	}
 	return res.Observation, nil
+}
+
+func waitForCompareURLReady(ctx context.Context, client *rpc.Client, sessionID string) error {
+	waitCtx, cancel := context.WithTimeout(ctx, compareURLReadyTimeout)
+	defer cancel()
+
+	for {
+		observation, err := observeCompareSession(waitCtx, client, sessionID)
+		if err != nil {
+			return err
+		}
+		currentURL := strings.TrimSpace(observation.URLOrScreen)
+		if currentURL != "" && currentURL != "about:blank" {
+			return nil
+		}
+
+		select {
+		case <-waitCtx.Done():
+			return fmt.Errorf("session %s stayed on about:blank", sessionID)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }
 
 func buildCompareSnapshot(observation api.Observation, ignore []*regexp.Regexp) compareSnapshot {
