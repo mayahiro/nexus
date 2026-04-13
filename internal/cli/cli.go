@@ -66,6 +66,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runBrowser(ctx, args[1:], stdout, stderr)
 	case "click":
 		return runClick(ctx, args[1:], stdout, stderr)
+	case "compare":
+		return runCompare(ctx, args[1:], stdout, stderr)
 	case "close":
 		return runClose(ctx, args[1:], stdout, stderr)
 	case "dblclick":
@@ -2850,6 +2852,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  batch")
 	fmt.Fprintln(w, "  browser")
 	fmt.Fprintln(w, "  click")
+	fmt.Fprintln(w, "  compare")
 	fmt.Fprintln(w, "  close")
 	fmt.Fprintln(w, "  help")
 	fmt.Fprintln(w, "  eval")
@@ -2894,6 +2897,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printBrowserHelp(w)
 	case "click":
 		printClickHelp(w)
+	case "compare":
+		printCompareHelp(w)
 	case "close":
 		printCloseHelp(w)
 	case "dblclick":
@@ -2975,6 +2980,11 @@ func printBrowserHelp(w io.Writer) {
 func printClickHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl click <index|@eN> [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl click <x> <y> [--session <id>] [--json]")
+}
+
+func printCompareHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--wait-selector <css>] [--wait-timeout <ms>] [--ignore-text-regex <regex>]... [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--ignore-text-regex <regex>]... [--json]")
 }
 
 func printCloseHelp(w io.Writer) {

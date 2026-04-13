@@ -71,12 +71,16 @@ nxctl wait selector ".ready"
 nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
 nxctl viewport 1280x720
 nxctl close
 ```
+
+When you need to compare migrated screens, use `compare` with two URLs or two existing sessions.
+Start with `--wait-selector` on a stable ready marker and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
 
 ## 6. Viewport
 

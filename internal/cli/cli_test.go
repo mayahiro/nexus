@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"image"
 	"image/color"
 	"image/png"
@@ -111,6 +112,14 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `usage: nxctl batch --cmd "open https://example.com"`) {
 		t.Fatalf("unexpected help batch output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "compare"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help compare exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `usage: nxctl compare <old-url> <new-url>`) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -599,6 +608,76 @@ func TestEval(t *testing.T) {
 	}
 	if stdout.String() != "\n" {
 		t.Fatalf("unexpected eval empty-string output: %q", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompare(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, compareRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--ignore-text-regex", `20\d\d-\d\d-\d\d`,
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare json: %v\n%s", err, stdout.String())
+	}
+
+	if report.Summary.Same {
+		t.Fatalf("expected differences, got same report: %s", stdout.String())
+	}
+	if report.Summary.TotalFindings != 6 {
+		t.Fatalf("unexpected finding count: %+v", report.Summary)
+	}
+	if report.Summary.TitleChanged != 1 || report.Summary.TextChanged != 2 || report.Summary.MissingNodes != 1 || report.Summary.NewNodes != 1 || report.Summary.StateChanged != 1 {
+		t.Fatalf("unexpected summary: %+v", report.Summary)
+	}
+	if report.Summary.PageTextChanged != 0 {
+		t.Fatalf("unexpected page_text_changed summary: %+v", report.Summary)
+	}
+	if report.Old.SessionID != "old" || report.New.SessionID != "new" {
+		t.Fatalf("unexpected report sessions: %+v", report)
 	}
 
 	cancel()
@@ -1719,6 +1798,7 @@ type fakeLightpandaBackend struct{}
 type autoStartLightpandaBackend struct{}
 
 type evalRPCHandler struct{}
+type compareRPCHandler struct{}
 type clickRPCHandler struct{}
 type mouseRPCHandler struct{}
 type typeRPCHandler struct{}
@@ -1899,6 +1979,76 @@ func (evalRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 	default:
 		return api.ActSessionResponse{}, nil
 	}
+}
+
+func (compareRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
+	return api.PingResponse{}, nil
+}
+
+func (compareRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
+	return api.AttachSessionResponse{}, nil
+}
+
+func (compareRPCHandler) ListSessions(context.Context, api.ListSessionsRequest) (api.ListSessionsResponse, error) {
+	return api.ListSessionsResponse{}, nil
+}
+
+func (compareRPCHandler) DetachSession(context.Context, api.DetachSessionRequest) (api.DetachSessionResponse, error) {
+	return api.DetachSessionResponse{}, nil
+}
+
+func (compareRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api.StopDaemonResponse, error) {
+	return api.StopDaemonResponse{Stopped: true}, nil
+}
+
+func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	switch req.SessionID {
+	case "old":
+		return api.ObserveSessionResponse{
+			Observation: api.Observation{
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders 2026-04-13",
+				Tree: []api.Node{
+					{ID: 1, Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
+					{ID: 3, Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/legacy"}},
+					{ID: 4, Fingerprint: "status", Role: "status", Text: "Ready 2026-04-13", Visible: true, Enabled: true},
+				},
+			},
+		}, nil
+	case "new":
+		return api.ObserveSessionResponse{
+			Observation: api.Observation{
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Orders v2",
+				Text:        "Orders 2026-04-14",
+				Tree: []api.Node{
+					{ID: 1, Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
+					{ID: 3, Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/next"}},
+					{ID: 4, Fingerprint: "status", Role: "status", Text: "Ready 2026-04-14", Visible: true, Enabled: true},
+				},
+			},
+		}, nil
+	default:
+		return api.ObserveSessionResponse{}, nil
+	}
+}
+
+func (compareRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	if req.Action.Kind != "wait" {
+		return api.ActSessionResponse{}, nil
+	}
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK:      true,
+			Changed: false,
+			Message: "waited",
+		},
+	}, nil
 }
 
 func (clickRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {

@@ -107,6 +107,7 @@ nxctl wait selector ".ready"
 nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -120,6 +121,7 @@ Available command groups include:
 - navigation: `open`, `back`, `scroll`
 - inspection: `state`, `observe`, `get`, `screenshot`
 - interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `input`, `keys`, `select`, `upload`, `eval`, `find`
+- migration diff: `compare`
 - automation flow: `batch`
 - session control: `sessions`, `detach`, `close`
 
