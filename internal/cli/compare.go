@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
@@ -106,6 +107,10 @@ type preparedCompareSession struct {
 }
 
 type compareSelectorRule struct {
+	All []compareSelectorTerm
+}
+
+type compareSelectorTerm struct {
 	Kind  string
 	Value string
 }
@@ -142,6 +147,8 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
+	outputJSON := fs.String("output-json", "", "write compare report json to file")
+	outputMD := fs.String("output-md", "", "write compare report markdown to file")
 	var ignoreRegex compareStringValues
 	var ignoreSelector compareStringValues
 	var maskSelector compareStringValues
@@ -268,6 +275,19 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		}),
 	)
 
+	if strings.TrimSpace(*outputJSON) != "" {
+		if err := writeCompareJSON(*outputJSON, report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if strings.TrimSpace(*outputMD) != "" {
+		if err := writeCompareMarkdown(*outputMD, report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -280,6 +300,29 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 
 	printCompareReport(stdout, report)
 	return 0
+}
+
+func writeCompareJSON(path string, report compareReport) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
+}
+
+func writeCompareMarkdown(path string, report compareReport) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	printCompareMarkdown(file, report)
+	return nil
 }
 
 func validateCompareEndpoint(label string, endpoint compareEndpoint) error {
@@ -323,22 +366,36 @@ func parseCompareSelectorRule(value string) (compareSelectorRule, error) {
 		return compareSelectorRule{}, errors.New("compare selector must not be empty")
 	}
 	if strings.HasPrefix(trimmed, "@e") {
-		return compareSelectorRule{Kind: "ref", Value: trimmed}, nil
+		return compareSelectorRule{All: []compareSelectorTerm{{Kind: "ref", Value: trimmed}}}, nil
 	}
-	kind, raw, ok := strings.Cut(trimmed, "=")
+
+	parts := strings.Split(trimmed, "&")
+	terms := make([]compareSelectorTerm, 0, len(parts))
+	for _, part := range parts {
+		term, err := parseCompareSelectorTerm(part, value)
+		if err != nil {
+			return compareSelectorRule{}, err
+		}
+		terms = append(terms, term)
+	}
+	return compareSelectorRule{All: terms}, nil
+}
+
+func parseCompareSelectorTerm(value string, rawInput string) (compareSelectorTerm, error) {
+	kind, raw, ok := strings.Cut(strings.TrimSpace(value), "=")
 	if !ok {
-		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: use @eN or role/name/text/testid/href=<value>", value)
+		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: use @eN or role/name/text/testid/href=<value>[&...]", rawInput)
 	}
 	kind = strings.TrimSpace(kind)
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: value must not be empty", value)
+		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: value must not be empty", rawInput)
 	}
 	switch kind {
 	case "role", "name", "text", "testid", "href":
-		return compareSelectorRule{Kind: kind, Value: raw}, nil
+		return compareSelectorTerm{Kind: kind, Value: raw}, nil
 	default:
-		return compareSelectorRule{}, fmt.Errorf("invalid compare selector %q: supported kinds are role, name, text, testid, href, or @eN", value)
+		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: supported kinds are role, name, text, testid, href, or @eN", rawInput)
 	}
 }
 
@@ -530,31 +587,40 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 
 func matchesCompareSelectorRule(node api.Node, rules []compareSelectorRule) bool {
 	for _, rule := range rules {
-		switch rule.Kind {
-		case "ref":
-			if strings.TrimSpace(node.Ref) == rule.Value {
-				return true
+		matched := true
+		for _, term := range rule.All {
+			switch term.Kind {
+			case "ref":
+				if strings.TrimSpace(node.Ref) != term.Value {
+					matched = false
+				}
+			case "role":
+				if normalizeFindValue(node.Role) != normalizeFindValue(term.Value) {
+					matched = false
+				}
+			case "name":
+				if !compareSelectorContains(node.Name, term.Value) {
+					matched = false
+				}
+			case "text":
+				if !compareSelectorContains(node.Text, term.Value) {
+					matched = false
+				}
+			case "testid":
+				if !compareSelectorContains(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), term.Value) {
+					matched = false
+				}
+			case "href":
+				if !compareSelectorContains(node.Attrs["href"], term.Value) {
+					matched = false
+				}
 			}
-		case "role":
-			if normalizeFindValue(node.Role) == normalizeFindValue(rule.Value) {
-				return true
+			if !matched {
+				break
 			}
-		case "name":
-			if compareSelectorContains(node.Name, rule.Value) {
-				return true
-			}
-		case "text":
-			if compareSelectorContains(node.Text, rule.Value) {
-				return true
-			}
-		case "testid":
-			if compareSelectorContains(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), rule.Value) {
-				return true
-			}
-		case "href":
-			if compareSelectorContains(node.Attrs["href"], rule.Value) {
-				return true
-			}
+		}
+		if matched {
+			return true
 		}
 	}
 	return false
@@ -894,6 +960,46 @@ func printCompareReport(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "[%s] [text_changed] %s %s %q %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		case "state_changed":
 			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q: %s -> %s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+		}
+	}
+}
+
+func printCompareMarkdown(w io.Writer, report compareReport) {
+	fmt.Fprintln(w, "# Compare Report")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(report.Old.URL, report.Old.SessionID))
+	fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(report.New.URL, report.New.SessionID))
+	if report.Old.Title != "" || report.New.Title != "" {
+		fmt.Fprintf(w, "- Titles: `%s` -> `%s`\n", report.Old.Title, report.New.Title)
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Summary")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- Total findings: %d\n", report.Summary.TotalFindings)
+	fmt.Fprintf(w, "- Critical: %d\n", report.Summary.Critical)
+	fmt.Fprintf(w, "- Warning: %d\n", report.Summary.Warning)
+	fmt.Fprintf(w, "- Info: %d\n", report.Summary.Info)
+	if report.Summary.Same {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "No significant differences.")
+		return
+	}
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "## Findings")
+	fmt.Fprintln(w)
+	for _, finding := range report.Findings {
+		switch finding.Kind {
+		case "title_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+		case "page_text_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+		case "missing_node", "new_node":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label)
+		case "text_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
+		case "state_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
 		}
 	}
 }

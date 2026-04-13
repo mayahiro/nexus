@@ -961,8 +961,8 @@ func TestCompareIgnoreAndMaskSelectors(t *testing.T) {
 		"compare",
 		"--old-session", "old",
 		"--new-session", "new",
-		"--ignore-selector", "@e3",
-		"--mask-selector", "@e2",
+		"--ignore-selector", "role=link",
+		"--mask-selector", "role=textbox&name=Email",
 		"--ignore-text-regex", `20\d\d-\d\d-\d\d`,
 		"--json",
 	}
@@ -988,6 +988,83 @@ func TestCompareIgnoreAndMaskSelectors(t *testing.T) {
 		if finding.Field == "value" {
 			t.Fatalf("masked value should not appear in findings: %+v", finding)
 		}
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareReportOutputs(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, compareRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	jsonPath := filepath.Join(t.TempDir(), "compare.json")
+	mdPath := filepath.Join(t.TempDir(), "compare.md")
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--ignore-text-regex", `20\d\d-\d\d-\d\d`,
+		"--output-json", jsonPath,
+		"--output-md", mdPath,
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare report exit code: %d\n%s", code, stdout.String())
+	}
+
+	jsonBytes, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report compareReport
+	if err := json.Unmarshal(jsonBytes, &report); err != nil {
+		t.Fatalf("unexpected compare output json: %v\n%s", err, string(jsonBytes))
+	}
+	if report.Summary.TotalFindings != 6 {
+		t.Fatalf("unexpected compare output summary: %+v", report.Summary)
+	}
+
+	mdBytes, err := os.ReadFile(mdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := string(mdBytes)
+	if !strings.Contains(md, "# Compare Report") {
+		t.Fatalf("unexpected markdown output: %s", md)
+	}
+	if !strings.Contains(md, "## Findings") {
+		t.Fatalf("unexpected markdown output: %s", md)
 	}
 
 	cancel()
