@@ -240,6 +240,76 @@ func TestDoctorStartsDaemon(t *testing.T) {
 	cancel()
 }
 
+func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return autoStartLightpandaBackend{}
+	})
+	defer restoreBackend()
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalStart := startDaemonProcess
+	originalManager := newBrowserManager
+	defer func() {
+		startDaemonProcess = originalStart
+		newBrowserManager = originalManager
+	}()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	startDaemonProcess = func(config.Paths) error {
+		go func() {
+			done <- daemon.Run(runCtx, paths, daemon.RunOptions{})
+		}()
+		return nil
+	}
+	newBrowserManager = func(config.Paths) browserManager {
+		return fakeBrowserManager{}
+	}
+
+	var openOut bytes.Buffer
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda", "--session", "auto"}, &openOut, &openOut); code != 0 {
+		t.Fatalf("unexpected open exit code: %d\n%s", code, openOut.String())
+	}
+	if !strings.Contains(openOut.String(), "attached browser auto (lightpanda) /tmp/lightpanda") {
+		t.Fatalf("unexpected open output: %s", openOut.String())
+	}
+
+	var sessionsOut bytes.Buffer
+	if code := Run(context.Background(), []string{"sessions", "--json"}, &sessionsOut, &sessionsOut); code != 0 {
+		t.Fatalf("unexpected sessions exit code: %d\n%s", code, sessionsOut.String())
+	}
+	if !strings.Contains(sessionsOut.String(), `"id": "auto"`) {
+		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
+	}
+
+	var evalOut bytes.Buffer
+	if code := Run(context.Background(), []string{"eval", "document.title", "--session", "auto", "--json"}, &evalOut, &evalOut); code != 0 {
+		t.Fatalf("unexpected eval exit code: %d\n%s", code, evalOut.String())
+	}
+	if strings.TrimSpace(evalOut.String()) != `"Example Title"` {
+		t.Fatalf("unexpected eval output: %s", evalOut.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
+
 func TestAttachSessionsDetach(t *testing.T) {
 	configureXDGTestEnv(t)
 	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
@@ -492,11 +562,43 @@ func TestEval(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"eval", "document.title", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected eval string --json exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != `"Example Title"` {
+		t.Fatalf("unexpected eval string --json output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"eval", "[1, 2, 3]", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected eval --json exit code: %d\n%s", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "[\n  1,\n  2,\n  3\n]") {
 		t.Fatalf("unexpected eval --json output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"eval", "false"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected eval false exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "false" {
+		t.Fatalf("unexpected eval false output: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"eval", "0"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected eval zero exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "0" {
+		t.Fatalf("unexpected eval zero output: %q", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"eval", `""`}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected eval empty-string exit code: %d\n%s", code, stdout.String())
+	}
+	if stdout.String() != "\n" {
+		t.Fatalf("unexpected eval empty-string output: %q", stdout.String())
 	}
 
 	cancel()
@@ -1614,6 +1716,7 @@ func testPNGBase64() string {
 
 type fakeBrowserManager struct{}
 type fakeLightpandaBackend struct{}
+type autoStartLightpandaBackend struct{}
 
 type evalRPCHandler struct{}
 type clickRPCHandler struct{}
@@ -1681,6 +1784,52 @@ func (fakeLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEnt
 	return nil, nil
 }
 
+func (autoStartLightpandaBackend) Name() spec.BackendName {
+	return spec.BackendLightpanda
+}
+
+func (autoStartLightpandaBackend) Capabilities() spec.Capabilities {
+	return spec.Capabilities{Observe: true, Act: true}
+}
+
+func (autoStartLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+	return nil
+}
+
+func (autoStartLightpandaBackend) Detach(context.Context) error {
+	return nil
+}
+
+func (autoStartLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+	return &api.Observation{
+		URLOrScreen: "https://example.com",
+		Title:       "Example Title",
+		Text:        "Example text",
+	}, nil
+}
+
+func (autoStartLightpandaBackend) Act(_ context.Context, action api.Action) (*api.ActionResult, error) {
+	switch action.Kind {
+	case "eval":
+		if action.Text == "document.title" {
+			return &api.ActionResult{OK: true, Value: "Example Title"}, nil
+		}
+	case "get":
+		if action.Args["target"] == "title" {
+			return &api.ActionResult{OK: true, Value: "Example Title"}, nil
+		}
+	}
+	return &api.ActionResult{OK: true}, nil
+}
+
+func (autoStartLightpandaBackend) Screenshot(context.Context, string) error {
+	return nil
+}
+
+func (autoStartLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
+	return nil, nil
+}
+
 func (evalRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
 	return api.PingResponse{}, nil
 }
@@ -1721,6 +1870,30 @@ func (evalRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 				OK:      true,
 				Changed: false,
 				Value:   []interface{}{1, 2, 3},
+			},
+		}, nil
+	case "false":
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK:      true,
+				Changed: false,
+				Value:   false,
+			},
+		}, nil
+	case "0":
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK:      true,
+				Changed: false,
+				Value:   0,
+			},
+		}, nil
+	case `""`:
+		return api.ActSessionResponse{
+			Result: api.ActionResult{
+				OK:      true,
+				Changed: false,
+				Value:   "",
 			},
 		}, nil
 	default:

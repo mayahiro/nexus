@@ -60,11 +60,23 @@ func (testHandler) ObserveSession(_ context.Context, req api.ObserveSessionReque
 }
 
 func (testHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	var value interface{}
+	switch req.Action.Text {
+	case "false":
+		value = false
+	case "0":
+		value = 0
+	case `""`:
+		value = ""
+	default:
+		value = req.Action.Text
+	}
+
 	return api.ActSessionResponse{
 		Result: api.ActionResult{
 			OK:      true,
 			Changed: false,
-			Value:   req.Action.Text,
+			Value:   value,
 		},
 	}, nil
 }
@@ -191,6 +203,48 @@ func TestSessionRPC(t *testing.T) {
 	}
 	if acted.Result.Value != "document.title" {
 		t.Fatalf("unexpected act result: %+v", acted)
+	}
+
+	acted, err = client.ActSession(context.Background(), api.ActSessionRequest{
+		SessionID: "web1",
+		Action: api.Action{
+			Kind: "eval",
+			Text: "false",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := acted.Result.Value.(bool); !ok || value {
+		t.Fatalf("unexpected false act result: %+v", acted)
+	}
+
+	acted, err = client.ActSession(context.Background(), api.ActSessionRequest{
+		SessionID: "web1",
+		Action: api.Action{
+			Kind: "eval",
+			Text: "0",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := acted.Result.Value.(float64); !ok || value != 0 {
+		t.Fatalf("unexpected zero act result: %+v", acted)
+	}
+
+	acted, err = client.ActSession(context.Background(), api.ActSessionRequest{
+		SessionID: "web1",
+		Action: api.Action{
+			Kind: "eval",
+			Text: `""`,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := acted.Result.Value.(string); !ok || value != "" {
+		t.Fatalf("unexpected empty-string act result: %+v", acted)
 	}
 
 	stopped, err := client.StopDaemon(context.Background())

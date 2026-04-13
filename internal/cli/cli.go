@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/image/font"
@@ -2797,6 +2798,8 @@ func startDaemon(paths config.Paths) error {
 	cmd := exec.Command(executable)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return err

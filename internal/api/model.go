@@ -134,7 +134,7 @@ type ActionResult struct {
 	Message    string            `json:"message,omitempty"`
 	Changed    bool              `json:"changed"`
 	Screenshot string            `json:"screenshot,omitempty"`
-	Value      interface{}       `json:"value,omitempty"`
+	Value      interface{}       `json:"value"`
 	Meta       map[string]string `json:"meta,omitempty"`
 }
 

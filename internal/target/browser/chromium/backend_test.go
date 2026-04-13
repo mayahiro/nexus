@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -127,6 +129,23 @@ func TestCurrentPageTarget(t *testing.T) {
 
 	if target.ID != "page1" {
 		t.Fatalf("unexpected target: %+v", target)
+	}
+}
+
+func TestPreserveTarget(t *testing.T) {
+	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), chromedp.ExecPath("/bin/false"))
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx)
+
+	chromedpCtx := chromedp.FromContext(targetCtx)
+	chromedpCtx.Target = &chromedp.Target{
+		SessionID: target.SessionID("session-1"),
+		TargetID:  target.ID("page-1"),
+	}
+
+	closeTargetContext(targetCtx, targetCancel, allocCancel)
+
+	if chromedpCtx.Target.SessionID != "" || chromedpCtx.Target.TargetID != "" {
+		t.Fatalf("expected target to be preserved: %+v", chromedpCtx.Target)
 	}
 }
 
@@ -538,6 +557,26 @@ func TestChromiumE2E(t *testing.T) {
 	}
 	if !strings.Contains(obs.Text, "Submit") {
 		t.Fatalf("unexpected observation text: %s", obs.Text)
+	}
+
+	evalRes, err := backend.Act(context.Background(), api.Action{Kind: "eval", Text: `document.getElementById("submit").textContent.trim()`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := evalRes.Value.(string); !ok || value != "Submit" {
+		t.Fatalf("unexpected eval value: %#v", evalRes.Value)
+	}
+
+	evalRes, err = backend.Act(context.Background(), api.Action{Kind: "eval", Text: `false`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := evalRes.Value.(bool); !ok || value {
+		t.Fatalf("unexpected eval false value: %#v", evalRes.Value)
+	}
+
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "function", "value": `document.getElementById("submit") !== null`, "timeout_ms": "5000"}}); err != nil {
+		t.Fatal(err)
 	}
 
 	nameID := requireNodeByAttr(t, obs.Tree, "id", "name")

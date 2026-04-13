@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
@@ -994,71 +995,113 @@ type pageTargetInfo struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions, allocatorOptions ...chromedp.RemoteAllocatorOption) (*api.Observation, error) {
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+func withTargetContext[T any](ctx context.Context, devtoolsURL string, targetID string, fn func(context.Context) (T, error), allocatorOptions ...chromedp.RemoteAllocatorOption) (T, error) {
+	var zero T
 
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL, allocatorOptions...)
-	defer allocCancel()
 
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var currentURL string
-	var title string
-	var text string
-	var treeJSON string
-	var screenshot []byte
-	actions := []chromedp.Action{
-		chromedp.Location(&currentURL),
-		chromedp.Title(&title),
-	}
-	if opts.WithText {
-		actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
-	}
-	if opts.WithTree {
-		actions = append(actions, chromedp.Evaluate(observeTreeJS, &treeJSON))
-	}
-	if opts.WithScreenshot {
-		if opts.FullScreenshot {
-			actions = append(actions, chromedp.FullScreenshot(&screenshot, 100))
-		} else {
-			actions = append(actions, chromedp.CaptureScreenshot(&screenshot))
-		}
+	options := make([]chromedp.ContextOption, 0, 1)
+	if targetID != "" {
+		options = append(options, chromedp.WithTargetID(target.ID(targetID)))
 	}
 
-	if err := chromedp.Run(targetCtx, actions...); err != nil {
-		return nil, err
-	}
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx, options...)
+	defer closeTargetContext(targetCtx, targetCancel, allocCancel)
 
-	tree, err := parseTreeJSON(treeJSON)
+	result, err := fn(targetCtx)
 	if err != nil {
-		return nil, err
+		return zero, err
 	}
 
-	return &api.Observation{
-		URLOrScreen: currentURL,
-		Title:       title,
-		Text:        strings.TrimSpace(text),
-		Tree:        tree,
-		Screenshot:  base64.StdEncoding.EncodeToString(screenshot),
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+	return result, nil
+}
+
+func withPageTargetContext[T any](ctx context.Context, devtoolsURL string, fn func(context.Context, pageTargetInfo) (T, error), allocatorOptions ...chromedp.RemoteAllocatorOption) (T, error) {
+	var zero T
+
+	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
+	if err != nil {
+		return zero, err
+	}
+
+	return withTargetContext(ctx, devtoolsURL, targetInfo.ID, func(targetCtx context.Context) (T, error) {
+		return fn(targetCtx, targetInfo)
+	}, allocatorOptions...)
+}
+
+func closeTargetContext(targetCtx context.Context, targetCancel context.CancelFunc, allocCancel context.CancelFunc) {
+	preserveTarget(targetCtx)
+	targetCancel()
+	allocCancel()
+}
+
+func preserveTarget(targetCtx context.Context) {
+	chromedpCtx := chromedp.FromContext(targetCtx)
+	if chromedpCtx == nil || chromedpCtx.Target == nil {
+		return
+	}
+
+	chromedpCtx.Target.SessionID = ""
+	chromedpCtx.Target.TargetID = ""
+}
+
+func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
+	return p.WithAwaitPromise(true)
+}
+
+func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions, allocatorOptions ...chromedp.RemoteAllocatorOption) (*api.Observation, error) {
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.Observation, error) {
+		var currentURL string
+		var title string
+		var text string
+		var treeJSON string
+		var screenshot []byte
+		actions := []chromedp.Action{
+			chromedp.Location(&currentURL),
+			chromedp.Title(&title),
+		}
+		if opts.WithText {
+			actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
+		}
+		if opts.WithTree {
+			actions = append(actions, chromedp.Evaluate(observeTreeJS, &treeJSON))
+		}
+		if opts.WithScreenshot {
+			if opts.FullScreenshot {
+				actions = append(actions, chromedp.FullScreenshot(&screenshot, 100))
+			} else {
+				actions = append(actions, chromedp.CaptureScreenshot(&screenshot))
+			}
+		}
+
+		if err := chromedp.Run(targetCtx, actions...); err != nil {
+			return nil, err
+		}
+
+		tree, err := parseTreeJSON(treeJSON)
+		if err != nil {
+			return nil, err
+		}
+
+		return &api.Observation{
+			URLOrScreen: currentURL,
+			Title:       title,
+			Text:        strings.TrimSpace(text),
+			Tree:        tree,
+			Screenshot:  base64.StdEncoding.EncodeToString(screenshot),
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	}, allocatorOptions...)
 }
 
 func NavigateViaCDP(ctx context.Context, devtoolsURL string, navigateURL string, allocatorOptions ...chromedp.RemoteAllocatorOption) error {
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL, allocatorOptions...)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx)
-	defer targetCancel()
-
-	return chromedp.Run(targetCtx, chromedp.Navigate(navigateURL))
+	_, err := withTargetContext(ctx, devtoolsURL, "", func(targetCtx context.Context) (struct{}, error) {
+		return struct{}{}, chromedp.Run(targetCtx, chromedp.Navigate(navigateURL))
+	}, allocatorOptions...)
+	return err
 }
 
 func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions) (*api.Observation, error) {
@@ -1070,31 +1113,22 @@ func (b *Backend) evalViaCDP(ctx context.Context, devtoolsURL string, action api
 		return nil, errors.New("eval script is required")
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var value interface{}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(evalExpression(action.Text), &value, chromedp.EvalAsValue, awaitPromise)); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var value interface{}
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(evalExpression(action.Text), &value, chromedp.EvalAsValue)); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: false,
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: false,
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1111,92 +1145,74 @@ func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action
 		return nil, errors.New("viewport height must be a positive integer")
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		if err := chromedp.Run(targetCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	if err := chromedp.Run(targetCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: fmt.Sprintf("set viewport %dx%d", width, height),
-		Value: map[string]interface{}{
-			"width":  width,
-			"height": height,
-		},
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("set viewport %dx%d", width, height),
+			Value: map[string]interface{}{
+				"width":  width,
+				"height": height,
+			},
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) invokeViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var (
+			message string
+			value   map[string]interface{}
+		)
+		switch {
+		case action.NodeID != nil:
+			if *action.NodeID <= 0 {
+				return nil, errors.New("invoke node_id must be positive")
+			}
+			if err := chromedp.Run(targetCtx, chromedp.Evaluate(clickExpression(*action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
+				return nil, err
+			}
+			message = fmt.Sprintf("clicked %d", *action.NodeID)
+		case action.Args != nil:
+			x, err := strconv.Atoi(strings.TrimSpace(action.Args["x"]))
+			if err != nil || x < 0 {
+				return nil, errors.New("invoke x coordinate must be a non-negative integer")
+			}
+			y, err := strconv.Atoi(strings.TrimSpace(action.Args["y"]))
+			if err != nil || y < 0 {
+				return nil, errors.New("invoke y coordinate must be a non-negative integer")
+			}
+			if err := chromedp.Run(targetCtx, chromedp.MouseClickXY(float64(x), float64(y))); err != nil {
+				return nil, err
+			}
+			value = map[string]interface{}{
+				"x": x,
+				"y": y,
+			}
+			message = fmt.Sprintf("clicked %d %d", x, y)
+		default:
+			return nil, errors.New("invoke requires node_id or x y coordinates")
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var (
-		message string
-		value   map[string]interface{}
-	)
-	switch {
-	case action.NodeID != nil:
-		if *action.NodeID <= 0 {
-			return nil, errors.New("invoke node_id must be positive")
-		}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(clickExpression(*action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
-			return nil, err
-		}
-		message = fmt.Sprintf("clicked %d", *action.NodeID)
-	case action.Args != nil:
-		x, err := strconv.Atoi(strings.TrimSpace(action.Args["x"]))
-		if err != nil || x < 0 {
-			return nil, errors.New("invoke x coordinate must be a non-negative integer")
-		}
-		y, err := strconv.Atoi(strings.TrimSpace(action.Args["y"]))
-		if err != nil || y < 0 {
-			return nil, errors.New("invoke y coordinate must be a non-negative integer")
-		}
-		if err := chromedp.Run(targetCtx, chromedp.MouseClickXY(float64(x), float64(y))); err != nil {
-			return nil, err
-		}
-		value = map[string]interface{}{
-			"x": x,
-			"y": y,
-		}
-		message = fmt.Sprintf("clicked %d %d", x, y)
-	default:
-		return nil, errors.New("invoke requires node_id or x y coordinates")
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: message,
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: message,
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) mouseNodeViaCDP(ctx context.Context, devtoolsURL string, action api.Action, kind string) (*api.ActionResult, error) {
@@ -1204,58 +1220,49 @@ func (b *Backend) mouseNodeViaCDP(ctx context.Context, devtoolsURL string, actio
 		return nil, fmt.Errorf("%s requires a positive index", kind)
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var point nodePoint
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(nodePointExpression(*action.NodeID), &point, chromedp.EvalAsValue)); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
+		var (
+			actionErr error
+			message   string
+		)
+		switch kind {
+		case "hover":
+			actionErr = chromedp.Run(targetCtx, chromedp.MouseEvent(input.MouseMoved, point.X, point.Y))
+			message = fmt.Sprintf("hovered %d", *action.NodeID)
+		case "dblclick":
+			actionErr = chromedp.Run(targetCtx, chromedp.MouseClickXY(point.X, point.Y, chromedp.ClickCount(2)))
+			message = fmt.Sprintf("double-clicked %d", *action.NodeID)
+		case "rightclick":
+			actionErr = chromedp.Run(targetCtx, chromedp.MouseClickXY(point.X, point.Y, chromedp.ButtonType(input.Right)))
+			message = fmt.Sprintf("right-clicked %d", *action.NodeID)
+		default:
+			return nil, fmt.Errorf("unsupported mouse action: %s", kind)
+		}
+		if actionErr != nil {
+			return nil, actionErr
+		}
 
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var point nodePoint
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(nodePointExpression(*action.NodeID), &point, chromedp.EvalAsValue)); err != nil {
-		return nil, err
-	}
-
-	var (
-		actionErr error
-		message   string
-	)
-	switch kind {
-	case "hover":
-		actionErr = chromedp.Run(targetCtx, chromedp.MouseEvent(input.MouseMoved, point.X, point.Y))
-		message = fmt.Sprintf("hovered %d", *action.NodeID)
-	case "dblclick":
-		actionErr = chromedp.Run(targetCtx, chromedp.MouseClickXY(point.X, point.Y, chromedp.ClickCount(2)))
-		message = fmt.Sprintf("double-clicked %d", *action.NodeID)
-	case "rightclick":
-		actionErr = chromedp.Run(targetCtx, chromedp.MouseClickXY(point.X, point.Y, chromedp.ButtonType(input.Right)))
-		message = fmt.Sprintf("right-clicked %d", *action.NodeID)
-	default:
-		return nil, fmt.Errorf("unsupported mouse action: %s", kind)
-	}
-	if actionErr != nil {
-		return nil, actionErr
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: message,
-		Value: map[string]interface{}{
-			"id":  point.ID,
-			"tag": point.Tag,
-			"x":   point.X,
-			"y":   point.Y,
-		},
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: message,
+			Value: map[string]interface{}{
+				"id":  point.ID,
+				"tag": point.Tag,
+				"x":   point.X,
+				"y":   point.Y,
+			},
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1263,67 +1270,58 @@ func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api
 		return nil, errors.New("type text is required")
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
-
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var nodeID int
-	if action.NodeID != nil {
-		nodeID = *action.NodeID
-		if nodeID <= 0 {
-			return nil, errors.New("type node_id must be positive")
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var nodeID int
+		if action.NodeID != nil {
+			nodeID = *action.NodeID
+			if nodeID <= 0 {
+				return nil, errors.New("type node_id must be positive")
+			}
 		}
-	}
 
-	message := "typed"
-	if nodeID > 0 {
-		message = fmt.Sprintf("typed into %d", nodeID)
-	}
+		message := "typed"
+		if nodeID > 0 {
+			message = fmt.Sprintf("typed into %d", nodeID)
+		}
 
-	token := fmt.Sprintf("nexus-type-%d", time.Now().UnixNano())
-	var targetValue typeTarget
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(markTypeTargetExpression(nodeID, token), &targetValue, chromedp.EvalAsValue)); err != nil {
-		return nil, err
-	}
-	defer func() {
-		_ = chromedp.Run(targetCtx, chromedp.Evaluate(clearMarkedTypeTargetExpression(token), nil))
-	}()
-
-	value := map[string]interface{}{
-		"id":   targetValue.ID,
-		"tag":  targetValue.Tag,
-		"text": action.Text,
-	}
-	if err := chromedp.Run(targetCtx, chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery)); err == nil {
-		value["method"] = "key_events"
-	} else {
-		var fallback map[string]interface{}
-		if fallbackErr := chromedp.Run(targetCtx, chromedp.Evaluate(typeExpression(nodeID, action.Text), &fallback, chromedp.EvalAsValue)); fallbackErr != nil {
+		token := fmt.Sprintf("nexus-type-%d", time.Now().UnixNano())
+		var targetValue typeTarget
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(markTypeTargetExpression(nodeID, token), &targetValue, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
-		for key, v := range fallback {
-			value[key] = v
-		}
-		value["method"] = "dom_set"
-	}
+		defer func() {
+			_ = chromedp.Run(targetCtx, chromedp.Evaluate(clearMarkedTypeTargetExpression(token), nil))
+		}()
 
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: message,
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		value := map[string]interface{}{
+			"id":   targetValue.ID,
+			"tag":  targetValue.Tag,
+			"text": action.Text,
+		}
+		if err := chromedp.Run(targetCtx, chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery)); err == nil {
+			value["method"] = "key_events"
+		} else {
+			var fallback map[string]interface{}
+			if fallbackErr := chromedp.Run(targetCtx, chromedp.Evaluate(typeExpression(nodeID, action.Text), &fallback, chromedp.EvalAsValue)); fallbackErr != nil {
+				return nil, err
+			}
+			for key, v := range fallback {
+				value[key] = v
+			}
+			value["method"] = "dom_set"
+		}
+
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: message,
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) keyViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1337,57 +1335,39 @@ func (b *Backend) keyViaCDP(ctx context.Context, devtoolsURL string, action api.
 		return nil, err
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		if err := chromedp.Run(targetCtx, chromedp.KeyEvent(keyValue, chromedp.KeyModifiers(modifiers...))); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	if err := chromedp.Run(targetCtx, chromedp.KeyEvent(keyValue, chromedp.KeyModifiers(modifiers...))); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: fmt.Sprintf("sent keys %s", keySpec),
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("sent keys %s", keySpec),
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) backViaCDP(ctx context.Context, devtoolsURL string) (*api.ActionResult, error) {
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(`history.back()`, nil)); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(`history.back()`, nil)); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: "went back",
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: "went back",
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) getViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1396,59 +1376,50 @@ func (b *Backend) getViaCDP(ctx context.Context, devtoolsURL string, action api.
 	}
 
 	targetKind := strings.TrimSpace(action.Args["target"])
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
-
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var value interface{}
-	switch targetKind {
-	case "title":
-		var title string
-		if err := chromedp.Run(targetCtx, chromedp.Title(&title)); err != nil {
-			return nil, err
-		}
-		value = title
-	case "html":
-		selector := strings.TrimSpace(action.Args["selector"])
-		var html string
-		if selector == "" {
-			if err := chromedp.Run(targetCtx, chromedp.Evaluate(`document.documentElement ? document.documentElement.outerHTML : ""`, &html)); err != nil {
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var value interface{}
+		switch targetKind {
+		case "title":
+			var title string
+			if err := chromedp.Run(targetCtx, chromedp.Title(&title)); err != nil {
 				return nil, err
 			}
-		} else {
-			if err := chromedp.Run(targetCtx, chromedp.Evaluate(getHTMLExpression(selector), &html)); err != nil {
+			value = title
+		case "html":
+			selector := strings.TrimSpace(action.Args["selector"])
+			var html string
+			if selector == "" {
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(`document.documentElement ? document.documentElement.outerHTML : ""`, &html)); err != nil {
+					return nil, err
+				}
+			} else {
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getHTMLExpression(selector), &html)); err != nil {
+					return nil, err
+				}
+			}
+			value = html
+		case "text", "value", "attributes", "bbox":
+			if action.NodeID == nil || *action.NodeID <= 0 {
+				return nil, fmt.Errorf("get %s requires a positive index", targetKind)
+			}
+			if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
 				return nil, err
 			}
+		default:
+			return nil, fmt.Errorf("unsupported get target: %s", targetKind)
 		}
-		value = html
-	case "text", "value", "attributes", "bbox":
-		if action.NodeID == nil || *action.NodeID <= 0 {
-			return nil, fmt.Errorf("get %s requires a positive index", targetKind)
-		}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("unsupported get target: %s", targetKind)
-	}
 
-	return &api.ActionResult{
-		OK:      true,
-		Changed: false,
-		Message: fmt.Sprintf("got %s", targetKind),
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: false,
+			Message: fmt.Sprintf("got %s", targetKind),
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) selectViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1459,32 +1430,23 @@ func (b *Backend) selectViaCDP(ctx context.Context, devtoolsURL string, action a
 		return nil, errors.New("select value is required")
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var value map[string]interface{}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(selectExpression(*action.NodeID, action.Text), &value, chromedp.EvalAsValue)); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var value map[string]interface{}
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(selectExpression(*action.NodeID, action.Text), &value, chromedp.EvalAsValue)); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: fmt.Sprintf("selected %s on %d", action.Text, *action.NodeID),
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("selected %s on %d", action.Text, *action.NodeID),
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) uploadViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1498,37 +1460,28 @@ func (b *Backend) uploadViaCDP(ctx context.Context, devtoolsURL string, action a
 		return nil, err
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		token := fmt.Sprintf("nexus-upload-%d", time.Now().UnixNano())
+		var marked map[string]interface{}
+		if err := chromedp.Run(
+			targetCtx,
+			chromedp.Evaluate(markUploadNodeExpression(*action.NodeID, token), &marked, chromedp.EvalAsValue),
+			chromedp.SetUploadFiles(`[data-nexus-upload="`+token+`"]`, []string{action.Text}, chromedp.ByQuery),
+		); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	token := fmt.Sprintf("nexus-upload-%d", time.Now().UnixNano())
-	var marked map[string]interface{}
-	if err := chromedp.Run(
-		targetCtx,
-		chromedp.Evaluate(markUploadNodeExpression(*action.NodeID, token), &marked, chromedp.EvalAsValue),
-		chromedp.SetUploadFiles(`[data-nexus-upload="`+token+`"]`, []string{action.Text}, chromedp.ByQuery),
-	); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: fmt.Sprintf("uploaded %s to %d", action.Text, *action.NodeID),
-		Value:   marked,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("uploaded %s to %d", action.Text, *action.NodeID),
+			Value:   marked,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) scrollViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1553,32 +1506,23 @@ func (b *Backend) scrollViaCDP(ctx context.Context, devtoolsURL string, action a
 		amount = parsed
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var value map[string]interface{}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(scrollExpression(nodeID, action.Dir, amount), &value, chromedp.EvalAsValue)); err != nil {
+			return nil, err
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var value map[string]interface{}
-	if err := chromedp.Run(targetCtx, chromedp.Evaluate(scrollExpression(nodeID, action.Dir, amount), &value, chromedp.EvalAsValue)); err != nil {
-		return nil, err
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: true,
-		Message: fmt.Sprintf("scrolled %s", action.Dir),
-		Value:   value,
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("scrolled %s", action.Dir),
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1601,71 +1545,63 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 		timeout = time.Duration(ms) * time.Millisecond
 	}
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return nil, err
-	}
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var (
+			expression string
+			waitErr    error
+			err        error
+		)
+		switch targetType {
+		case "selector":
+			if value == "" {
+				return nil, errors.New("wait selector value is required")
+			}
+			state := strings.TrimSpace(action.Args["state"])
+			if state == "" {
+				state = "visible"
+			}
+			expression, err = waitSelectorExpression(value, state)
+			if err != nil {
+				return nil, err
+			}
+		case "text":
+			if value == "" {
+				return nil, errors.New("wait text value is required")
+			}
+			expression = waitTextExpression(value)
+		case "url":
+			if value == "" {
+				return nil, errors.New("wait url value is required")
+			}
+			expression = waitURLExpression(value)
+		case "navigation":
+			waitErr = waitForNavigation(targetCtx, timeout)
+		case "function":
+			if value == "" {
+				return nil, errors.New("wait function value is required")
+			}
+			waitErr = waitForFunction(targetCtx, value, timeout)
+		default:
+			return nil, fmt.Errorf("unsupported wait target: %s", targetType)
+		}
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL)
-	defer allocCancel()
+		if expression != "" {
+			waitErr = waitForExpression(targetCtx, expression, timeout)
+		}
+		if waitErr != nil {
+			return nil, waitErr
+		}
 
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
-	defer targetCancel()
-
-	var (
-		expression string
-		waitErr    error
-	)
-	switch targetType {
-	case "selector":
-		if value == "" {
-			return nil, errors.New("wait selector value is required")
-		}
-		state := strings.TrimSpace(action.Args["state"])
-		if state == "" {
-			state = "visible"
-		}
-		expression, err = waitSelectorExpression(value, state)
-		if err != nil {
-			return nil, err
-		}
-	case "text":
-		if value == "" {
-			return nil, errors.New("wait text value is required")
-		}
-		expression = waitTextExpression(value)
-	case "url":
-		if value == "" {
-			return nil, errors.New("wait url value is required")
-		}
-		expression = waitURLExpression(value)
-	case "navigation":
-		waitErr = waitForNavigation(targetCtx, timeout)
-	case "function":
-		if value == "" {
-			return nil, errors.New("wait function value is required")
-		}
-		waitErr = waitForFunction(targetCtx, value, timeout)
-	default:
-		return nil, fmt.Errorf("unsupported wait target: %s", targetType)
-	}
-
-	if expression != "" {
-		waitErr = waitForExpression(targetCtx, expression, timeout)
-	}
-	if waitErr != nil {
-		return nil, waitErr
-	}
-
-	return &api.ActionResult{
-		OK:      true,
-		Changed: false,
-		Message: fmt.Sprintf("waited for %s", targetType),
-		Meta: map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		},
-	}, nil
+		return &api.ActionResult{
+			OK:      true,
+			Changed: false,
+			Message: fmt.Sprintf("waited for %s", targetType),
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
 }
 
 func waitForNavigation(ctx context.Context, timeout time.Duration) error {
@@ -1707,7 +1643,7 @@ func waitForExpression(ctx context.Context, expression string, timeout time.Dura
 	deadline := time.Now().Add(timeout)
 	for {
 		var ready bool
-		err := chromedp.Run(ctx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue))
+		err := chromedp.Run(ctx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue, awaitPromise))
 		if err == nil && ready {
 			return nil
 		}
