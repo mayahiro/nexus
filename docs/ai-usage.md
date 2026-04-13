@@ -75,6 +75,7 @@ nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
+nxctl compare --manifest migration-pages.json --continue-on-error --output-json compare.json
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -86,6 +87,7 @@ When you need to compare migrated screens, use `compare` with two URLs or two ex
 Start with `--wait-selector` on a stable ready marker and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
 Use `--ignore-selector` to drop nodes from comparison and `--mask-selector` to keep the node while suppressing text and value differences.
 Rules support `@eN`, `field=value`, and simple AND conditions such as `role=textbox&name=Email`.
+For multi-page audits, put URL or session pairs into a manifest JSON file and run `compare --manifest`.
 
 When `state` gets too large, filter the tree before reading it.
 Start with `--role`, `--name`, `--text`, `--testid`, `--href`, and `--limit`.

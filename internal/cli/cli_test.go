@@ -123,6 +123,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `usage: nxctl compare <old-url> <new-url>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `nxctl compare --manifest <file>`) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {
@@ -1065,6 +1068,164 @@ func TestCompareReportOutputs(t *testing.T) {
 	}
 	if !strings.Contains(md, "## Findings") {
 		t.Fatalf("unexpected markdown output: %s", md)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareManifest(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalManager := newBrowserManager
+	originalSuffix := newCompareSessionSuffix
+	defer func() {
+		newBrowserManager = originalManager
+		newCompareSessionSuffix = originalSuffix
+	}()
+
+	newBrowserManager = func(config.Paths) browserManager {
+		return fakeBrowserManager{}
+	}
+	newCompareSessionSuffix = func() string {
+		return "manifest"
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/dashboard": {
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders 2026-04-13",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
+				},
+			},
+			"https://new.example.test/dashboard": {
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Orders v2",
+				Text:        "Orders 2026-04-14",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
+				},
+			},
+		},
+		sessionObservations: map[string]api.Observation{
+			"old": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/session",
+				Title:       "Orders",
+				Text:        "Orders 2026-04-13",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
+					{ID: 3, Ref: "@e3", Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true},
+				},
+			},
+			"new": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/session",
+				Title:       "Orders v2",
+				Text:        "Orders 2026-04-14",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
+					{ID: 3, Ref: "@e3", Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	manifestPath := filepath.Join(t.TempDir(), "compare-manifest.json")
+	manifest := compareManifest{
+		Defaults: compareManifestDefaults{
+			IgnoreTextRegex: []string{`20\d\d-\d\d-\d\d`},
+			MaskSelector:    []string{"role=textbox&name=Email"},
+		},
+		Pages: []compareManifestPage{
+			{
+				Name:   "dashboard-url",
+				OldURL: "https://old.example.test/dashboard",
+				NewURL: "https://new.example.test/dashboard",
+			},
+			{
+				Name:       "dashboard-session",
+				OldSession: "old",
+				NewSession: "new",
+				IgnoreSelector: []string{
+					"role=link",
+				},
+			},
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--manifest", manifestPath,
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare manifest exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareManifestReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare manifest json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.TotalPages != 2 || report.Summary.ComparedPages != 2 || report.Summary.FailedPages != 0 {
+		t.Fatalf("unexpected compare manifest summary: %+v", report.Summary)
+	}
+	if report.Summary.TotalFindings != 6 || report.Summary.Critical != 2 || report.Summary.Warning != 4 {
+		t.Fatalf("unexpected compare manifest findings: %+v", report.Summary)
+	}
+	if len(report.Pages) != 2 {
+		t.Fatalf("unexpected compare manifest pages: %+v", report.Pages)
+	}
+	if report.Pages[0].Name != "dashboard-url" || report.Pages[0].Report == nil {
+		t.Fatalf("unexpected first manifest page: %+v", report.Pages[0])
+	}
+	if report.Pages[1].Name != "dashboard-session" || report.Pages[1].Report == nil {
+		t.Fatalf("unexpected second manifest page: %+v", report.Pages[1])
 	}
 
 	cancel()
@@ -2187,11 +2348,12 @@ type autoStartLightpandaBackend struct{}
 type evalRPCHandler struct{}
 type compareRPCHandler struct{}
 type compareURLRPCHandler struct {
-	mu           sync.Mutex
-	attachIDs    []string
-	sessionURLs  map[string]string
-	observations map[string]api.Observation
-	observeCount map[string]int
+	mu                  sync.Mutex
+	attachIDs           []string
+	sessionURLs         map[string]string
+	sessionObservations map[string]api.Observation
+	observations        map[string]api.Observation
+	observeCount        map[string]int
 }
 type clickRPCHandler struct{}
 type mouseRPCHandler struct{}
@@ -2491,6 +2653,11 @@ func (h *compareURLRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest
 func (h *compareURLRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	if observation, ok := h.sessionObservations[req.SessionID]; ok {
+		observation.SessionID = req.SessionID
+		return api.ObserveSessionResponse{Observation: observation}, nil
+	}
 
 	url := h.sessionURLs[req.SessionID]
 	observation, ok := h.observations[url]

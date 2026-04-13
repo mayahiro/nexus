@@ -111,6 +111,7 @@ nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
+nxctl compare --manifest migration-pages.json --output-md compare.md
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate

@@ -101,6 +101,69 @@ type compareReport struct {
 	Findings []compareFinding `json:"findings"`
 }
 
+type compareManifest struct {
+	Defaults compareManifestDefaults `json:"defaults,omitempty"`
+	Pages    []compareManifestPage   `json:"pages,omitempty"`
+}
+
+type compareManifestDefaults struct {
+	WaitSelector    string   `json:"wait_selector,omitempty"`
+	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
+	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
+	MaskSelector    []string `json:"mask_selector,omitempty"`
+}
+
+type compareManifestPage struct {
+	Name            string   `json:"name,omitempty"`
+	OldURL          string   `json:"old_url,omitempty"`
+	NewURL          string   `json:"new_url,omitempty"`
+	OldSession      string   `json:"old_session,omitempty"`
+	NewSession      string   `json:"new_session,omitempty"`
+	WaitSelector    *string  `json:"wait_selector,omitempty"`
+	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
+	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
+	MaskSelector    []string `json:"mask_selector,omitempty"`
+}
+
+type compareManifestPageReport struct {
+	Name   string         `json:"name"`
+	Error  string         `json:"error,omitempty"`
+	Report *compareReport `json:"report,omitempty"`
+}
+
+type compareManifestSummary struct {
+	TotalPages     int `json:"total_pages"`
+	ComparedPages  int `json:"compared_pages"`
+	FailedPages    int `json:"failed_pages"`
+	SamePages      int `json:"same_pages"`
+	DifferentPages int `json:"different_pages"`
+	TotalFindings  int `json:"total_findings"`
+	Critical       int `json:"critical"`
+	Warning        int `json:"warning"`
+	Info           int `json:"info"`
+}
+
+type compareManifestReport struct {
+	Manifest string                      `json:"manifest,omitempty"`
+	Summary  compareManifestSummary      `json:"summary"`
+	Pages    []compareManifestPageReport `json:"pages"`
+}
+
+type compareRun struct {
+	OldEndpoint     compareEndpoint
+	NewEndpoint     compareEndpoint
+	Backend         string
+	TargetRef       string
+	Viewport        string
+	WaitSelector    string
+	WaitTimeout     int
+	IgnoreTextRegex []string
+	IgnoreSelector  []string
+	MaskSelector    []string
+}
+
 type preparedCompareSession struct {
 	SessionID string
 	Detach    bool
@@ -144,6 +207,9 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	backend := fs.String("backend", "chromium", "browser backend")
 	targetRef := fs.String("target-ref", "", "target ref")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
+	manifestPath := fs.String("manifest", "", "compare manifest json")
+	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
+	limit := fs.Int("limit", 0, "limit manifest pages")
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
@@ -160,48 +226,31 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	if len(positional) == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
+	if strings.TrimSpace(*manifestPath) != "" {
+		if len(positional) > 0 || fs.NArg() > 0 || *oldURL != "" || *newURL != "" || *oldSession != "" || *newSession != "" {
+			fmt.Fprintln(stderr, "compare can not mix --manifest with urls or session flags")
+			fmt.Fprintln(stderr, "hint: nxctl compare --manifest migration-pages.json")
+			fmt.Fprintln(stderr, "hint: run `nxctl help compare` for details")
+			return 1
+		}
+	} else if len(positional) == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
 		*oldURL = positional[0]
 		*newURL = positional[1]
 	} else if fs.NArg() == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
 		*oldURL = fs.Arg(0)
 		*newURL = fs.Arg(1)
 	} else if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare accepts either two urls or explicit --old/--new flags")
+		fmt.Fprintln(stderr, "compare accepts either two urls, two sessions, or --manifest")
 		printCompareHelp(stderr)
 		return 1
 	}
 
-	oldEndpoint := compareEndpoint{SessionID: strings.TrimSpace(*oldSession), URL: strings.TrimSpace(*oldURL)}
-	newEndpoint := compareEndpoint{SessionID: strings.TrimSpace(*newSession), URL: strings.TrimSpace(*newURL)}
-	if err := validateCompareEndpoint("old", oldEndpoint); err != nil {
-		fmt.Fprintln(stderr, err)
-		printCompareHelp(stderr)
-		return 1
-	}
-	if err := validateCompareEndpoint("new", newEndpoint); err != nil {
-		fmt.Fprintln(stderr, err)
-		printCompareHelp(stderr)
-		return 1
-	}
 	if *waitTimeout < 0 {
 		fmt.Fprintln(stderr, "wait-timeout must be a non-negative integer")
 		return 1
 	}
-
-	ignorePatterns, err := compileCompareRegexps(ignoreRegex)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	ignoreRules, err := compileCompareSelectorRules(ignoreSelector)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	maskRules, err := compileCompareSelectorRules(maskSelector)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
+	if *limit < 0 {
+		fmt.Fprintln(stderr, "limit must be a non-negative integer")
 		return 1
 	}
 
@@ -218,65 +267,70 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, oldEndpoint, newEndpoint, *backend, *targetRef, *viewport)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+	base := compareRun{
+		Backend:         *backend,
+		TargetRef:       *targetRef,
+		Viewport:        *viewport,
+		WaitSelector:    *waitSelector,
+		WaitTimeout:     *waitTimeout,
+		IgnoreTextRegex: append([]string(nil), ignoreRegex...),
+		IgnoreSelector:  append([]string(nil), ignoreSelector...),
+		MaskSelector:    append([]string(nil), maskSelector...),
 	}
-	defer cleanupCompareSession(context.Background(), client, oldPrepared)
-	defer cleanupCompareSession(context.Background(), client, newPrepared)
 
-	for _, endpoint := range []struct {
-		prepared preparedCompareSession
-		source   compareEndpoint
-	}{
-		{prepared: oldPrepared, source: oldEndpoint},
-		{prepared: newPrepared, source: newEndpoint},
-	} {
-		if endpoint.source.URL == "" {
-			continue
-		}
-		if err := waitForCompareURLReady(ctx, client, endpoint.prepared.SessionID); err != nil {
+	if strings.TrimSpace(*manifestPath) != "" {
+		manifest, err := loadCompareManifest(*manifestPath)
+		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-	}
-
-	if strings.TrimSpace(*waitSelector) != "" {
-		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
-			if err := waitForCompareSelector(ctx, client, prepared.SessionID, *waitSelector, *waitTimeout); err != nil {
+		report, err := executeCompareManifest(ctx, client, paths, *manifestPath, manifest, base, *continueOnError, *limit)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if strings.TrimSpace(*outputJSON) != "" {
+			if err := writeIndentedJSONFile(*outputJSON, report); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
 		}
+		if strings.TrimSpace(*outputMD) != "" {
+			if err := writeCompareManifestMarkdown(*outputMD, report); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+		}
+		if *asJSON {
+			encoder := json.NewEncoder(stdout)
+			encoder.SetIndent("", "  ")
+			if err := encoder.Encode(report); err != nil {
+				fmt.Fprintln(stderr, err)
+				return 1
+			}
+			return 0
+		}
+		printCompareManifestReport(stdout, report)
+		return 0
 	}
 
-	oldObservation, err := observeCompareSession(ctx, client, oldPrepared.SessionID)
+	base.OldEndpoint = compareEndpoint{SessionID: strings.TrimSpace(*oldSession), URL: strings.TrimSpace(*oldURL)}
+	base.NewEndpoint = compareEndpoint{SessionID: strings.TrimSpace(*newSession), URL: strings.TrimSpace(*newURL)}
+	if base.OldEndpoint.SessionID == "" && base.OldEndpoint.URL == "" && base.NewEndpoint.SessionID == "" && base.NewEndpoint.URL == "" {
+		fmt.Fprintln(stderr, "compare requires either two urls, two sessions, or --manifest")
+		fmt.Fprintln(stderr, "hint: nxctl compare https://old.example.com https://new.example.com")
+		fmt.Fprintln(stderr, "hint: run `nxctl help compare` for details")
+		return 1
+	}
+
+	report, err := executeCompare(ctx, client, paths, base)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	newObservation, err := observeCompareSession(ctx, client, newPrepared.SessionID)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-
-	report := buildCompareReport(
-		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
-			IgnoreText: ignorePatterns,
-			IgnoreNode: ignoreRules,
-			MaskNode:   maskRules,
-		}),
-		buildCompareSnapshot(newObservation, compareSnapshotOptions{
-			IgnoreText: ignorePatterns,
-			IgnoreNode: ignoreRules,
-			MaskNode:   maskRules,
-		}),
-	)
 
 	if strings.TrimSpace(*outputJSON) != "" {
-		if err := writeCompareJSON(*outputJSON, report); err != nil {
+		if err := writeIndentedJSONFile(*outputJSON, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
@@ -302,7 +356,213 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	return 0
 }
 
-func writeCompareJSON(path string, report compareReport) error {
+func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths, run compareRun) (compareReport, error) {
+	if err := validateCompareEndpoint("old", run.OldEndpoint); err != nil {
+		return compareReport{}, err
+	}
+	if err := validateCompareEndpoint("new", run.NewEndpoint); err != nil {
+		return compareReport{}, err
+	}
+	if run.WaitTimeout < 0 {
+		return compareReport{}, errors.New("wait-timeout must be a non-negative integer")
+	}
+
+	ignorePatterns, err := compileCompareRegexps(run.IgnoreTextRegex)
+	if err != nil {
+		return compareReport{}, err
+	}
+	ignoreRules, err := compileCompareSelectorRules(run.IgnoreSelector)
+	if err != nil {
+		return compareReport{}, err
+	}
+	maskRules, err := compileCompareSelectorRules(run.MaskSelector)
+	if err != nil {
+		return compareReport{}, err
+	}
+
+	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, run.OldEndpoint, run.NewEndpoint, run.Backend, run.TargetRef, run.Viewport)
+	if err != nil {
+		return compareReport{}, err
+	}
+	defer cleanupCompareSession(context.Background(), client, oldPrepared)
+	defer cleanupCompareSession(context.Background(), client, newPrepared)
+
+	for _, endpoint := range []struct {
+		prepared preparedCompareSession
+		source   compareEndpoint
+	}{
+		{prepared: oldPrepared, source: run.OldEndpoint},
+		{prepared: newPrepared, source: run.NewEndpoint},
+	} {
+		if endpoint.source.URL == "" {
+			continue
+		}
+		if err := waitForCompareURLReady(ctx, client, endpoint.prepared.SessionID); err != nil {
+			return compareReport{}, err
+		}
+	}
+
+	if strings.TrimSpace(run.WaitSelector) != "" {
+		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
+			if err := waitForCompareSelector(ctx, client, prepared.SessionID, run.WaitSelector, run.WaitTimeout); err != nil {
+				return compareReport{}, err
+			}
+		}
+	}
+
+	oldObservation, err := observeCompareSession(ctx, client, oldPrepared.SessionID)
+	if err != nil {
+		return compareReport{}, err
+	}
+	newObservation, err := observeCompareSession(ctx, client, newPrepared.SessionID)
+	if err != nil {
+		return compareReport{}, err
+	}
+
+	return buildCompareReport(
+		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
+			IgnoreText: ignorePatterns,
+			IgnoreNode: ignoreRules,
+			MaskNode:   maskRules,
+		}),
+		buildCompareSnapshot(newObservation, compareSnapshotOptions{
+			IgnoreText: ignorePatterns,
+			IgnoreNode: ignoreRules,
+			MaskNode:   maskRules,
+		}),
+	), nil
+}
+
+func executeCompareManifest(ctx context.Context, client *rpc.Client, paths config.Paths, manifestPath string, manifest compareManifest, base compareRun, continueOnError bool, limit int) (compareManifestReport, error) {
+	pages := manifest.Pages
+	if len(pages) == 0 {
+		return compareManifestReport{}, errors.New("manifest requires at least one page")
+	}
+	if limit > 0 && limit < len(pages) {
+		pages = pages[:limit]
+	}
+
+	report := compareManifestReport{
+		Manifest: manifestPath,
+		Pages:    make([]compareManifestPageReport, 0, len(pages)),
+	}
+
+	for i, page := range pages {
+		name := compareManifestPageName(page, i)
+		run := mergeCompareManifestPage(base, manifest.Defaults, page)
+		single, err := executeCompare(ctx, client, paths, run)
+		if err != nil {
+			if !continueOnError {
+				return compareManifestReport{}, fmt.Errorf("manifest %s failed: %w", name, err)
+			}
+			report.Pages = append(report.Pages, compareManifestPageReport{
+				Name:  name,
+				Error: err.Error(),
+			})
+			continue
+		}
+		report.Pages = append(report.Pages, compareManifestPageReport{
+			Name:   name,
+			Report: &single,
+		})
+	}
+
+	report.Summary = summarizeCompareManifest(report.Pages)
+	return report, nil
+}
+
+func loadCompareManifest(path string) (compareManifest, error) {
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return compareManifest{}, err
+	}
+	var manifest compareManifest
+	if err := json.Unmarshal(bytes, &manifest); err != nil {
+		return compareManifest{}, fmt.Errorf("invalid compare manifest %q: %w", path, err)
+	}
+	if len(manifest.Pages) == 0 {
+		return compareManifest{}, fmt.Errorf("manifest %q requires at least one page", path)
+	}
+	return manifest, nil
+}
+
+func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults, page compareManifestPage) compareRun {
+	run := compareRun{
+		OldEndpoint: compareEndpoint{
+			SessionID: strings.TrimSpace(page.OldSession),
+			URL:       strings.TrimSpace(page.OldURL),
+		},
+		NewEndpoint: compareEndpoint{
+			SessionID: strings.TrimSpace(page.NewSession),
+			URL:       strings.TrimSpace(page.NewURL),
+		},
+		Backend:         base.Backend,
+		TargetRef:       base.TargetRef,
+		Viewport:        base.Viewport,
+		WaitSelector:    base.WaitSelector,
+		WaitTimeout:     base.WaitTimeout,
+		IgnoreTextRegex: append([]string(nil), base.IgnoreTextRegex...),
+		IgnoreSelector:  append([]string(nil), base.IgnoreSelector...),
+		MaskSelector:    append([]string(nil), base.MaskSelector...),
+	}
+
+	if defaults.WaitSelector != "" {
+		run.WaitSelector = defaults.WaitSelector
+	}
+	if defaults.WaitTimeout != nil {
+		run.WaitTimeout = *defaults.WaitTimeout
+	}
+	run.IgnoreTextRegex = append(run.IgnoreTextRegex, defaults.IgnoreTextRegex...)
+	run.IgnoreSelector = append(run.IgnoreSelector, defaults.IgnoreSelector...)
+	run.MaskSelector = append(run.MaskSelector, defaults.MaskSelector...)
+
+	if page.WaitSelector != nil {
+		run.WaitSelector = strings.TrimSpace(*page.WaitSelector)
+	}
+	if page.WaitTimeout != nil {
+		run.WaitTimeout = *page.WaitTimeout
+	}
+	run.IgnoreTextRegex = append(run.IgnoreTextRegex, page.IgnoreTextRegex...)
+	run.IgnoreSelector = append(run.IgnoreSelector, page.IgnoreSelector...)
+	run.MaskSelector = append(run.MaskSelector, page.MaskSelector...)
+	return run
+}
+
+func compareManifestPageName(page compareManifestPage, index int) string {
+	if strings.TrimSpace(page.Name) != "" {
+		return strings.TrimSpace(page.Name)
+	}
+	return fmt.Sprintf("page[%d]", index)
+}
+
+func summarizeCompareManifest(pages []compareManifestPageReport) compareManifestSummary {
+	summary := compareManifestSummary{
+		TotalPages: len(pages),
+	}
+	for _, page := range pages {
+		if page.Error != "" {
+			summary.FailedPages++
+			continue
+		}
+		if page.Report == nil {
+			summary.FailedPages++
+			continue
+		}
+		summary.ComparedPages++
+		if page.Report.Summary.Same {
+			summary.SamePages++
+		} else {
+			summary.DifferentPages++
+		}
+		summary.TotalFindings += page.Report.Summary.TotalFindings
+		summary.Critical += page.Report.Summary.Critical
+		summary.Warning += page.Report.Summary.Warning
+		summary.Info += page.Report.Summary.Info
+	}
+	return summary
+}
+
+func writeIndentedJSONFile(path string, value any) error {
 	file, err := os.Create(path)
 	if err != nil {
 		return err
@@ -311,7 +571,11 @@ func writeCompareJSON(path string, report compareReport) error {
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(report)
+	return encoder.Encode(value)
+}
+
+func writeCompareJSON(path string, report compareReport) error {
+	return writeIndentedJSONFile(path, report)
 }
 
 func writeCompareMarkdown(path string, report compareReport) error {
@@ -322,6 +586,17 @@ func writeCompareMarkdown(path string, report compareReport) error {
 	defer file.Close()
 
 	printCompareMarkdown(file, report)
+	return nil
+}
+
+func writeCompareManifestMarkdown(path string, report compareManifestReport) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	printCompareManifestMarkdown(file, report)
 	return nil
 }
 
@@ -964,6 +1239,31 @@ func printCompareReport(w io.Writer, report compareReport) {
 	}
 }
 
+func printCompareManifestReport(w io.Writer, report compareManifestReport) {
+	fmt.Fprintf(w, "manifest: %s\n", report.Manifest)
+	fmt.Fprintf(w, "pages: %d total, %d compared, %d failed\n", report.Summary.TotalPages, report.Summary.ComparedPages, report.Summary.FailedPages)
+	fmt.Fprintf(w, "same: %d\n", report.Summary.SamePages)
+	fmt.Fprintf(w, "different: %d\n", report.Summary.DifferentPages)
+	fmt.Fprintf(w, "summary: %d findings\n", report.Summary.TotalFindings)
+	fmt.Fprintf(w, "critical: %d\n", report.Summary.Critical)
+	fmt.Fprintf(w, "warning: %d\n", report.Summary.Warning)
+	fmt.Fprintf(w, "info: %d\n", report.Summary.Info)
+	if report.Summary.TotalFindings == 0 && report.Summary.FailedPages == 0 {
+		fmt.Fprintln(w, "no significant differences")
+	}
+	for _, page := range report.Pages {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "[%s]\n", page.Name)
+		if page.Error != "" {
+			fmt.Fprintf(w, "error: %s\n", page.Error)
+			continue
+		}
+		if page.Report != nil {
+			printCompareReport(w, *page.Report)
+		}
+	}
+}
+
 func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintln(w, "# Compare Report")
 	fmt.Fprintln(w)
@@ -1000,6 +1300,59 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		case "state_changed":
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+		}
+	}
+}
+
+func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
+	fmt.Fprintln(w, "# Compare Manifest Report")
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- Manifest: `%s`\n", report.Manifest)
+	fmt.Fprintf(w, "- Pages: %d total / %d compared / %d failed\n", report.Summary.TotalPages, report.Summary.ComparedPages, report.Summary.FailedPages)
+	fmt.Fprintf(w, "- Same: %d\n", report.Summary.SamePages)
+	fmt.Fprintf(w, "- Different: %d\n", report.Summary.DifferentPages)
+	fmt.Fprintf(w, "- Total findings: %d\n", report.Summary.TotalFindings)
+	fmt.Fprintf(w, "- Critical: %d\n", report.Summary.Critical)
+	fmt.Fprintf(w, "- Warning: %d\n", report.Summary.Warning)
+	fmt.Fprintf(w, "- Info: %d\n", report.Summary.Info)
+	for _, page := range report.Pages {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "## %s\n", page.Name)
+		fmt.Fprintln(w)
+		if page.Error != "" {
+			fmt.Fprintf(w, "Error: %s\n", page.Error)
+			continue
+		}
+		if page.Report == nil {
+			continue
+		}
+		fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(page.Report.Old.URL, page.Report.Old.SessionID))
+		fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(page.Report.New.URL, page.Report.New.SessionID))
+		fmt.Fprintf(w, "- Findings: %d\n", page.Report.Summary.TotalFindings)
+		fmt.Fprintf(w, "- Critical: %d\n", page.Report.Summary.Critical)
+		fmt.Fprintf(w, "- Warning: %d\n", page.Report.Summary.Warning)
+		fmt.Fprintf(w, "- Info: %d\n", page.Report.Summary.Info)
+		if page.Report.Summary.Same {
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "No significant differences.")
+			continue
+		}
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "### Findings")
+		fmt.Fprintln(w)
+		for _, finding := range page.Report.Findings {
+			switch finding.Kind {
+			case "title_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			case "page_text_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			case "missing_node", "new_node":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label)
+			case "text_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
+			case "state_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+			}
 		}
 	}
 }
