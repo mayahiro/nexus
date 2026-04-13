@@ -59,6 +59,7 @@ Use `sessions --json` when you need to inspect current state across multiple ses
 ```text
 nxctl open https://example.com
 nxctl state
+nxctl state --role button --limit 20
 nxctl click @e3
 nxctl find role button click --name "Submit"
 nxctl find role button --all
@@ -81,6 +82,11 @@ nxctl close
 
 When you need to compare migrated screens, use `compare` with two URLs or two existing sessions.
 Start with `--wait-selector` on a stable ready marker and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
+
+When `state` gets too large, filter the tree before reading it.
+Start with `--role`, `--name`, `--text`, `--testid`, `--href`, and `--limit`.
+
+Most command flags can be placed before or after positional arguments.
 
 ## 6. Viewport
 

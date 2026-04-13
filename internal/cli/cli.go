@@ -261,7 +261,7 @@ func runBrowser(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		fs := flag.NewFlagSet("browser uninstall", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		name := fs.String("name", "", "browser name")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseCommandFlags(fs, args[1:], stderr, "browser"); err != nil {
 			return 1
 		}
 		names := []string{}
@@ -297,7 +297,7 @@ func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "back"); err != nil {
 		return 1
 	}
 	if fs.NArg() != 0 {
@@ -383,17 +383,17 @@ func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	asJSON := fs.Bool("json", false, "print as json")
 	fs.Var(&commands, "cmd", "subcommand to execute")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "batch"); err != nil {
 		return 1
 	}
 	if len(commands) == 0 {
 		fmt.Fprintln(stderr, "batch requires at least one --cmd")
-		printBatchHelp(stderr)
+		printCommandHint(stderr, "batch", `nxctl batch --cmd "state" --cmd "find role button --all"`)
 		return 1
 	}
 	if fs.NArg() != 0 {
 		fmt.Fprintln(stderr, "batch does not accept positional arguments")
-		printBatchHelp(stderr)
+		printCommandHint(stderr, "batch", `nxctl batch --cmd "state"`)
 		return 1
 	}
 
@@ -495,7 +495,7 @@ func runOpen(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "open"); err != nil {
 		return 1
 	}
 
@@ -505,7 +505,7 @@ func runOpen(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 
 	if urlArg == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "open requires a url")
-		printOpenHelp(stderr)
+		printCommandHint(stderr, "open", "nxctl open https://example.com --session work")
 		return 1
 	}
 
@@ -541,7 +541,7 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "eval"); err != nil {
 		return 1
 	}
 
@@ -551,7 +551,7 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 
 	if source == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "eval requires js code")
-		printEvalHelp(stderr)
+		printCommandHint(stderr, "eval", `nxctl eval "document.title" --json`)
 		return 1
 	}
 
@@ -604,7 +604,8 @@ func runFind(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return 0
 	}
 	if len(args) == 0 {
-		printFindHelp(stderr)
+		fmt.Fprintln(stderr, "find requires a selector kind such as role, text, label, testid, or href")
+		printCommandHint(stderr, "find", `nxctl find role button --name "Submit"`)
 		return 1
 	}
 
@@ -621,7 +622,7 @@ func runFind(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return runFindAttr(ctx, "href", []string{"href"}, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "find target must be role, text, label, testid, or href\n")
-		printFindHelp(stderr)
+		printCommandHint(stderr, "find", `nxctl find role button --name "Submit"`)
 		return 1
 	}
 }
@@ -651,13 +652,13 @@ func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "find"); err != nil {
 		return 1
 	}
 
 	if role == "" || (!*matchAll && actionName == "") {
 		fmt.Fprintln(stderr, "find role requires <role> <click|input|get> or --all")
-		printFindHelp(stderr)
+		printCommandHint(stderr, "find", `nxctl find role button click --name "Submit"`)
 		return 1
 	}
 	if *matchAll && actionName != "" {
@@ -718,13 +719,13 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "find"); err != nil {
 		return 1
 	}
 
 	if textValue == "" || (!*matchAll && actionName == "") {
 		fmt.Fprintln(stderr, "find text requires <text> <click|get> or --all")
-		printFindHelp(stderr)
+		printCommandHint(stderr, "find", `nxctl find text "Sign In" click`)
 		return 1
 	}
 	if *matchAll && actionName != "" {
@@ -784,13 +785,13 @@ func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr i
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "find"); err != nil {
 		return 1
 	}
 
 	if label == "" || (!*matchAll && actionName == "") {
 		fmt.Fprintln(stderr, `find label requires "label" input "text", get <target>, or --all`)
-		printFindHelp(stderr)
+		printCommandHint(stderr, "find", `nxctl find label "Email" input "hello@example.com"`)
 		return 1
 	}
 	if *matchAll && actionName != "" {
@@ -853,13 +854,13 @@ func runFindAttr(ctx context.Context, kind string, attrs []string, args []string
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "find"); err != nil {
 		return 1
 	}
 
 	if attrValue == "" || (!*matchAll && actionName == "") {
 		fmt.Fprintf(stderr, "find %s requires <value> <click|get> or --all\n", kind)
-		printFindHelp(stderr)
+		printCommandHint(stderr, "find", fmt.Sprintf(`nxctl find %s "value" --all`, kind))
 		return 1
 	}
 	if *matchAll && actionName != "" {
@@ -924,7 +925,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "get"); err != nil {
 		return 1
 	}
 
@@ -938,7 +939,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) == 0 {
 		fmt.Fprintln(stderr, "get requires a target")
-		printGetHelp(stderr)
+		printCommandHint(stderr, "get", "nxctl get title")
 		return 1
 	}
 
@@ -971,7 +972,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	case "text", "value", "attributes", "bbox":
 		if len(positionals) != 2 {
 			fmt.Fprintf(stderr, "get %s requires an index\n", target)
-			printGetHelp(stderr)
+			printCommandHint(stderr, "get", "nxctl get attributes @e3")
 			return 1
 		}
 		if *selector != "" {
@@ -1045,14 +1046,14 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "click"); err != nil {
 		return 1
 	}
 
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 1 && len(positionals) != 2 {
 		fmt.Fprintln(stderr, "click requires an index or x y coordinates")
-		printClickHelp(stderr)
+		printCommandHint(stderr, "click", "nxctl click @e3 --json")
 		return 1
 	}
 
@@ -1160,7 +1161,7 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, command); err != nil {
 		return 1
 	}
 
@@ -1170,7 +1171,7 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 
 	if indexArg == "" || fs.NArg() > 1 {
 		fmt.Fprintf(stderr, "%s requires an index\n", command)
-		printNodeActionHelp(stderr, command)
+		printCommandHint(stderr, command, fmt.Sprintf("nxctl %s @e3 --json", command))
 		return 1
 	}
 
@@ -1240,7 +1241,7 @@ func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	sessionID := fs.String("session", "default", "session id")
 	closeAll := fs.Bool("all", false, "close all sessions")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "close"); err != nil {
 		return 1
 	}
 
@@ -1307,7 +1308,7 @@ func runInput(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "input"); err != nil {
 		return 1
 	}
 
@@ -1322,7 +1323,7 @@ func runInput(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 
 	if len(positionals) != 2 {
 		fmt.Fprintln(stderr, "input requires an index and text")
-		printInputHelp(stderr)
+		printCommandHint(stderr, "input", `nxctl input @e3 "hello@example.com" --json`)
 		return 1
 	}
 
@@ -1360,7 +1361,7 @@ func runKeys(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "keys"); err != nil {
 		return 1
 	}
 
@@ -1370,7 +1371,7 @@ func runKeys(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 
 	if keySpec == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "keys requires a key spec")
-		printKeysHelp(stderr)
+		printCommandHint(stderr, "keys", `nxctl keys "Enter" --json`)
 		return 1
 	}
 
@@ -1436,7 +1437,7 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "screenshot"); err != nil {
 		return 1
 	}
 
@@ -1518,7 +1519,7 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "select"); err != nil {
 		return 1
 	}
 
@@ -1532,7 +1533,7 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 2 {
 		fmt.Fprintln(stderr, "select requires an index and value")
-		printSelectHelp(stderr)
+		printCommandHint(stderr, "select", `nxctl select @e3 "two" --json`)
 		return 1
 	}
 
@@ -1611,7 +1612,7 @@ func runScroll(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "scroll"); err != nil {
 		return 1
 	}
 
@@ -1621,7 +1622,7 @@ func runScroll(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 
 	if dirArg == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "scroll requires a direction")
-		printScrollHelp(stderr)
+		printCommandHint(stderr, "scroll", "nxctl scroll down --amount 500")
 		return 1
 	}
 	if dirArg != "up" && dirArg != "down" {
@@ -1711,7 +1712,7 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "upload"); err != nil {
 		return 1
 	}
 
@@ -1725,7 +1726,7 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	positionals = append(positionals, fs.Args()...)
 	if len(positionals) != 2 {
 		fmt.Fprintln(stderr, "upload requires an index and path")
-		printUploadHelp(stderr)
+		printCommandHint(stderr, "upload", "nxctl upload @e4 /path/to/file")
 		return 1
 	}
 
@@ -1802,7 +1803,7 @@ func runType(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "type"); err != nil {
 		return 1
 	}
 
@@ -1812,7 +1813,7 @@ func runType(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 
 	if textArg == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "type requires text")
-		printTypeHelp(stderr)
+		printCommandHint(stderr, "type", `nxctl type "hello" --json`)
 		return 1
 	}
 
@@ -1900,7 +1901,7 @@ func runWait(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "wait"); err != nil {
 		return 1
 	}
 
@@ -1915,7 +1916,7 @@ func runWait(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 
 	if len(positionals) == 0 {
 		fmt.Fprintln(stderr, "wait requires a target and value")
-		printWaitHelp(stderr)
+		printCommandHint(stderr, "wait", `nxctl wait selector ".ready"`)
 		return 1
 	}
 	targetType = positionals[0]
@@ -1923,13 +1924,13 @@ func runWait(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	case "navigation":
 		if len(positionals) != 1 {
 			fmt.Fprintln(stderr, "wait navigation does not accept a value")
-			printWaitHelp(stderr)
+			printCommandHint(stderr, "wait", "nxctl wait navigation")
 			return 1
 		}
 	case "selector", "text", "url", "function":
 		if len(positionals) != 2 {
 			fmt.Fprintln(stderr, "wait requires a target and value")
-			printWaitHelp(stderr)
+			printCommandHint(stderr, "wait", `nxctl wait selector ".ready"`)
 			return 1
 		}
 		value = positionals[1]
@@ -2013,13 +2014,13 @@ func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stde
 	initialURL := fs.String("url", "", "initial url")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "attach"); err != nil {
 		return 1
 	}
 
 	if *sessionID == "" {
 		fmt.Fprintln(stderr, "--session is required")
-		printAttachBrowserHelp(stderr)
+		printCommandHint(stderr, "attach", "nxctl attach browser --session work --backend chromium --url https://example.com")
 		return 1
 	}
 
@@ -2050,7 +2051,7 @@ func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stde
 	width, height, err := resolvedViewport(*viewport)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		printAttachBrowserHelp(stderr)
+		printCommandHint(stderr, "attach", "nxctl attach browser --session work --viewport 1440x900")
 		return 1
 	}
 	options["viewport_width"] = strconv.Itoa(width)
@@ -2096,7 +2097,7 @@ func runViewport(ctx context.Context, args []string, stdout io.Writer, stderr io
 		args = args[1:]
 	}
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "viewport"); err != nil {
 		return 1
 	}
 	if value == "" && fs.NArg() == 1 {
@@ -2104,14 +2105,14 @@ func runViewport(ctx context.Context, args []string, stdout io.Writer, stderr io
 	}
 	if value == "" || fs.NArg() > 1 {
 		fmt.Fprintln(stderr, "viewport requires WIDTHxHEIGHT")
-		printViewportHelp(stderr)
+		printCommandHint(stderr, "viewport", "nxctl viewport 1280x720")
 		return 1
 	}
 
 	width, height, err := parseViewport(value)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		printViewportHelp(stderr)
+		printCommandHint(stderr, "viewport", "nxctl viewport 1280x720")
 		return 1
 	}
 
@@ -2171,7 +2172,7 @@ func runSessions(ctx context.Context, args []string, stdout io.Writer, stderr io
 	fs.SetOutput(stderr)
 
 	asJSON := fs.Bool("json", false, "print as json")
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "sessions"); err != nil {
 		return 1
 	}
 
@@ -2219,7 +2220,7 @@ func runDetach(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	fs.SetOutput(stderr)
 
 	sessionID := fs.String("session", "", "session id")
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "detach"); err != nil {
 		return 1
 	}
 
@@ -2261,7 +2262,7 @@ func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	withTree := fs.Bool("tree", true, "include tree")
 	withScreenshot := fs.Bool("screenshot", false, "include screenshot")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "observe"); err != nil {
 		return 1
 	}
 
@@ -2321,8 +2322,24 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
+	role := fs.String("role", "", "filter by role")
+	name := fs.String("name", "", "filter by accessible name")
+	text := fs.String("text", "", "filter by text")
+	testID := fs.String("testid", "", "filter by data-testid or data-test")
+	href := fs.String("href", "", "filter by href")
+	limit := fs.Int("limit", 0, "maximum nodes to print")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "state"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "state does not accept positional arguments")
+		printCommandHint(stderr, "state", "nxctl state --role button --limit 20")
+		return 1
+	}
+	if *limit < 0 {
+		fmt.Fprintln(stderr, "state limit must be a non-negative integer")
+		printCommandHint(stderr, "state", "nxctl state --limit 20")
 		return 1
 	}
 
@@ -2346,6 +2363,15 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
+	res.Observation.Tree = filterStateNodes(res.Observation.Tree, stateFilterOptions{
+		Role:   *role,
+		Name:   *name,
+		Text:   *text,
+		TestID: *testID,
+		Href:   *href,
+		Limit:  *limit,
+	})
+
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -2368,6 +2394,63 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	return 0
+}
+
+type stateFilterOptions struct {
+	Role   string
+	Name   string
+	Text   string
+	TestID string
+	Href   string
+	Limit  int
+}
+
+func filterStateNodes(nodes []api.Node, options stateFilterOptions) []api.Node {
+	filtered := make([]api.Node, 0, len(nodes))
+	role := normalizeFindValue(options.Role)
+	name := normalizeFindValue(options.Name)
+	text := normalizeFindValue(options.Text)
+	testID := normalizeFindValue(options.TestID)
+	href := normalizeFindValue(options.Href)
+
+	for _, node := range nodes {
+		if role != "" && normalizeFindValue(node.Role) != role {
+			continue
+		}
+		if name != "" && !matchStateField(node.Name, name) {
+			continue
+		}
+		if text != "" && !matchStateField(node.Text, text) {
+			continue
+		}
+		if testID != "" && !matchStateField(stateNodeTestID(node), testID) {
+			continue
+		}
+		if href != "" && !matchStateField(node.Attrs["href"], href) {
+			continue
+		}
+		filtered = append(filtered, node)
+	}
+
+	if options.Limit > 0 && len(filtered) > options.Limit {
+		return filtered[:options.Limit]
+	}
+	return filtered
+}
+
+func matchStateField(value string, needle string) bool {
+	normalized := normalizeFindValue(value)
+	if needle == "" {
+		return true
+	}
+	return normalized != "" && strings.Contains(normalized, needle)
+}
+
+func stateNodeTestID(node api.Node) string {
+	if node.Attrs["data-testid"] != "" {
+		return node.Attrs["data-testid"]
+	}
+	return node.Attrs["data-test"]
 }
 
 func observeTreeForFind(ctx context.Context, client *rpc.Client, sessionID string) (api.Observation, error) {
@@ -2885,6 +2968,91 @@ func isHelpArgs(args []string) bool {
 	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help")
 }
 
+func parseCommandFlags(fs *flag.FlagSet, args []string, stderr io.Writer, command string) error {
+	normalized := normalizeFlagArgs(fs, args)
+	output := fs.Output()
+	var buf bytes.Buffer
+	fs.SetOutput(&buf)
+	defer fs.SetOutput(output)
+
+	if err := fs.Parse(normalized); err != nil {
+		message := strings.TrimSpace(buf.String())
+		if message != "" {
+			fmt.Fprintln(stderr, message)
+		}
+		fmt.Fprintf(stderr, "hint: run `nxctl help %s` for details\n", command)
+		return err
+	}
+
+	return nil
+}
+
+func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
+	flags := make([]string, 0, len(args))
+	positionals := make([]string, 0, len(args))
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			positionals = append(positionals, args[i+1:]...)
+			break
+		}
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			positionals = append(positionals, arg)
+			continue
+		}
+
+		name, hasValue := parseFlagToken(arg)
+		flags = append(flags, arg)
+		if hasValue {
+			continue
+		}
+
+		defined := fs.Lookup(name)
+		if defined == nil || isBoolFlag(defined) {
+			continue
+		}
+		if i+1 >= len(args) {
+			continue
+		}
+
+		flags = append(flags, args[i+1])
+		i++
+	}
+
+	return append(flags, positionals...)
+}
+
+func parseFlagToken(arg string) (string, bool) {
+	trimmed := strings.TrimLeft(arg, "-")
+	if trimmed == "" {
+		return "", false
+	}
+	if index := strings.IndexByte(trimmed, '='); index >= 0 {
+		return trimmed[:index], true
+	}
+	return trimmed, false
+}
+
+func isBoolFlag(def *flag.Flag) bool {
+	if def == nil {
+		return false
+	}
+	getter, ok := def.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	_, ok = getter.Get().(bool)
+	return ok
+}
+
+func printCommandHint(stderr io.Writer, command string, example string) {
+	if strings.TrimSpace(example) != "" {
+		fmt.Fprintf(stderr, "hint: %s\n", example)
+	}
+	fmt.Fprintf(stderr, "hint: run `nxctl help %s` for details\n", command)
+}
+
 func printCommandHelp(w io.Writer, command string) bool {
 	switch command {
 	case "attach":
@@ -3074,7 +3242,7 @@ func printSessionsHelp(w io.Writer) {
 }
 
 func printStateHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl state [--session <id>] [--json] [--text] [--tree] [--screenshot] [--full]")
+	fmt.Fprintln(w, "usage: nxctl state [--session <id>] [--role <role>] [--name <text>] [--text <text>] [--testid <value>] [--href <value>] [--limit <n>] [--json]")
 }
 
 func printTypeHelp(w io.Writer) {

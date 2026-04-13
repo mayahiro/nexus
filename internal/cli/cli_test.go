@@ -128,7 +128,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected wait without args to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl wait selector`) {
+	if !strings.Contains(stdout.String(), `hint: nxctl wait selector ".ready"`) {
 		t.Fatalf("unexpected wait missing-args output: %s", stdout.String())
 	}
 }
@@ -536,6 +536,138 @@ func TestOpenAndState(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon did not stop")
+	}
+}
+
+func TestOpenFlagsFirst(t *testing.T) {
+	configureXDGTestEnv(t)
+	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+		return fakeLightpandaBackend{}
+	})
+	defer restoreBackend()
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- daemon.Run(ctx, paths, daemon.RunOptions{IdleTimeout: time.Second})
+	}()
+
+	waitForSocket(t, paths.Socket)
+
+	original := newBrowserManager
+	defer func() {
+		newBrowserManager = original
+	}()
+	newBrowserManager = func(config.Paths) browserManager {
+		return fakeBrowserManager{}
+	}
+
+	var openOut bytes.Buffer
+	args := []string{"open", "--backend", "lightpanda", "--session", "flags-first", "https://example.com"}
+	if code := Run(context.Background(), args, &openOut, &openOut); code != 0 {
+		t.Fatalf("unexpected open flags-first exit code: %d\n%s", code, openOut.String())
+	}
+	if !strings.Contains(openOut.String(), "attached browser flags-first (lightpanda) /tmp/lightpanda") {
+		t.Fatalf("unexpected open flags-first output: %s", openOut.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
+
+func TestStateFilters(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, findRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"state", "--role", "button", "--limit", "1"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected state filter exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `[@e1] button "Submit"`) {
+		t.Fatalf("unexpected state filter output: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `Cancel`) || strings.Contains(stdout.String(), `Sign In`) {
+		t.Fatalf("unexpected state filter output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"state", "--testid", "submit-primary", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected state json filter exit code: %d\n%s", code, stdout.String())
+	}
+	var observation api.Observation
+	if err := json.Unmarshal(stdout.Bytes(), &observation); err != nil {
+		t.Fatalf("unexpected state json filter output: %v\n%s", err, stdout.String())
+	}
+	if len(observation.Tree) != 1 || observation.Tree[0].Role != "button" {
+		t.Fatalf("unexpected filtered tree: %+v", observation.Tree)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCommandHints(t *testing.T) {
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"open"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected open without url to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "hint: nxctl open https://example.com --session work") {
+		t.Fatalf("unexpected open hint output: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "usage: nxctl <command>") {
+		t.Fatalf("unexpected global usage in open hint output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"click", "--bogus", "3"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected click parse failure\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "hint: run `nxctl help click` for details") {
+		t.Fatalf("unexpected click parse hint output: %s", stdout.String())
 	}
 }
 

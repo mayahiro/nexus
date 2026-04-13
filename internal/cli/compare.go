@@ -128,7 +128,7 @@ func runCompare(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	var ignoreRegex compareStringValues
 	fs.Var(&ignoreRegex, "ignore-text-regex", "regex to strip from text before compare")
 
-	if err := fs.Parse(args); err != nil {
+	if err := parseCommandFlags(fs, args, stderr, "compare"); err != nil {
 		return 1
 	}
 

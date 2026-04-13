@@ -95,6 +95,7 @@ Examples:
 nxctl open https://example.com
 nxctl open https://example.com --viewport 1440x900
 nxctl state
+nxctl state --role button --limit 20
 nxctl click @e3
 nxctl find role button click --name "Submit"
 nxctl find role link get attributes --name "Docs"
@@ -126,6 +127,9 @@ Available command groups include:
 - session control: `sessions`, `detach`, `close`
 
 Run `nxctl help <command>` for command-specific usage.
+
+Most command flags can be placed before or after positional arguments.
+Examples: `nxctl open --session work https://example.com`, `nxctl click @e3 --json`
 
 ## Viewport
 
