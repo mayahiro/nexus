@@ -75,6 +75,8 @@ nxctl wait selector ".ready"
 nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-network-idle
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
@@ -87,7 +89,9 @@ nxctl close
 ```
 
 When you need to compare migrated screens, use `compare` with two URLs or two existing sessions.
-Start with `--wait-selector` on a stable ready marker and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
+URL compare waits for `document.readyState === "complete"` by default.
+Add `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps rendering after load.
+Start with `--wait-selector` on a stable ready marker when you have one, and add `--ignore-text-regex` for dynamic timestamps or IDs that should not count as meaningful differences.
 Use `--ignore-selector` to drop nodes from comparison and `--mask-selector` to keep the node while suppressing text and value differences.
 Rules support `@eN`, `field=value`, and simple AND conditions such as `role=textbox&name=Email`.
 For multi-page audits, put URL or session pairs into a manifest JSON file and run `compare --manifest`.
@@ -98,6 +102,8 @@ Use this manifest shape for multi-page compare:
 {
   "defaults": {
     "wait_selector": ".ready",
+    "wait_function": "window.appReady === true",
+    "wait_network_idle": true,
     "wait_timeout": 10000,
     "ignore_text_regex": ["20\\d\\d-\\d\\d-\\d\\d"],
     "ignore_selector": ["role=link&text=Legacy"],
@@ -124,6 +130,7 @@ Manifest rules:
 - `pages` must contain at least one entry
 - each page must provide either `old_url/new_url` or `old_session/new_session`
 - `wait_selector` and `wait_timeout` override defaults per page
+- `wait_function` and `wait_network_idle` also support defaults and per-page override
 - `ignore_text_regex`, `ignore_selector`, and `mask_selector` are appended to defaults per page
 - `--continue-on-error` keeps processing later pages after one page fails
 - `--limit <n>` only runs the first `n` pages

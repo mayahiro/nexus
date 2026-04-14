@@ -69,6 +69,8 @@ type compareURLRPCHandler struct {
 	sessionObservations map[string]api.Observation
 	observations        map[string]api.Observation
 	observeCount        map[string]int
+	waitTargets         map[string][]string
+	waitValues          map[string][]string
 }
 
 func (compareRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
@@ -218,6 +220,16 @@ func (h *compareURLRPCHandler) ActSession(_ context.Context, req api.ActSessionR
 	if req.Action.Kind != "wait" {
 		return api.ActSessionResponse{}, nil
 	}
+	h.mu.Lock()
+	if h.waitTargets == nil {
+		h.waitTargets = map[string][]string{}
+	}
+	if h.waitValues == nil {
+		h.waitValues = map[string][]string{}
+	}
+	h.waitTargets[req.SessionID] = append(h.waitTargets[req.SessionID], req.Action.Args["target"])
+	h.waitValues[req.SessionID] = append(h.waitValues[req.SessionID], req.Action.Args["value"])
+	h.mu.Unlock()
 	return api.ActSessionResponse{
 		Result: api.ActionResult{
 			OK:      true,

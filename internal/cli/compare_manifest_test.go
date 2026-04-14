@@ -92,6 +92,8 @@ func TestCompareManifest(t *testing.T) {
 		"defaults": map[string]any{
 			"ignore_text_regex": []string{`20\d\d-\d\d-\d\d`},
 			"mask_selector":     []string{"role=textbox&name=Email"},
+			"wait_function":     `window.appReady === true`,
+			"wait_network_idle": true,
 		},
 		"pages": []map[string]any{
 			{
@@ -100,10 +102,11 @@ func TestCompareManifest(t *testing.T) {
 				"new_url": "https://new.example.test/dashboard",
 			},
 			{
-				"name":            "dashboard-session",
-				"old_session":     "old",
-				"new_session":     "new",
-				"ignore_selector": []string{"role=link"},
+				"name":              "dashboard-session",
+				"old_session":       "old",
+				"new_session":       "new",
+				"ignore_selector":   []string{"role=link"},
+				"wait_network_idle": false,
 			},
 		},
 	}
@@ -144,6 +147,17 @@ func TestCompareManifest(t *testing.T) {
 	}
 	if report.Pages[1].Name != "dashboard-session" || report.Pages[1].Report == nil {
 		t.Fatalf("unexpected second manifest page: %+v", report.Pages[1])
+	}
+	for _, sessionID := range handler.attachIDs {
+		if len(handler.waitValues[sessionID]) != 3 {
+			t.Fatalf("expected url manifest page waits for %s, got %#v", sessionID, handler.waitValues[sessionID])
+		}
+	}
+	if len(handler.waitValues["old"]) != 1 || handler.waitValues["old"][0] != `window.appReady === true` {
+		t.Fatalf("expected merged wait_function on old session page, got %#v", handler.waitValues["old"])
+	}
+	if len(handler.waitValues["new"]) != 1 || handler.waitValues["new"][0] != `window.appReady === true` {
+		t.Fatalf("expected merged wait_function on new session page, got %#v", handler.waitValues["new"])
 	}
 
 	cancel()

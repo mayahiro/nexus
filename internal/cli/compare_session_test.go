@@ -165,6 +165,106 @@ func TestCompareURLs(t *testing.T) {
 	if handler.attachIDs[0] == handler.attachIDs[1] {
 		t.Fatalf("compare url used duplicate temp session ids: %#v", handler.attachIDs)
 	}
+	for _, sessionID := range handler.attachIDs {
+		targets := handler.waitTargets[sessionID]
+		if len(targets) != 1 || targets[0] != "function" {
+			t.Fatalf("expected document-ready wait for %s, got %#v", sessionID, targets)
+		}
+		values := handler.waitValues[sessionID]
+		if len(values) != 1 || values[0] != `document.readyState === "complete"` {
+			t.Fatalf("expected document-ready expression for %s, got %#v", sessionID, values)
+		}
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareURLWaitOptions(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/orders": {
+				URLOrScreen: "https://old.example.test/orders",
+				Title:       "Orders",
+				Text:        "Orders stable",
+			},
+			"https://new.example.test/orders": {
+				URLOrScreen: "https://new.example.test/orders",
+				Title:       "Orders",
+				Text:        "Orders stable",
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"https://old.example.test/orders",
+		"https://new.example.test/orders",
+		"--target-ref", "/tmp/fake-chromium",
+		"--wait-function", `window.appReady === true`,
+		"--wait-network-idle",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare wait-options exit code: %d\n%s", code, stdout.String())
+	}
+
+	for _, sessionID := range handler.attachIDs {
+		targets := handler.waitTargets[sessionID]
+		if len(targets) != 3 {
+			t.Fatalf("expected three wait steps for %s, got %#v", sessionID, targets)
+		}
+		if targets[0] != "function" || targets[1] != "function" || targets[2] != "function" {
+			t.Fatalf("unexpected wait targets for %s: %#v", sessionID, targets)
+		}
+
+		values := handler.waitValues[sessionID]
+		if len(values) != 3 {
+			t.Fatalf("expected three wait values for %s, got %#v", sessionID, values)
+		}
+		if values[0] != `document.readyState === "complete"` {
+			t.Fatalf("unexpected document-ready wait for %s: %#v", sessionID, values)
+		}
+		if values[1] != `window.appReady === true` {
+			t.Fatalf("unexpected custom wait-function for %s: %#v", sessionID, values)
+		}
+		if !strings.Contains(values[2], `performance.getEntriesByType("resource")`) {
+			t.Fatalf("unexpected network-idle expression for %s: %#v", sessionID, values)
+		}
+	}
 
 	cancel()
 

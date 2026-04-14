@@ -112,6 +112,8 @@ nxctl wait selector ".ready"
 nxctl wait url "/done"
 nxctl wait navigation
 nxctl wait function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-function "window.appReady === true"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-network-idle
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
@@ -137,6 +139,9 @@ Run `nxctl help <command>` for command-specific usage.
 
 Most command flags can be placed before or after positional arguments.
 Examples: `nxctl open --session work https://example.com`, `nxctl click @e3 --json`
+
+`compare` waits for document load completion on URL-based runs.
+Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
 
 ## Viewport
 

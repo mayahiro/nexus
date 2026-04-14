@@ -79,6 +79,8 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		TargetRef:       base.TargetRef,
 		Viewport:        base.Viewport,
 		WaitSelector:    base.WaitSelector,
+		WaitFunction:    base.WaitFunction,
+		WaitNetworkIdle: base.WaitNetworkIdle,
 		WaitTimeout:     base.WaitTimeout,
 		IgnoreTextRegex: append([]string(nil), base.IgnoreTextRegex...),
 		IgnoreSelector:  append([]string(nil), base.IgnoreSelector...),
@@ -87,6 +89,12 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 
 	if defaults.WaitSelector != "" {
 		run.WaitSelector = defaults.WaitSelector
+	}
+	if defaults.WaitFunction != "" {
+		run.WaitFunction = defaults.WaitFunction
+	}
+	if defaults.WaitNetworkIdle {
+		run.WaitNetworkIdle = true
 	}
 	if defaults.WaitTimeout != nil {
 		run.WaitTimeout = *defaults.WaitTimeout
@@ -97,6 +105,12 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 
 	if page.WaitSelector != nil {
 		run.WaitSelector = strings.TrimSpace(*page.WaitSelector)
+	}
+	if page.WaitFunction != nil {
+		run.WaitFunction = strings.TrimSpace(*page.WaitFunction)
+	}
+	if page.WaitNetworkIdle != nil {
+		run.WaitNetworkIdle = *page.WaitNetworkIdle
 	}
 	if page.WaitTimeout != nil {
 		run.WaitTimeout = *page.WaitTimeout

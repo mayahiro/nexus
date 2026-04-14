@@ -2,6 +2,7 @@ package comparecmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -78,19 +79,40 @@ func cleanupCompareSession(ctx context.Context, client *rpc.Client, prepared pre
 }
 
 func waitForCompareSelector(ctx context.Context, client *rpc.Client, sessionID string, selector string, timeout int) error {
-	_, err := client.ActSession(ctx, api.ActSessionRequest{
+	return runCompareWaitAction(ctx, client, sessionID, map[string]string{
+		"target":     "selector",
+		"value":      selector,
+		"state":      "visible",
+		"timeout_ms": strconv.Itoa(timeout),
+	})
+}
+
+func waitForCompareFunction(ctx context.Context, client *rpc.Client, sessionID string, source string, timeout int) error {
+	return runCompareWaitAction(ctx, client, sessionID, map[string]string{
+		"target":     "function",
+		"value":      source,
+		"timeout_ms": strconv.Itoa(timeout),
+	})
+}
+
+func runCompareWaitAction(ctx context.Context, client *rpc.Client, sessionID string, args map[string]string) error {
+	res, err := client.ActSession(ctx, api.ActSessionRequest{
 		SessionID: sessionID,
 		Action: api.Action{
 			Kind: "wait",
-			Args: map[string]string{
-				"target":     "selector",
-				"value":      selector,
-				"state":      "visible",
-				"timeout_ms": strconv.Itoa(timeout),
-			},
+			Args: args,
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	if res.Result.OK {
+		return nil
+	}
+	if strings.TrimSpace(res.Result.Message) != "" {
+		return errors.New(res.Result.Message)
+	}
+	return fmt.Errorf("wait %s failed", strings.TrimSpace(args["target"]))
 }
 
 func observeCompareSession(ctx context.Context, client *rpc.Client, sessionID string) (api.Observation, error) {
@@ -127,4 +149,32 @@ func waitForCompareURLReady(ctx context.Context, client *rpc.Client, sessionID s
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+func waitForCompareDocumentReady(ctx context.Context, client *rpc.Client, sessionID string, timeout int) error {
+	return waitForCompareFunction(ctx, client, sessionID, `document.readyState === "complete"`, timeout)
+}
+
+func waitForCompareNetworkIdle(ctx context.Context, client *rpc.Client, sessionID string, timeout int) error {
+	idleWindow := strconv.FormatInt(compareNetworkIdleWindow.Milliseconds(), 10)
+	return waitForCompareFunction(ctx, client, sessionID, `(function () {
+  if (document.readyState !== "complete") {
+    return false;
+  }
+  const now = performance.now();
+  let last = 0;
+  const navigation = performance.getEntriesByType("navigation");
+  if (navigation.length > 0) {
+    const entry = navigation[0];
+    last = Math.max(last, entry.loadEventEnd || entry.domComplete || entry.responseEnd || 0);
+  }
+  const resources = performance.getEntriesByType("resource");
+  for (const entry of resources) {
+    const end = entry.responseEnd || entry.fetchStart || entry.startTime || 0;
+    if (end > last) {
+      last = end;
+    }
+  }
+  return now - last >= `+idleWindow+`;
+})()`, timeout)
 }

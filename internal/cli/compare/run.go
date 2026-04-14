@@ -38,6 +38,8 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
+	waitFunction := fs.String("wait-function", "", "wait until javascript expression returns true before compare")
+	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
 	outputJSON := fs.String("output-json", "", "write compare report json to file")
@@ -99,6 +101,8 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		TargetRef:       *targetRef,
 		Viewport:        *viewport,
 		WaitSelector:    *waitSelector,
+		WaitFunction:    *waitFunction,
+		WaitNetworkIdle: *waitNetworkIdle,
 		WaitTimeout:     *waitTimeout,
 		IgnoreTextRegex: append([]string(nil), ignoreRegex...),
 		IgnoreSelector:  append([]string(nil), ignoreSelector...),
@@ -227,11 +231,28 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		if err := waitForCompareURLReady(ctx, client, endpoint.prepared.SessionID); err != nil {
 			return compareReport{}, err
 		}
+		if err := waitForCompareDocumentReady(ctx, client, endpoint.prepared.SessionID, run.WaitTimeout); err != nil {
+			return compareReport{}, err
+		}
 	}
 
 	if strings.TrimSpace(run.WaitSelector) != "" {
 		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
 			if err := waitForCompareSelector(ctx, client, prepared.SessionID, run.WaitSelector, run.WaitTimeout); err != nil {
+				return compareReport{}, err
+			}
+		}
+	}
+	if strings.TrimSpace(run.WaitFunction) != "" {
+		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
+			if err := waitForCompareFunction(ctx, client, prepared.SessionID, run.WaitFunction, run.WaitTimeout); err != nil {
+				return compareReport{}, err
+			}
+		}
+	}
+	if run.WaitNetworkIdle {
+		for _, prepared := range []preparedCompareSession{oldPrepared, newPrepared} {
+			if err := waitForCompareNetworkIdle(ctx, client, prepared.SessionID, run.WaitTimeout); err != nil {
 				return compareReport{}, err
 			}
 		}

@@ -97,6 +97,8 @@ type compareManifest struct {
 
 type compareManifestDefaults struct {
 	WaitSelector    string   `json:"wait_selector,omitempty"`
+	WaitFunction    string   `json:"wait_function,omitempty"`
+	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
@@ -110,6 +112,8 @@ type compareManifestPage struct {
 	OldSession      string   `json:"old_session,omitempty"`
 	NewSession      string   `json:"new_session,omitempty"`
 	WaitSelector    *string  `json:"wait_selector,omitempty"`
+	WaitFunction    *string  `json:"wait_function,omitempty"`
+	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
@@ -147,6 +151,8 @@ type compareRun struct {
 	TargetRef       string
 	Viewport        string
 	WaitSelector    string
+	WaitFunction    string
+	WaitNetworkIdle bool
 	WaitTimeout     int
 	IgnoreTextRegex []string
 	IgnoreSelector  []string
@@ -174,5 +180,6 @@ type compareSnapshotOptions struct {
 }
 
 const compareURLReadyTimeout = 10 * time.Second
+const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
