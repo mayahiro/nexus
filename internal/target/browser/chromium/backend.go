@@ -146,13 +146,70 @@ func observeTreeExpression(cssProperties []string) string {
   const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 
   const cssProperties = [` + strings.Join(properties, ",") + `];
+  const colorPropertyPattern = /(^|-)color$/;
+  const colorPropertyNames = new Set(['fill', 'stroke']);
+  const colorProbe = document.createElement('span');
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = 1;
+  colorCanvas.height = 1;
+  const colorContext = colorCanvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+
+  const isColorProperty = (property) => colorPropertyPattern.test(property) || colorPropertyNames.has(property);
+
+  const formatColorNumber = (value) => {
+    const rounded = Math.round(value * 10000) / 10000;
+    if (Math.abs(rounded) < 0.00005) return '0';
+    return rounded.toFixed(4).replace(/\.?0+$/, '');
+  };
+
+  const normalizeColorValue = (value) => {
+    if (!colorContext || !value) return value;
+
+    colorProbe.style.color = '';
+    colorProbe.style.color = value;
+    if (!colorProbe.style.color) return value;
+
+    colorContext.clearRect(0, 0, 1, 1);
+    colorContext.globalCompositeOperation = 'copy';
+    colorContext.fillStyle = value;
+    colorContext.fillRect(0, 0, 1, 1);
+
+    try {
+      const imageData = colorContext.getImageData(0, 0, 1, 1, { colorSpace: 'srgb', pixelFormat: 'rgba-float16' });
+      if (imageData && imageData.pixelFormat === 'rgba-float16' && imageData.data.length >= 4) {
+        const red = Math.min(Math.max(imageData.data[0] * 255, 0), 255);
+        const green = Math.min(Math.max(imageData.data[1] * 255, 0), 255);
+        const blue = Math.min(Math.max(imageData.data[2] * 255, 0), 255);
+        const alpha = Math.min(Math.max(imageData.data[3], 0), 1);
+        if (alpha >= 0.99995) {
+          return 'rgb(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ')';
+        }
+        return 'rgba(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ', ' + formatColorNumber(alpha) + ')';
+      }
+    } catch (error) {
+    }
+
+    const imageData = colorContext.getImageData(0, 0, 1, 1);
+    if (!imageData || imageData.data.length < 4) return value;
+
+    const alpha = imageData.data[3] / 255;
+    if (imageData.data[3] === 255) {
+      return 'rgb(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ')';
+    }
+    return 'rgba(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ', ' + formatColorNumber(alpha) + ')';
+  };
+
+  const normalizeStyleValue = (property, value) => {
+    if (!isColorProperty(property)) return value;
+    return normalizeColorValue(value);
+  };
 
   const stylesFor = (el) => {
     if (cssProperties.length === 0) return {};
     const style = window.getComputedStyle(el);
     const values = {};
     for (const property of cssProperties) {
-      values[property] = style.getPropertyValue(property).trim();
+      values[property] = normalizeStyleValue(property, style.getPropertyValue(property).trim());
     }
     return values;
   };

@@ -249,6 +249,20 @@ func TestEvalExpression(t *testing.T) {
 	}
 }
 
+func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
+	script := observeTreeExpression([]string{"color", "fill", "pointer-events"})
+
+	if !strings.Contains(script, "normalizeStyleValue(property, style.getPropertyValue(property).trim())") {
+		t.Fatalf("expected color normalization in script: %s", script)
+	}
+	if !strings.Contains(script, "rgba-float16") {
+		t.Fatalf("expected float16 color normalization fallback in script: %s", script)
+	}
+	if !strings.Contains(script, "new Set(['fill', 'stroke'])") {
+		t.Fatalf("expected non-suffix color properties in script: %s", script)
+	}
+}
+
 func TestClickExpression(t *testing.T) {
 	script := clickExpression(7)
 
