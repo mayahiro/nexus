@@ -15,6 +15,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--wait-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
+	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, wait_*, ignore_selector, and mask_selector")
 }
 
 func isHelpArgs(args []string) bool {

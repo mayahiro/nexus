@@ -96,6 +96,8 @@ type compareManifest struct {
 }
 
 type compareManifestDefaults struct {
+	Backend         string   `json:"backend,omitempty"`
+	Viewport        string   `json:"viewport,omitempty"`
 	WaitSelector    string   `json:"wait_selector,omitempty"`
 	WaitFunction    string   `json:"wait_function,omitempty"`
 	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
@@ -111,6 +113,8 @@ type compareManifestPage struct {
 	NewURL          string   `json:"new_url,omitempty"`
 	OldSession      string   `json:"old_session,omitempty"`
 	NewSession      string   `json:"new_session,omitempty"`
+	Backend         *string  `json:"backend,omitempty"`
+	Viewport        *string  `json:"viewport,omitempty"`
 	WaitSelector    *string  `json:"wait_selector,omitempty"`
 	WaitFunction    *string  `json:"wait_function,omitempty"`
 	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`

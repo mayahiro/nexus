@@ -171,3 +171,150 @@ func TestCompareManifest(t *testing.T) {
 		t.Fatal("rpc server did not stop")
 	}
 }
+
+func TestCompareManifestAppliesBackendAndViewportOverrides(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/defaults": {
+				URLOrScreen: "https://old.example.test/defaults",
+				Title:       "Defaults",
+				Text:        "Defaults",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Defaults", Visible: true, Enabled: true},
+				},
+			},
+			"https://new.example.test/defaults": {
+				URLOrScreen: "https://new.example.test/defaults",
+				Title:       "Defaults",
+				Text:        "Defaults",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Defaults", Visible: true, Enabled: true},
+				},
+			},
+			"https://old.example.test/override": {
+				URLOrScreen: "https://old.example.test/override",
+				Title:       "Override",
+				Text:        "Override",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Override", Visible: true, Enabled: true},
+				},
+			},
+			"https://new.example.test/override": {
+				URLOrScreen: "https://new.example.test/override",
+				Title:       "Override",
+				Text:        "Override",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Override", Visible: true, Enabled: true},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	manifestPath := filepath.Join(t.TempDir(), "compare-manifest.json")
+	manifest := map[string]any{
+		"defaults": map[string]any{
+			"backend":  "chromium",
+			"viewport": "1440x900",
+		},
+		"pages": []map[string]any{
+			{
+				"name":    "defaults",
+				"old_url": "https://old.example.test/defaults",
+				"new_url": "https://new.example.test/defaults",
+			},
+			{
+				"name":     "override",
+				"old_url":  "https://old.example.test/override",
+				"new_url":  "https://new.example.test/override",
+				"backend":  "lightpanda",
+				"viewport": "1280x720",
+			},
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--manifest", manifestPath,
+		"--target-ref", "/tmp/fake-browser",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare manifest exit code: %d\n%s", code, stdout.String())
+	}
+
+	countAttaches := func(url string, backend string, width string, height string) int {
+		handler.mu.Lock()
+		defer handler.mu.Unlock()
+
+		total := 0
+		for _, req := range handler.attachRequests {
+			if req.Options["initial_url"] != url {
+				continue
+			}
+			if req.Backend != backend {
+				continue
+			}
+			if req.Options["viewport_width"] != width || req.Options["viewport_height"] != height {
+				continue
+			}
+			total++
+		}
+		return total
+	}
+
+	if countAttaches("https://old.example.test/defaults", "chromium", "1440", "900") != 1 {
+		t.Fatalf("expected defaults old url attach request to use chromium 1440x900, got %#v", handler.attachRequests)
+	}
+	if countAttaches("https://new.example.test/defaults", "chromium", "1440", "900") != 1 {
+		t.Fatalf("expected defaults new url attach request to use chromium 1440x900, got %#v", handler.attachRequests)
+	}
+	if countAttaches("https://old.example.test/override", "lightpanda", "1280", "720") != 1 {
+		t.Fatalf("expected override old url attach request to use lightpanda 1280x720, got %#v", handler.attachRequests)
+	}
+	if countAttaches("https://new.example.test/override", "lightpanda", "1280", "720") != 1 {
+		t.Fatalf("expected override new url attach request to use lightpanda 1280x720, got %#v", handler.attachRequests)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}

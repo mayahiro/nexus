@@ -125,6 +125,8 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
+In compare manifests, `backend` and `viewport` can be set in `defaults` and overridden per page.
+
 Available command groups include:
 
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`

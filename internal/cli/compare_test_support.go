@@ -65,6 +65,7 @@ type compareRPCHandler struct{}
 type compareURLRPCHandler struct {
 	mu                  sync.Mutex
 	attachIDs           []string
+	attachRequests      map[string]api.AttachSessionRequest
 	sessionURLs         map[string]string
 	sessionObservations map[string]api.Observation
 	observations        map[string]api.Observation
@@ -158,6 +159,10 @@ func (h *compareURLRPCHandler) AttachSession(_ context.Context, req api.AttachSe
 	}
 
 	h.attachIDs = append(h.attachIDs, req.SessionID)
+	if h.attachRequests == nil {
+		h.attachRequests = map[string]api.AttachSessionRequest{}
+	}
+	h.attachRequests[req.SessionID] = req
 	if h.sessionURLs == nil {
 		h.sessionURLs = map[string]string{}
 	}

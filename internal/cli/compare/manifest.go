@@ -90,6 +90,12 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	if defaults.WaitSelector != "" {
 		run.WaitSelector = defaults.WaitSelector
 	}
+	if strings.TrimSpace(defaults.Backend) != "" {
+		run.Backend = strings.TrimSpace(defaults.Backend)
+	}
+	if strings.TrimSpace(defaults.Viewport) != "" {
+		run.Viewport = strings.TrimSpace(defaults.Viewport)
+	}
 	if defaults.WaitFunction != "" {
 		run.WaitFunction = defaults.WaitFunction
 	}
@@ -105,6 +111,12 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 
 	if page.WaitSelector != nil {
 		run.WaitSelector = strings.TrimSpace(*page.WaitSelector)
+	}
+	if page.Backend != nil && strings.TrimSpace(*page.Backend) != "" {
+		run.Backend = strings.TrimSpace(*page.Backend)
+	}
+	if page.Viewport != nil && strings.TrimSpace(*page.Viewport) != "" {
+		run.Viewport = strings.TrimSpace(*page.Viewport)
 	}
 	if page.WaitFunction != nil {
 		run.WaitFunction = strings.TrimSpace(*page.WaitFunction)

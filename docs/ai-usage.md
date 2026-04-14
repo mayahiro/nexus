@@ -101,6 +101,8 @@ Use this manifest shape for multi-page compare:
 ```json
 {
   "defaults": {
+    "backend": "chromium",
+    "viewport": "1440x900",
     "wait_selector": ".ready",
     "wait_function": "window.appReady === true",
     "wait_network_idle": true,
@@ -119,6 +121,8 @@ Use this manifest shape for multi-page compare:
       "name": "orders-session",
       "old_session": "old",
       "new_session": "new",
+      "backend": "lightpanda",
+      "viewport": "1280x720",
       "ignore_selector": ["role=link"]
     }
   ]
@@ -129,6 +133,7 @@ Manifest rules:
 
 - `pages` must contain at least one entry
 - each page must provide either `old_url/new_url` or `old_session/new_session`
+- `backend` and `viewport` support defaults and per-page override
 - `wait_selector` and `wait_timeout` override defaults per page
 - `wait_function` and `wait_network_idle` also support defaults and per-page override
 - `ignore_text_regex`, `ignore_selector`, and `mask_selector` are appended to defaults per page
