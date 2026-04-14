@@ -39,6 +39,7 @@ type compareSummaryJSON struct {
 type compareFindingJSON struct {
 	Severity string `json:"severity"`
 	Impact   string `json:"impact"`
+	Locator  string `json:"locator"`
 	Field    string `json:"field"`
 }
 

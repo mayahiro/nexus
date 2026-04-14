@@ -163,6 +163,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 				node := newNodes[i]
 				add(compareFinding{
 					Kind:        "new_node",
+					Locator:     compareFindingLocator(nil, &node),
 					Fingerprint: node.Fingerprint,
 					Role:        node.Role,
 					Label:       node.Label,
@@ -171,6 +172,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 				node := oldNodes[i]
 				add(compareFinding{
 					Kind:        "missing_node",
+					Locator:     compareFindingLocator(&node, nil),
 					Fingerprint: node.Fingerprint,
 					Role:        node.Role,
 					Label:       node.Label,
@@ -178,9 +180,11 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 			default:
 				oldNode := oldNodes[i]
 				newNode := newNodes[i]
+				locator := compareFindingLocator(&oldNode, &newNode)
 				if oldNode.Name != newNode.Name {
 					add(compareFinding{
 						Kind:        "text_changed",
+						Locator:     locator,
 						Fingerprint: oldNode.Fingerprint,
 						Role:        oldNode.Role,
 						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
@@ -192,6 +196,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 				if oldNode.Text != newNode.Text {
 					add(compareFinding{
 						Kind:        "text_changed",
+						Locator:     locator,
 						Fingerprint: oldNode.Fingerprint,
 						Role:        oldNode.Role,
 						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
@@ -203,6 +208,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 				if oldNode.Value != newNode.Value {
 					add(compareFinding{
 						Kind:        "text_changed",
+						Locator:     locator,
 						Fingerprint: oldNode.Fingerprint,
 						Role:        oldNode.Role,
 						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
@@ -216,6 +222,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 				if oldState != newState {
 					add(compareFinding{
 						Kind:        "state_changed",
+						Locator:     locator,
 						Fingerprint: oldNode.Fingerprint,
 						Role:        oldNode.Role,
 						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
@@ -235,6 +242,7 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 					}
 					add(compareFinding{
 						Kind:        "css_changed",
+						Locator:     locator,
 						Fingerprint: oldNode.Fingerprint,
 						Role:        oldNode.Role,
 						Label:       firstNonEmpty(oldNode.Label, newNode.Label),

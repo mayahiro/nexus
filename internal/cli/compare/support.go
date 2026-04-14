@@ -126,3 +126,106 @@ func parseViewport(value string) (int, int, error) {
 
 	return width, height, nil
 }
+
+func compareFindingLocator(oldNode *compareSnapshotNode, newNode *compareSnapshotNode) string {
+	switch {
+	case oldNode == nil && newNode == nil:
+		return ""
+	case oldNode == nil:
+		return compareNodeLocator(*newNode)
+	case newNode == nil:
+		return compareNodeLocator(*oldNode)
+	default:
+		return compareSharedNodeLocator(*oldNode, *newNode)
+	}
+}
+
+func compareSharedNodeLocator(oldNode compareSnapshotNode, newNode compareSnapshotNode) string {
+	if testID := compareSharedValue(oldNode.TestID, newNode.TestID); testID != "" {
+		return compareQuotedLocator("testid", testID)
+	}
+	if href := compareSharedValue(oldNode.Href, newNode.Href); href != "" {
+		return compareQuotedLocator("href", href)
+	}
+	if label := compareSharedLabel(oldNode, newNode); label != "" {
+		return compareQuotedLocator("label", label)
+	}
+	if role := compareSharedRoleNameLocator(oldNode, newNode); role != "" {
+		return role
+	}
+	if text := compareSharedValue(oldNode.Text, newNode.Text); text != "" {
+		return compareQuotedLocator("text", text)
+	}
+	return ""
+}
+
+func compareNodeLocator(node compareSnapshotNode) string {
+	if node.TestID != "" {
+		return compareQuotedLocator("testid", node.TestID)
+	}
+	if node.Href != "" {
+		return compareQuotedLocator("href", node.Href)
+	}
+	if label := compareNodeLabelLocator(node); label != "" {
+		return compareQuotedLocator("label", label)
+	}
+	if role := compareNodeRoleNameLocator(node); role != "" {
+		return role
+	}
+	if node.Text != "" {
+		return compareQuotedLocator("text", node.Text)
+	}
+	return ""
+}
+
+func compareSharedValue(oldValue string, newValue string) string {
+	if oldValue == "" || oldValue != newValue {
+		return ""
+	}
+	return oldValue
+}
+
+func compareSharedLabel(oldNode compareSnapshotNode, newNode compareSnapshotNode) string {
+	if !compareSupportsLabelLocator(oldNode) || !compareSupportsLabelLocator(newNode) {
+		return ""
+	}
+	return compareSharedValue(oldNode.Name, newNode.Name)
+}
+
+func compareNodeLabelLocator(node compareSnapshotNode) string {
+	if !compareSupportsLabelLocator(node) {
+		return ""
+	}
+	return node.Name
+}
+
+func compareSupportsLabelLocator(node compareSnapshotNode) bool {
+	if node.Editable || node.Selectable {
+		return true
+	}
+	return strings.EqualFold(node.Role, "textbox") || strings.EqualFold(node.Role, "combobox")
+}
+
+func compareSharedRoleNameLocator(oldNode compareSnapshotNode, newNode compareSnapshotNode) string {
+	if !strings.EqualFold(oldNode.Role, newNode.Role) {
+		return ""
+	}
+	if oldNode.Name == "" || oldNode.Name != newNode.Name {
+		return ""
+	}
+	return fmt.Sprintf("role %s --name %s", oldNode.Role, strconv.Quote(oldNode.Name))
+}
+
+func compareNodeRoleNameLocator(node compareSnapshotNode) string {
+	if node.Role == "" || node.Name == "" {
+		return ""
+	}
+	return fmt.Sprintf("role %s --name %s", node.Role, strconv.Quote(node.Name))
+}
+
+func compareQuotedLocator(kind string, value string) string {
+	if value == "" {
+		return ""
+	}
+	return kind + " " + strconv.Quote(value)
+}

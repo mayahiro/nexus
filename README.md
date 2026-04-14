@@ -159,6 +159,7 @@ Examples: `nxctl open --session work https://example.com`, `nxctl navigate --ses
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
+Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 

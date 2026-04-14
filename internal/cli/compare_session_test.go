@@ -79,6 +79,15 @@ func TestCompare(t *testing.T) {
 	if report.Findings[0].Severity == "" || report.Findings[0].Impact == "" {
 		t.Fatalf("expected severity and impact in findings: %+v", report.Findings[0])
 	}
+	if report.Findings[1].Locator != "" {
+		t.Fatalf("expected no shared locator for renamed button: %+v", report.Findings[1])
+	}
+	if report.Findings[3].Locator != `label "Email"` {
+		t.Fatalf("expected label locator for email findings: %+v", report.Findings[3])
+	}
+	if report.Findings[4].Locator != `href "/legacy"` || report.Findings[5].Locator != `href "/next"` {
+		t.Fatalf("expected href locators for link findings: %+v", report.Findings)
+	}
 
 	cancel()
 
@@ -483,6 +492,9 @@ func TestCompareReportOutputs(t *testing.T) {
 	}
 	if !strings.Contains(md, "## Findings") {
 		t.Fatalf("unexpected markdown output: %s", md)
+	}
+	if !strings.Contains(md, "locator `label \"Email\"`") {
+		t.Fatalf("expected locator in markdown output: %s", md)
 	}
 
 	cancel()
