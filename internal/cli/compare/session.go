@@ -115,12 +115,13 @@ func runCompareWaitAction(ctx context.Context, client *rpc.Client, sessionID str
 	return fmt.Errorf("wait %s failed", strings.TrimSpace(args["target"]))
 }
 
-func observeCompareSession(ctx context.Context, client *rpc.Client, sessionID string) (api.Observation, error) {
+func observeCompareSession(ctx context.Context, client *rpc.Client, sessionID string, cssProperties []string) (api.Observation, error) {
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithText: true,
-			WithTree: true,
+			WithText:      true,
+			WithTree:      true,
+			CSSProperties: append([]string(nil), cssProperties...),
 		},
 	})
 	if err != nil {
@@ -134,7 +135,7 @@ func waitForCompareURLReady(ctx context.Context, client *rpc.Client, sessionID s
 	defer cancel()
 
 	for {
-		observation, err := observeCompareSession(waitCtx, client, sessionID)
+		observation, err := observeCompareSession(waitCtx, client, sessionID, nil)
 		if err != nil {
 			return err
 		}

@@ -318,3 +318,131 @@ func TestCompareManifestAppliesBackendAndViewportOverrides(t *testing.T) {
 		t.Fatal("rpc server did not stop")
 	}
 }
+
+func TestCompareManifestCSSOverrides(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/colors": {
+				URLOrScreen: "https://old.example.test/colors",
+				Title:       "Styles",
+				Text:        "Styles",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(0, 0, 0)", "display": "inline-block"}},
+				},
+			},
+			"https://new.example.test/colors": {
+				URLOrScreen: "https://new.example.test/colors",
+				Title:       "Styles",
+				Text:        "Styles",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(255, 0, 0)", "display": "block"}},
+				},
+			},
+			"https://old.example.test/disabled": {
+				URLOrScreen: "https://old.example.test/disabled",
+				Title:       "Disabled",
+				Text:        "Disabled",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(0, 0, 0)"}},
+				},
+			},
+			"https://new.example.test/disabled": {
+				URLOrScreen: "https://new.example.test/disabled",
+				Title:       "Disabled",
+				Text:        "Disabled",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(255, 0, 0)"}},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	manifestPath := filepath.Join(t.TempDir(), "compare-manifest.json")
+	manifest := map[string]any{
+		"defaults": map[string]any{
+			"compare_css":  true,
+			"css_property": []string{"display"},
+		},
+		"pages": []map[string]any{
+			{
+				"name":         "color-only",
+				"old_url":      "https://old.example.test/colors",
+				"new_url":      "https://new.example.test/colors",
+				"css_property": []string{"color"},
+			},
+			{
+				"name":        "css-disabled",
+				"old_url":     "https://old.example.test/disabled",
+				"new_url":     "https://new.example.test/disabled",
+				"compare_css": false,
+			},
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--manifest", manifestPath,
+		"--target-ref", "/tmp/fake-chromium",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare manifest css exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareManifestReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare manifest css json: %v\n%s", err, stdout.String())
+	}
+	if len(report.Pages) != 2 || report.Pages[0].Report == nil || report.Pages[1].Report == nil {
+		t.Fatalf("unexpected compare manifest css pages: %+v", report.Pages)
+	}
+	if report.Pages[0].Report.Summary.CSSChanged != 1 {
+		t.Fatalf("unexpected css override summary: %+v", report.Pages[0].Report.Summary)
+	}
+	if report.Pages[1].Report.Summary.CSSChanged != 0 || !report.Pages[1].Report.Summary.Same {
+		t.Fatalf("unexpected css disabled summary: %+v", report.Pages[1].Report.Summary)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}

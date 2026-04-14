@@ -81,7 +81,9 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		WaitSelector:    base.WaitSelector,
 		WaitFunction:    base.WaitFunction,
 		WaitNetworkIdle: base.WaitNetworkIdle,
+		CompareCSS:      base.CompareCSS,
 		WaitTimeout:     base.WaitTimeout,
+		CSSProperties:   append([]string(nil), base.CSSProperties...),
 		IgnoreTextRegex: append([]string(nil), base.IgnoreTextRegex...),
 		IgnoreSelector:  append([]string(nil), base.IgnoreSelector...),
 		MaskSelector:    append([]string(nil), base.MaskSelector...),
@@ -102,8 +104,14 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	if defaults.WaitNetworkIdle {
 		run.WaitNetworkIdle = true
 	}
+	if defaults.CompareCSS {
+		run.CompareCSS = true
+	}
 	if defaults.WaitTimeout != nil {
 		run.WaitTimeout = *defaults.WaitTimeout
+	}
+	if len(defaults.CSSProperty) > 0 {
+		run.CSSProperties = append([]string(nil), defaults.CSSProperty...)
 	}
 	run.IgnoreTextRegex = append(run.IgnoreTextRegex, defaults.IgnoreTextRegex...)
 	run.IgnoreSelector = append(run.IgnoreSelector, defaults.IgnoreSelector...)
@@ -124,8 +132,17 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	if page.WaitNetworkIdle != nil {
 		run.WaitNetworkIdle = *page.WaitNetworkIdle
 	}
+	if page.CompareCSS != nil {
+		run.CompareCSS = *page.CompareCSS
+		if !*page.CompareCSS && len(page.CSSProperty) == 0 {
+			run.CSSProperties = nil
+		}
+	}
 	if page.WaitTimeout != nil {
 		run.WaitTimeout = *page.WaitTimeout
+	}
+	if len(page.CSSProperty) > 0 {
+		run.CSSProperties = append([]string(nil), page.CSSProperty...)
 	}
 	run.IgnoreTextRegex = append(run.IgnoreTextRegex, page.IgnoreTextRegex...)
 	run.IgnoreSelector = append(run.IgnoreSelector, page.IgnoreSelector...)

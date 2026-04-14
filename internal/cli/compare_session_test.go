@@ -188,6 +188,77 @@ func TestCompareURLs(t *testing.T) {
 	}
 }
 
+func TestCompareCSSProperties(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, compareRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--css-property", "color",
+		"--css-property", "pointer-events",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare css exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare css json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.CSSChanged != 2 {
+		t.Fatalf("unexpected css_changed summary: %+v", report.Summary)
+	}
+	if report.Summary.Warning != 7 || report.Summary.Info != 2 {
+		t.Fatalf("unexpected severity summary: %+v", report.Summary)
+	}
+
+	fields := map[string]bool{}
+	for _, finding := range report.Findings {
+		if finding.Field == "color" || finding.Field == "pointer-events" {
+			fields[finding.Field] = true
+		}
+	}
+	if !fields["color"] || !fields["pointer-events"] {
+		t.Fatalf("expected css findings for color and pointer-events: %+v", report.Findings)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestCompareURLWaitOptions(t *testing.T) {
 	configureXDGTestEnv(t)
 

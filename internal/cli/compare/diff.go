@@ -35,6 +35,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			text = ""
 			value = ""
 		}
+		css := compareNodeCSS(node, options.CSSProperties)
 
 		nodes = append(nodes, compareSnapshotNode{
 			Fingerprint: fingerprint,
@@ -46,6 +47,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Value:       value,
 			Href:        href,
 			TestID:      testID,
+			CSS:         css,
 			Visible:     node.Visible,
 			Enabled:     node.Enabled,
 			Editable:    node.Editable,
@@ -99,6 +101,8 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 			report.Summary.NewNodes++
 		case "state_changed":
 			report.Summary.StateChanged++
+		case "css_changed":
+			report.Summary.CSSChanged++
 		case "page_text_changed":
 			report.Summary.PageTextChanged++
 		}
@@ -220,6 +224,25 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 						New:         newState,
 					})
 				}
+				for _, property := range sortedCompareCSSPropertyKeys(oldNode.CSS, newNode.CSS) {
+					oldValue := strings.TrimSpace(oldNode.CSS[property])
+					newValue := strings.TrimSpace(newNode.CSS[property])
+					if oldValue == "" && newValue == "" {
+						continue
+					}
+					if oldValue == newValue {
+						continue
+					}
+					add(compareFinding{
+						Kind:        "css_changed",
+						Fingerprint: oldNode.Fingerprint,
+						Role:        oldNode.Role,
+						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+						Field:       property,
+						Old:         oldValue,
+						New:         newValue,
+					})
+				}
 			}
 		}
 	}
@@ -275,6 +298,63 @@ func compareNodeState(node compareSnapshotNode) string {
 	}, "/")
 }
 
+func compareNodeCSS(node api.Node, properties []string) map[string]string {
+	if len(properties) == 0 {
+		return nil
+	}
+
+	values := make(map[string]string, len(properties))
+	for _, property := range properties {
+		values[property] = strings.TrimSpace(node.Styles[property])
+	}
+	return values
+}
+
+func sortedCompareCSSPropertyKeys(left map[string]string, right map[string]string) []string {
+	keys := make([]string, 0, len(left)+len(right))
+	seen := map[string]struct{}{}
+	for _, current := range []map[string]string{left, right} {
+		for key := range current {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func resolveCompareCSSProperties(compareCSS bool, requested []string) []string {
+	if len(requested) == 0 && !compareCSS {
+		return nil
+	}
+
+	source := requested
+	if len(source) == 0 {
+		source = defaultCompareCSSProperties
+	}
+
+	values := make([]string, 0, len(source))
+	seen := map[string]struct{}{}
+	for _, property := range source {
+		trimmed := strings.TrimSpace(property)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		values = append(values, trimmed)
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	return values
+}
+
 func summarizeCompareValue(value string) string {
 	trimmed := strings.TrimSpace(value)
 	if len(trimmed) <= 120 {
@@ -312,6 +392,13 @@ func classifyCompareFinding(finding compareFinding) (string, string) {
 			}
 		}
 		return "warning", "content_changed"
+	case "css_changed":
+		switch finding.Field {
+		case "display", "visibility", "opacity", "pointer-events":
+			return "warning", "content_changed"
+		default:
+			return "info", "content_changed"
+		}
 	case "text_changed":
 		if finding.Role == "textbox" || finding.Role == "combobox" {
 			return "warning", "form_input_changed"

@@ -41,20 +41,21 @@ type compareSnapshot struct {
 }
 
 type compareSnapshotNode struct {
-	Fingerprint string `json:"fingerprint"`
-	Ref         string `json:"ref,omitempty"`
-	Role        string `json:"role"`
-	Label       string `json:"label,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Text        string `json:"text,omitempty"`
-	Value       string `json:"value,omitempty"`
-	Href        string `json:"href,omitempty"`
-	TestID      string `json:"testid,omitempty"`
-	Visible     bool   `json:"visible"`
-	Enabled     bool   `json:"enabled"`
-	Editable    bool   `json:"editable"`
-	Selectable  bool   `json:"selectable"`
-	Invokable   bool   `json:"invokable"`
+	Fingerprint string            `json:"fingerprint"`
+	Ref         string            `json:"ref,omitempty"`
+	Role        string            `json:"role"`
+	Label       string            `json:"label,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Text        string            `json:"text,omitempty"`
+	Value       string            `json:"value,omitempty"`
+	Href        string            `json:"href,omitempty"`
+	TestID      string            `json:"testid,omitempty"`
+	CSS         map[string]string `json:"css,omitempty"`
+	Visible     bool              `json:"visible"`
+	Enabled     bool              `json:"enabled"`
+	Editable    bool              `json:"editable"`
+	Selectable  bool              `json:"selectable"`
+	Invokable   bool              `json:"invokable"`
 }
 
 type compareSummary struct {
@@ -65,6 +66,7 @@ type compareSummary struct {
 	MissingNodes    int  `json:"missing_nodes"`
 	NewNodes        int  `json:"new_nodes"`
 	StateChanged    int  `json:"state_changed"`
+	CSSChanged      int  `json:"css_changed"`
 	PageTextChanged int  `json:"page_text_changed"`
 	Critical        int  `json:"critical"`
 	Warning         int  `json:"warning"`
@@ -101,7 +103,9 @@ type compareManifestDefaults struct {
 	WaitSelector    string   `json:"wait_selector,omitempty"`
 	WaitFunction    string   `json:"wait_function,omitempty"`
 	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
+	CompareCSS      bool     `json:"compare_css,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
+	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
 	MaskSelector    []string `json:"mask_selector,omitempty"`
@@ -118,7 +122,9 @@ type compareManifestPage struct {
 	WaitSelector    *string  `json:"wait_selector,omitempty"`
 	WaitFunction    *string  `json:"wait_function,omitempty"`
 	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`
+	CompareCSS      *bool    `json:"compare_css,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
+	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
 	MaskSelector    []string `json:"mask_selector,omitempty"`
@@ -157,7 +163,9 @@ type compareRun struct {
 	WaitSelector    string
 	WaitFunction    string
 	WaitNetworkIdle bool
+	CompareCSS      bool
 	WaitTimeout     int
+	CSSProperties   []string
 	IgnoreTextRegex []string
 	IgnoreSelector  []string
 	MaskSelector    []string
@@ -178,12 +186,25 @@ type compareSelectorTerm struct {
 }
 
 type compareSnapshotOptions struct {
-	IgnoreText []*regexp.Regexp
-	IgnoreNode []compareSelectorRule
-	MaskNode   []compareSelectorRule
+	IgnoreText    []*regexp.Regexp
+	IgnoreNode    []compareSelectorRule
+	MaskNode      []compareSelectorRule
+	CSSProperties []string
 }
 
 const compareURLReadyTimeout = 10 * time.Second
 const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
+
+var defaultCompareCSSProperties = []string{
+	"color",
+	"background-color",
+	"font-size",
+	"font-weight",
+	"line-height",
+	"display",
+	"visibility",
+	"opacity",
+	"pointer-events",
+}

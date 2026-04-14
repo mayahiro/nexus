@@ -115,6 +115,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `nxctl compare --manifest <file>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `--compare-css`) || !strings.Contains(stdout.String(), `--css-property <name>`) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {

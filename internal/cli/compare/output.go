@@ -85,6 +85,9 @@ func printCompareReport(w io.Writer, report compareReport) {
 	if report.Summary.StateChanged > 0 {
 		fmt.Fprintf(w, "state_changed: %d\n", report.Summary.StateChanged)
 	}
+	if report.Summary.CSSChanged > 0 {
+		fmt.Fprintf(w, "css_changed: %d\n", report.Summary.CSSChanged)
+	}
 
 	fmt.Fprintln(w)
 	for _, finding := range report.Findings {
@@ -101,6 +104,8 @@ func printCompareReport(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "[%s] [text_changed] %s %s %q %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		case "state_changed":
 			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q: %s -> %s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+		case "css_changed":
+			fmt.Fprintf(w, "[%s] [css_changed] %s %s %q %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		}
 	}
 }
@@ -166,6 +171,8 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		case "state_changed":
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+		case "css_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 		}
 	}
 }
@@ -218,6 +225,8 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 			case "state_changed":
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New)
+			case "css_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New)
 			}
 		}
 	}

@@ -169,6 +169,7 @@ func TestParseTreeJSON(t *testing.T) {
 			"name": " Submit ",
 			"text": " Submit ",
 			"value": "",
+			"styles": {"color": "rgb(0, 0, 0)"},
 			"bounds": {"x": 10, "y": 20, "w": 30, "h": 40},
 			"visible": true,
 			"enabled": true,
@@ -187,6 +188,7 @@ func TestParseTreeJSON(t *testing.T) {
 			"name": "Search",
 			"text": "",
 			"value": "hello",
+			"styles": {"pointer-events": "auto"},
 			"bounds": {"x": 50, "y": 60, "w": 70, "h": 80},
 			"visible": true,
 			"enabled": true,
@@ -229,6 +231,9 @@ func TestParseTreeJSON(t *testing.T) {
 	}
 	if tree[1].Value != "hello" || !tree[1].Focused || !tree[1].Editable {
 		t.Fatalf("unexpected node: %+v", tree[1])
+	}
+	if tree[0].Styles["color"] != "rgb(0, 0, 0)" || tree[1].Styles["pointer-events"] != "auto" {
+		t.Fatalf("unexpected node styles: %+v", tree)
 	}
 }
 

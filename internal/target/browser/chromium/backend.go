@@ -34,7 +34,17 @@ const pageTargetTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
-const observeTreeJS = `(function () {
+func observeTreeExpression(cssProperties []string) string {
+	properties := make([]string, 0, len(cssProperties))
+	for _, value := range cssProperties {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		properties = append(properties, strconv.Quote(trimmed))
+	}
+
+	return `(function () {
   const selector = [
     'button',
     'a[href]',
@@ -135,6 +145,18 @@ const observeTreeJS = `(function () {
 
   const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 
+  const cssProperties = [` + strings.Join(properties, ",") + `];
+
+  const stylesFor = (el) => {
+    if (cssProperties.length === 0) return {};
+    const style = window.getComputedStyle(el);
+    const values = {};
+    for (const property of cssProperties) {
+      values[property] = style.getPropertyValue(property).trim();
+    }
+    return values;
+  };
+
   const fingerprintFor = (el, role, name, attrs) => {
     const parts = [
       attrs.tag || el.tagName.toLowerCase(),
@@ -165,6 +187,7 @@ const observeTreeJS = `(function () {
     const role = roleFor(el);
     const name = nameFor(el);
     const attrs = attrsFor(el);
+    const styles = stylesFor(el);
 
     return {
       id: index + 1,
@@ -173,6 +196,7 @@ const observeTreeJS = `(function () {
       name: name,
       text: textFor(el),
       value: valueFor(el),
+      styles: styles,
       bounds: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -194,6 +218,7 @@ const observeTreeJS = `(function () {
 
   return JSON.stringify(nodes);
 })()`
+}
 
 const clickNodeJS = `(function (nodeID) {
   const selector = [
@@ -1072,7 +1097,7 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 			actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
 		}
 		if opts.WithTree {
-			actions = append(actions, chromedp.Evaluate(observeTreeJS, &treeJSON))
+			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties), &treeJSON))
 		}
 		if opts.WithScreenshot {
 			if opts.FullScreenshot {
@@ -2000,6 +2025,7 @@ type rawNode struct {
 	Name        string            `json:"name"`
 	Text        string            `json:"text"`
 	Value       string            `json:"value"`
+	Styles      map[string]string `json:"styles"`
 	Bounds      api.Rect          `json:"bounds"`
 	Visible     bool              `json:"visible"`
 	Enabled     bool              `json:"enabled"`
@@ -2033,6 +2059,7 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			Name:        strings.TrimSpace(node.Name),
 			Text:        strings.TrimSpace(node.Text),
 			Value:       strings.TrimSpace(node.Value),
+			Styles:      node.Styles,
 			Bounds:      node.Bounds,
 			Visible:     node.Visible,
 			Enabled:     node.Enabled,

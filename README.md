@@ -115,6 +115,8 @@ nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-network-idle
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
+nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
@@ -125,7 +127,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend` and `viewport` can be set in `defaults` and overridden per page.
+In compare manifests, `backend`, `viewport`, `compare_css`, and `css_property` can be set in `defaults` and overridden per page.
 
 Available command groups include:
 
@@ -144,6 +146,8 @@ Examples: `nxctl open --session work https://example.com`, `nxctl click @e3 --js
 
 `compare` waits for document load completion on URL-based runs.
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
+Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
+Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
 
 ## Viewport
 

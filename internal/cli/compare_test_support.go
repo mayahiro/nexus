@@ -29,6 +29,7 @@ type compareSummaryJSON struct {
 	MissingNodes    int  `json:"missing_nodes"`
 	NewNodes        int  `json:"new_nodes"`
 	StateChanged    int  `json:"state_changed"`
+	CSSChanged      int  `json:"css_changed"`
 	PageTextChanged int  `json:"page_text_changed"`
 	Critical        int  `json:"critical"`
 	Warning         int  `json:"warning"`
@@ -104,8 +105,8 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 				Title:       "Orders",
 				Text:        "Orders 2026-04-13",
 				Tree: []api.Node{
-					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
-					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true},
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(0, 0, 0)", "display": "inline-block"}},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "old@example.com", Visible: true, Enabled: true, Editable: true, Styles: map[string]string{"color": "rgb(34, 34, 34)", "pointer-events": "auto"}},
 					{ID: 3, Ref: "@e3", Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/legacy"}},
 					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-13", Visible: true, Enabled: true},
 				},
@@ -119,8 +120,8 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 				Title:       "Orders v2",
 				Text:        "Orders 2026-04-14",
 				Tree: []api.Node{
-					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
-					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true},
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true, Styles: map[string]string{"color": "rgb(255, 0, 0)", "display": "inline-block"}},
+					{ID: 2, Ref: "@e2", Fingerprint: "email", Role: "textbox", Name: "Email", Value: "new@example.com", Visible: true, Enabled: false, Editable: true, Styles: map[string]string{"color": "rgb(34, 34, 34)", "pointer-events": "none"}},
 					{ID: 3, Ref: "@e3", Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/next"}},
 					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-14", Visible: true, Enabled: true},
 				},

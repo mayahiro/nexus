@@ -69,10 +69,11 @@ type ActSessionResponse struct {
 }
 
 type ObserveOptions struct {
-	WithText       bool `json:"with_text"`
-	WithTree       bool `json:"with_tree"`
-	WithScreenshot bool `json:"with_screenshot"`
-	FullScreenshot bool `json:"full_screenshot"`
+	WithText       bool     `json:"with_text"`
+	WithTree       bool     `json:"with_tree"`
+	WithScreenshot bool     `json:"with_screenshot"`
+	FullScreenshot bool     `json:"full_screenshot"`
+	CSSProperties  []string `json:"css_properties,omitempty"`
 }
 
 type LogOptions struct {
@@ -101,6 +102,7 @@ type Node struct {
 	Name         string            `json:"name,omitempty"`
 	Text         string            `json:"text,omitempty"`
 	Value        string            `json:"value,omitempty"`
+	Styles       map[string]string `json:"styles,omitempty"`
 	Bounds       Rect              `json:"bounds,omitempty"`
 	Visible      bool              `json:"visible"`
 	Enabled      bool              `json:"enabled"`

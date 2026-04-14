@@ -40,13 +40,16 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
 	waitFunction := fs.String("wait-function", "", "wait until javascript expression returns true before compare")
 	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
+	compareCSS := fs.Bool("compare-css", false, "compare computed css values for matching nodes")
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
 	outputJSON := fs.String("output-json", "", "write compare report json to file")
 	outputMD := fs.String("output-md", "", "write compare report markdown to file")
 	var ignoreRegex compareStringValues
+	var cssProperty compareStringValues
 	var ignoreSelector compareStringValues
 	var maskSelector compareStringValues
+	fs.Var(&cssProperty, "css-property", "computed css property to compare")
 	fs.Var(&ignoreRegex, "ignore-text-regex", "regex to strip from text before compare")
 	fs.Var(&ignoreSelector, "ignore-selector", "node selector to ignore such as @e3, role=button, text=Save")
 	fs.Var(&maskSelector, "mask-selector", "node selector to mask such as @e3, role=textbox, testid=user-id")
@@ -103,7 +106,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		WaitSelector:    *waitSelector,
 		WaitFunction:    *waitFunction,
 		WaitNetworkIdle: *waitNetworkIdle,
+		CompareCSS:      *compareCSS,
 		WaitTimeout:     *waitTimeout,
+		CSSProperties:   append([]string(nil), cssProperty...),
 		IgnoreTextRegex: append([]string(nil), ignoreRegex...),
 		IgnoreSelector:  append([]string(nil), ignoreSelector...),
 		MaskSelector:    append([]string(nil), maskSelector...),
@@ -210,6 +215,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
+	cssProperties := resolveCompareCSSProperties(run.CompareCSS, run.CSSProperties)
 
 	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, run.OldEndpoint, run.NewEndpoint, run.Backend, run.TargetRef, run.Viewport)
 	if err != nil {
@@ -258,25 +264,27 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		}
 	}
 
-	oldObservation, err := observeCompareSession(ctx, client, oldPrepared.SessionID)
+	oldObservation, err := observeCompareSession(ctx, client, oldPrepared.SessionID, cssProperties)
 	if err != nil {
 		return compareReport{}, err
 	}
-	newObservation, err := observeCompareSession(ctx, client, newPrepared.SessionID)
+	newObservation, err := observeCompareSession(ctx, client, newPrepared.SessionID, cssProperties)
 	if err != nil {
 		return compareReport{}, err
 	}
 
 	return buildCompareReport(
 		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
-			IgnoreText: ignorePatterns,
-			IgnoreNode: ignoreRules,
-			MaskNode:   maskRules,
+			IgnoreText:    ignorePatterns,
+			IgnoreNode:    ignoreRules,
+			MaskNode:      maskRules,
+			CSSProperties: cssProperties,
 		}),
 		buildCompareSnapshot(newObservation, compareSnapshotOptions{
-			IgnoreText: ignorePatterns,
-			IgnoreNode: ignoreRules,
-			MaskNode:   maskRules,
+			IgnoreText:    ignorePatterns,
+			IgnoreNode:    ignoreRules,
+			MaskNode:      maskRules,
+			CSSProperties: cssProperties,
 		}),
 	), nil
 }
