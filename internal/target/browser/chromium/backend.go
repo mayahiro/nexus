@@ -870,6 +870,8 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult
 		return b.invokeViaCDP(ctx, url, action)
 	case "key":
 		return b.keyViaCDP(ctx, url, action)
+	case "navigate":
+		return b.navigateViaCDP(ctx, url, action)
 	case "rightclick":
 		return b.mouseNodeViaCDP(ctx, url, action, "rightclick")
 	case "select":
@@ -1405,6 +1407,32 @@ func (b *Backend) keyViaCDP(ctx context.Context, devtoolsURL string, action api.
 			OK:      true,
 			Changed: true,
 			Message: fmt.Sprintf("sent keys %s", keySpec),
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
+}
+
+func (b *Backend) navigateViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
+	if action.Args == nil || strings.TrimSpace(action.Args["url"]) == "" {
+		return nil, errors.New("navigate url is required")
+	}
+
+	navigateURL := strings.TrimSpace(action.Args["url"])
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		if err := chromedp.Run(targetCtx, chromedp.Navigate(navigateURL)); err != nil {
+			return nil, err
+		}
+
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("navigated to %s", navigateURL),
+			Value: map[string]interface{}{
+				"url": navigateURL,
+			},
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,
 				"page_target_id": targetInfo.ID,

@@ -131,6 +131,14 @@ func TestHelp(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "navigate"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help navigate exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `usage: nxctl navigate <url>`) {
+		t.Fatalf("unexpected help navigate output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected wait without args to fail\n%s", stdout.String())
 	}
@@ -198,6 +206,14 @@ func TestCommandHints(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "usage: nxctl <command>") {
 		t.Fatalf("unexpected global usage in open hint output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"navigate"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected navigate without url to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "hint: nxctl navigate https://example.com --session work") {
+		t.Fatalf("unexpected navigate hint output: %s", stdout.String())
 	}
 
 	stdout.Reset()

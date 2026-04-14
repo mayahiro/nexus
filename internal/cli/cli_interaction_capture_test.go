@@ -256,6 +256,59 @@ func TestBack(t *testing.T) {
 	}
 }
 
+func TestNavigate(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, navigateRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"navigate", "https://example.com/docs"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected navigate exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "navigated to https://example.com/docs" {
+		t.Fatalf("unexpected navigate output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"navigate", "https://example.com/docs", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected navigate --json exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"message": "navigated to https://example.com/docs"`) {
+		t.Fatalf("unexpected navigate --json output: %s", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestViewport(t *testing.T) {
 	configureXDGTestEnv(t)
 

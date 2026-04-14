@@ -15,13 +15,14 @@ This document is a short operational guide for AI agents that use Nexus as a too
 nxctl doctor
 nxctl browser setup
 nxctl open https://example.com
+nxctl navigate https://example.com/docs
 nxctl state
 ```
 
 The default execution loop is:
 
 ```text
-open -> state/find -> click/type/fill/input/keys -> wait -> get/state -> close
+open/navigate -> state/find -> click/type/fill/input/keys -> wait -> get/state -> close
 ```
 
 `state` emits element refs such as `@e1`. Reuse those refs in node-targeting commands instead of relying on raw indexes when possible.
@@ -59,6 +60,7 @@ Use `sessions --json` when you need to inspect current state across multiple ses
 
 ```text
 nxctl open https://example.com
+nxctl navigate https://example.com/docs
 nxctl state
 nxctl state --role button --limit 20
 nxctl click @e3

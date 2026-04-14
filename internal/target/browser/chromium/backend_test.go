@@ -676,6 +676,12 @@ func TestChromiumE2E(t *testing.T) {
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "url", "value": server.URL, "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "navigate", Args: map[string]string{"url": server.URL + "/next"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "url", "value": "/next", "timeout_ms": "5000"}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func resolveChromiumForE2E(t *testing.T) string {

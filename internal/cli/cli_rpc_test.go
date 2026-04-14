@@ -51,6 +51,7 @@ type screenshotRPCHandler struct{ noopRPCHandler }
 type annotateScreenshotRPCHandler struct{ noopRPCHandler }
 type scrollRPCHandler struct{ noopRPCHandler }
 type backRPCHandler struct{ noopRPCHandler }
+type navigateRPCHandler struct{ noopRPCHandler }
 type viewportRPCHandler struct{ noopRPCHandler }
 type waitRPCHandler struct{ noopRPCHandler }
 type getRPCHandler struct{ noopRPCHandler }
@@ -191,6 +192,20 @@ func (backRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 		return api.ActSessionResponse{}, nil
 	}
 	return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "went back"}}, nil
+}
+
+func (navigateRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	if req.Action.Kind != "navigate" || req.Action.Args["url"] == "" {
+		return api.ActSessionResponse{}, nil
+	}
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: "navigated to " + req.Action.Args["url"],
+			Value:   map[string]interface{}{"url": req.Action.Args["url"]},
+		},
+	}, nil
 }
 
 func (viewportRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {

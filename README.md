@@ -35,6 +35,7 @@ go install ./cmd/nxctl ./cmd/nxd
 nxctl doctor
 nxctl browser setup
 nxctl open https://example.com
+nxctl navigate https://example.com/docs
 nxctl state
 nxctl close
 ```
@@ -53,7 +54,7 @@ Nexus is built around sessions.
 The primary interaction loop is:
 
 ```text
-open -> state/find -> click/type/fill/input/keys -> wait/get/state
+open/navigate -> state/find -> click/type/fill/input/keys -> wait/get/state
 ```
 
 `state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, and `get`.
@@ -96,6 +97,7 @@ Examples:
 ```text
 nxctl open https://example.com
 nxctl open https://example.com --viewport 1440x900
+nxctl navigate https://example.com/docs
 nxctl state
 nxctl state --role button --limit 20
 nxctl click @e3
@@ -137,7 +139,7 @@ In compare manifests, `backend`, `viewport`, `compare_css`, and `css_property` c
 Available command groups include:
 
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
-- navigation: `open`, `back`, `scroll`
+- navigation: `open`, `navigate`, `back`, `scroll`
 - inspection: `state`, `observe`, `get`, `screenshot`
 - targeted style diff: `inspect`
 - interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
@@ -149,7 +151,7 @@ Available command groups include:
 Run `nxctl help <command>` for command-specific usage.
 
 Most command flags can be placed before or after positional arguments.
-Examples: `nxctl open --session work https://example.com`, `nxctl click @e3 --json`
+Examples: `nxctl open --session work https://example.com`, `nxctl navigate --session work https://example.com/docs`, `nxctl click @e3 --json`
 
 `compare` waits for document load completion on URL-based runs.
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.

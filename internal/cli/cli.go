@@ -77,6 +77,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runInput(ctx, args[1:], stdout, stderr)
 	case "keys":
 		return runKeys(ctx, args[1:], stdout, stderr)
+	case "navigate":
+		return runNavigate(ctx, args[1:], stdout, stderr)
 	case "open":
 		return runOpen(ctx, args[1:], stdout, stderr)
 	case "observe":

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -152,6 +153,83 @@ func runOpen(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	}
 
 	return runAttachBrowser(ctx, openArgs, stdout, stderr)
+}
+
+func runNavigate(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printNavigateHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("navigate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	urlArg := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		urlArg = args[0]
+		args = args[1:]
+	}
+
+	if err := parseCommandFlags(fs, args, stderr, "navigate"); err != nil {
+		return 1
+	}
+
+	if urlArg == "" && fs.NArg() == 1 {
+		urlArg = fs.Arg(0)
+	}
+
+	if urlArg == "" || fs.NArg() > 1 {
+		fmt.Fprintln(stderr, "navigate requires a url")
+		printCommandHint(stderr, "navigate", "nxctl navigate https://example.com --session work")
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	res, err := client.ActSession(ctx, api.ActSessionRequest{
+		SessionID: *sessionID,
+		Action: api.Action{
+			Kind: "navigate",
+			Args: map[string]string{
+				"url": urlArg,
+			},
+		},
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if !res.Result.OK {
+		if res.Result.Message != "" {
+			fmt.Fprintln(stderr, res.Result.Message)
+		}
+		return 1
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(res.Result); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	if res.Result.Message != "" {
+		fmt.Fprintln(stdout, res.Result.Message)
+		return 0
+	}
+
+	fmt.Fprintf(stdout, "navigated to %s\n", urlArg)
+	return 0
 }
 
 func runAttachBrowser(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {

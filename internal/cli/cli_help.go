@@ -30,6 +30,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  inspect")
 	fmt.Fprintln(w, "  input")
 	fmt.Fprintln(w, "  keys")
+	fmt.Fprintln(w, "  navigate")
 	fmt.Fprintln(w, "  open")
 	fmt.Fprintln(w, "  observe")
 	fmt.Fprintln(w, "  rightclick")
@@ -85,6 +86,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printInputHelp(w)
 	case "keys":
 		printKeysHelp(w)
+	case "navigate":
+		printNavigateHelp(w)
 	case "observe":
 		printObserveHelp(w)
 	case "open":
@@ -214,6 +217,10 @@ func printFillHelp(w io.Writer) {
 
 func printKeysHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl keys "Enter" [--session <id>] [--json]`)
+}
+
+func printNavigateHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl navigate <url> [--session <id>] [--json]")
 }
 
 func printNodeActionHelp(w io.Writer, command string) {
