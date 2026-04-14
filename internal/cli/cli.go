@@ -63,6 +63,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runFill(ctx, args[1:], stdout, stderr)
 	case "find":
 		return runFind(ctx, args[1:], stdout, stderr)
+	case "flow":
+		return runFlow(ctx, args[1:], stdout, stderr)
 	case "get":
 		return runGet(ctx, args[1:], stdout, stderr)
 	case "help":

@@ -24,6 +24,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  dblclick")
 	fmt.Fprintln(w, "  fill")
 	fmt.Fprintln(w, "  find")
+	fmt.Fprintln(w, "  flow")
 	fmt.Fprintln(w, "  get")
 	fmt.Fprintln(w, "  hover")
 	fmt.Fprintln(w, "  inspect")
@@ -72,6 +73,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printFillHelp(w)
 	case "find":
 		printFindHelp(w)
+	case "flow":
+		printFlowHelp(w)
 	case "get":
 		printGetHelp(w)
 	case "hover":

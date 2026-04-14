@@ -83,6 +83,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --cs
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --continue-on-error --output-json compare.json
+nxctl flow run --manifest login-flow.json --json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'label "Email"' --old-session old --new-session new --css-property color --css-property pointer-events
 nxctl get attributes @e3
@@ -102,6 +103,10 @@ Rules support `@eN`, `field=value`, and simple AND conditions such as `role=text
 For multi-page audits, put URL or session pairs into a manifest JSON file and run `compare --manifest`.
 Use `inspect` when the whole-page diff is too broad and you want to compare one locator across two existing sessions.
 `inspect` accepts the same locator style that `state` hints print: `role button --name "Submit"`, `text "Sign In"`, `label "Email"`, `testid "submit-primary"`, `href "/docs"`, or `@eN`.
+
+When you need to keep a session alive across multiple actions, use `flow run --manifest`.
+This is the right shape for login flows, checkout flows, and responsive checks where the same user journey should run against multiple matrices.
+The current implementation supports `wait`, `click`, `fill`, `viewport`, and `compare` steps.
 
 Use this manifest shape for multi-page compare:
 
@@ -151,6 +156,71 @@ Manifest rules:
 - `--continue-on-error` keeps processing later pages after one page fails
 - `--limit <n>` only runs the first `n` pages
 - `screenshot` and `full` are not implemented yet
+
+Use this manifest shape for scenario flow:
+
+```json
+{
+  "defaults": {
+    "backend": "chromium",
+    "viewport": "1440x900"
+  },
+  "matrices": {
+    "desktop": {
+      "viewport": "1440x900"
+    },
+    "mobile": {
+      "viewport": "390x844"
+    }
+  },
+  "scenarios": [
+    {
+      "name": "login",
+      "matrix": ["desktop", "mobile"],
+      "variables": {
+        "email": "user@example.com"
+      },
+      "old": {
+        "url": "https://old.example.com/login"
+      },
+      "new": {
+        "url": "https://new.example.com/login"
+      },
+      "steps": [
+        {
+          "action": "wait",
+          "target": "selector",
+          "value": "form"
+        },
+        {
+          "action": "fill",
+          "locator": "label=Email",
+          "text": "{{ email }}"
+        },
+        {
+          "action": "click",
+          "locator": "role=button&name=Sign in"
+        },
+        {
+          "action": "compare",
+          "name": "post-login"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Flow rules:
+
+- `scenarios` must contain at least one entry
+- each scenario must provide both `old` and `new`
+- each endpoint must provide either `url` or `session`
+- `matrix` expands one scenario into multiple runs
+- `backend`, `target_ref`, and `viewport` inherit from `defaults`, then `matrix`, then endpoint override
+- `{{ name }}` variables resolve from `matrix.variables` and `scenario.variables`
+- attached sessions are detached after the scenario finishes
+- existing sessions are reused and not detached
 
 When `state` gets too large, filter the tree before reading it.
 Start with `--role`, `--name`, `--text`, `--testid`, `--href`, and `--limit`.

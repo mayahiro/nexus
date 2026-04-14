@@ -120,6 +120,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --cs
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
+nxctl flow run --manifest login-flow.json --json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
 nxctl get attributes @e3
@@ -131,6 +132,8 @@ nxctl close
 
 In compare manifests, `backend`, `viewport`, `compare_css`, and `css_property` can be set in `defaults` and overridden per page.
 
+`flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
+
 Available command groups include:
 
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
@@ -139,6 +142,7 @@ Available command groups include:
 - targeted style diff: `inspect`
 - interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
 - migration diff: `compare`
+- scenario flow: `flow run`
 - automation flow: `batch`
 - session control: `sessions`, `detach`, `close`
 
@@ -152,6 +156,10 @@ Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
+
+`flow run` currently supports `wait`, `click`, `fill`, `viewport`, and `compare` steps.
+Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
+Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 
 ## Viewport
 
