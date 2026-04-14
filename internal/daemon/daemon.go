@@ -15,8 +15,17 @@ import (
 )
 
 type Server struct {
-	sessions *session.Manager
+	sessions sessionManager
 	stop     context.CancelFunc
+}
+
+type sessionManager interface {
+	Attach(ctx context.Context, req api.AttachSessionRequest) (api.Session, error)
+	List() []api.Session
+	Detach(ctx context.Context, sessionID string) (api.Session, error)
+	Observe(ctx context.Context, sessionID string, opts api.ObserveOptions) (api.Observation, error)
+	Act(ctx context.Context, sessionID string, action api.Action) (api.ActionResult, error)
+	Shutdown(ctx context.Context) error
 }
 
 const shutdownTimeout = 5 * time.Second
@@ -101,10 +110,6 @@ func (s Server) DetachSession(ctx context.Context, req api.DetachSessionRequest)
 	session, err := s.sessions.Detach(ctx, req.SessionID)
 	if err != nil {
 		return api.DetachSessionResponse{}, err
-	}
-
-	if len(s.sessions.List()) == 0 && s.stop != nil {
-		s.stop()
 	}
 
 	return api.DetachSessionResponse{Session: session}, nil
