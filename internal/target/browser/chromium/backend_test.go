@@ -511,6 +511,7 @@ func TestChromiumE2E(t *testing.T) {
 <html>
 <body>
   <input id="name" name="name" placeholder="Name">
+  <input id="email" type="email" name="email" placeholder="Email">
   <button id="submit" onclick="document.getElementById('message').textContent = 'Hello, ' + document.getElementById('name').value">Submit</button>
   <div id="message"></div>
   <div id="hover-target" tabindex="0" onmouseenter="document.getElementById('hover-status').textContent='hovered'">Hover</div>
@@ -580,6 +581,7 @@ func TestChromiumE2E(t *testing.T) {
 	}
 
 	nameID := requireNodeByAttr(t, obs.Tree, "id", "name")
+	emailID := requireNodeByAttr(t, obs.Tree, "id", "email")
 	submitID := requireNodeByAttr(t, obs.Tree, "id", "submit")
 	hoverID := requireNodeByAttr(t, obs.Tree, "id", "hover-target")
 	dblID := requireNodeByAttr(t, obs.Tree, "id", "dbl-target")
@@ -588,6 +590,9 @@ func TestChromiumE2E(t *testing.T) {
 	nextID := requireNodeByAttr(t, obs.Tree, "id", "next")
 
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &nameID, Text: "hiro"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &emailID, Text: "user@example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "invoke", NodeID: &submitID}); err != nil {
@@ -603,6 +608,14 @@ func TestChromiumE2E(t *testing.T) {
 	}
 	if value, _ := res.Value.(string); !strings.Contains(value, "Hello, hiro") {
 		t.Fatalf("unexpected message value: %#v", res.Value)
+	}
+
+	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Args: map[string]string{"target": "value", "selector": "#email"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := res.Value.(string); value != "user@example.com" {
+		t.Fatalf("unexpected email value: %#v", res.Value)
 	}
 
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "hover", NodeID: &hoverID}); err != nil {

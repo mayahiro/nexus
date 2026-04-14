@@ -294,7 +294,10 @@ const typeNodeJS = `(function (nodeID, text) {
   if (tag === 'input' || tag === 'textarea') {
     el.value = text;
     if (typeof el.setSelectionRange === 'function') {
-      el.setSelectionRange(text.length, text.length);
+      try {
+        el.setSelectionRange(text.length, text.length);
+      } catch (_) {
+      }
     }
   } else {
     el.textContent = text;
@@ -571,7 +574,10 @@ const markTypeTargetJS = `(function (nodeID, token) {
   el.focus();
 
   if ((tag === 'input' || tag === 'textarea') && typeof el.setSelectionRange === 'function' && typeof el.value === 'string') {
-    el.setSelectionRange(el.value.length, el.value.length);
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch (_) {
+    }
   }
 
   el.setAttribute('data-nexus-type', token);
