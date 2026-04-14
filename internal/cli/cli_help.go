@@ -26,6 +26,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  find")
 	fmt.Fprintln(w, "  get")
 	fmt.Fprintln(w, "  hover")
+	fmt.Fprintln(w, "  inspect")
 	fmt.Fprintln(w, "  input")
 	fmt.Fprintln(w, "  keys")
 	fmt.Fprintln(w, "  open")
@@ -75,6 +76,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printGetHelp(w)
 	case "hover":
 		printNodeActionHelp(w, "hover")
+	case "inspect":
+		printInspectHelp(w)
 	case "input":
 		printInputHelp(w)
 	case "keys":
@@ -193,6 +196,13 @@ func printGetHelp(w io.Writer) {
 
 func printInputHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl input <index|@eN> "text" [--session <id>] [--json]`)
+}
+
+func printInspectHelp(w io.Writer) {
+	fmt.Fprintln(w, `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id> [--css-property <name>]... [--json]`)
+	fmt.Fprintln(w, `locator: @eN, role <role> [--name <text>], text <text>, label <text>, testid <value>, or href <value>`)
+	fmt.Fprintln(w, `examples: nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
+	fmt.Fprintln(w, `          nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color`)
 }
 
 func printFillHelp(w io.Writer) {

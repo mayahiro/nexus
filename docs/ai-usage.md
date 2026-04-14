@@ -83,6 +83,8 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --cs
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --continue-on-error --output-json compare.json
+nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+nxctl inspect 'label "Email"' --old-session old --new-session new --css-property color --css-property pointer-events
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -98,6 +100,8 @@ Use `--ignore-selector` to drop nodes from comparison and `--mask-selector` to k
 Use `--compare-css` to compare the default computed-style property set, or pass `--css-property` repeatedly to compare only specific computed-style properties.
 Rules support `@eN`, `field=value`, and simple AND conditions such as `role=textbox&name=Email`.
 For multi-page audits, put URL or session pairs into a manifest JSON file and run `compare --manifest`.
+Use `inspect` when the whole-page diff is too broad and you want to compare one locator across two existing sessions.
+`inspect` accepts the same locator style that `state` hints print: `role button --name "Submit"`, `text "Sign In"`, `label "Email"`, `testid "submit-primary"`, `href "/docs"`, or `@eN`.
 
 Use this manifest shape for multi-page compare:
 

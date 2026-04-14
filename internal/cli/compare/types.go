@@ -197,7 +197,7 @@ const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
-var defaultCompareCSSProperties = []string{
+var DefaultCSSProperties = []string{
 	"color",
 	"background-color",
 	"font-size",

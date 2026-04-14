@@ -326,14 +326,14 @@ func sortedCompareCSSPropertyKeys(left map[string]string, right map[string]strin
 	return keys
 }
 
-func resolveCompareCSSProperties(compareCSS bool, requested []string) []string {
+func ResolveCSSProperties(compareCSS bool, requested []string) []string {
 	if len(requested) == 0 && !compareCSS {
 		return nil
 	}
 
 	source := requested
 	if len(source) == 0 {
-		source = defaultCompareCSSProperties
+		source = DefaultCSSProperties
 	}
 
 	values := make([]string, 0, len(source))

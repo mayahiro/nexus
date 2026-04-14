@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/mayahiro/nexus/internal/api"
+	comparecmd "github.com/mayahiro/nexus/internal/cli/compare"
 )
 
 func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -359,6 +361,349 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	return 0
+}
+
+type inspectStringValues []string
+
+func (v *inspectStringValues) String() string {
+	return strings.Join(*v, ", ")
+}
+
+func (v *inspectStringValues) Set(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("inspect value must not be empty")
+	}
+	*v = append(*v, trimmed)
+	return nil
+}
+
+type inspectLocator struct {
+	Raw   string `json:"raw"`
+	Kind  string `json:"kind"`
+	Value string `json:"value,omitempty"`
+	Role  string `json:"role,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Ref   string `json:"ref,omitempty"`
+}
+
+type inspectMatch struct {
+	SessionID string   `json:"session_id"`
+	URL       string   `json:"url,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Node      api.Node `json:"node"`
+}
+
+type inspectPropertyReport struct {
+	Name string `json:"name"`
+	Old  string `json:"old,omitempty"`
+	New  string `json:"new,omitempty"`
+	Same bool   `json:"same"`
+}
+
+type inspectReport struct {
+	Locator       inspectLocator          `json:"locator"`
+	CSSProperties []string                `json:"css_properties"`
+	Old           inspectMatch            `json:"old"`
+	New           inspectMatch            `json:"new"`
+	Properties    []inspectPropertyReport `json:"properties"`
+	Same          bool                    `json:"same"`
+}
+
+func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printInspectHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	oldSession := fs.String("old-session", "", "old session id")
+	newSession := fs.String("new-session", "", "new session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	var cssProperty inspectStringValues
+	fs.Var(&cssProperty, "css-property", "computed css property to compare")
+
+	locatorValue := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		locatorValue = args[0]
+		args = args[1:]
+	}
+
+	if err := parseCommandFlags(fs, args, stderr, "inspect"); err != nil {
+		return 1
+	}
+
+	positionals := make([]string, 0, 1)
+	if locatorValue != "" {
+		positionals = append(positionals, locatorValue)
+	}
+	positionals = append(positionals, fs.Args()...)
+	if len(positionals) != 1 {
+		fmt.Fprintln(stderr, "inspect requires exactly one locator")
+		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
+		return 1
+	}
+	if strings.TrimSpace(*oldSession) == "" || strings.TrimSpace(*newSession) == "" {
+		fmt.Fprintln(stderr, "inspect requires --old-session and --new-session")
+		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
+		return 1
+	}
+
+	locator, err := parseInspectLocator(positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
+	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
+	oldNode, err := resolveInspectNode(oldObservation.Tree, locator)
+	if err != nil {
+		fmt.Fprintf(stderr, "old session %s: %v\n", *oldSession, err)
+		return 1
+	}
+	newNode, err := resolveInspectNode(newObservation.Tree, locator)
+	if err != nil {
+		fmt.Fprintf(stderr, "new session %s: %v\n", *newSession, err)
+		return 1
+	}
+
+	report := buildInspectReport(locator, cssProperties, inspectMatch{
+		SessionID: *oldSession,
+		URL:       oldObservation.URLOrScreen,
+		Title:     oldObservation.Title,
+		Node:      oldNode,
+	}, inspectMatch{
+		SessionID: *newSession,
+		URL:       newObservation.URLOrScreen,
+		Title:     newObservation.Title,
+		Node:      newNode,
+	})
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	printInspectReport(stdout, report)
+	return 0
+}
+
+func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string) (api.Observation, error) {
+	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+		SessionID: sessionID,
+		Options: api.ObserveOptions{
+			WithTree:      true,
+			CSSProperties: append([]string(nil), cssProperties...),
+		},
+	})
+	if err != nil {
+		return api.Observation{}, err
+	}
+	return res.Observation, nil
+}
+
+type clientObserver interface {
+	ObserveSession(context.Context, api.ObserveSessionRequest) (api.ObserveSessionResponse, error)
+}
+
+func parseInspectLocator(value string) (inspectLocator, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return inspectLocator{}, fmt.Errorf("inspect locator must not be empty")
+	}
+	if strings.HasPrefix(trimmed, "@e") {
+		if _, _, err := parseNodeSelector(trimmed); err != nil {
+			return inspectLocator{}, fmt.Errorf("invalid inspect locator %q", value)
+		}
+		return inspectLocator{Raw: trimmed, Kind: "ref", Ref: trimmed}, nil
+	}
+
+	args, err := splitBatchCommand(trimmed)
+	if err != nil {
+		return inspectLocator{}, fmt.Errorf("invalid inspect locator %q: %w", value, err)
+	}
+	if len(args) == 0 {
+		return inspectLocator{}, fmt.Errorf("inspect locator must not be empty")
+	}
+
+	switch args[0] {
+	case "role":
+		if len(args) < 2 {
+			return inspectLocator{}, fmt.Errorf(`invalid inspect locator %q: role locator requires "role <role> [--name <text>]"`, value)
+		}
+		role := strings.TrimSpace(args[1])
+		name, err := parseInspectRoleName(args[2:])
+		if err != nil {
+			return inspectLocator{}, fmt.Errorf("invalid inspect locator %q: %w", value, err)
+		}
+		return inspectLocator{Raw: trimmed, Kind: "role", Role: role, Name: name}, nil
+	case "text", "label", "testid", "href":
+		if len(args) != 2 {
+			return inspectLocator{}, fmt.Errorf("invalid inspect locator %q", value)
+		}
+		return inspectLocator{Raw: trimmed, Kind: args[0], Value: strings.TrimSpace(args[1])}, nil
+	default:
+		return inspectLocator{}, fmt.Errorf("inspect locator must be @eN, role ..., text ..., label ..., testid ..., or href ...")
+	}
+}
+
+func parseInspectRoleName(args []string) (string, error) {
+	fs := flag.NewFlagSet("inspect role locator", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	name := fs.String("name", "", "accessible name")
+	if err := fs.Parse(normalizeFlagArgs(fs, args)); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", fmt.Errorf("unexpected extra arguments")
+	}
+	return strings.TrimSpace(*name), nil
+}
+
+func resolveInspectNode(nodes []api.Node, locator inspectLocator) (api.Node, error) {
+	switch locator.Kind {
+	case "ref":
+		nodeID, _, err := parseNodeSelector(locator.Ref)
+		if err != nil {
+			return api.Node{}, err
+		}
+		for _, node := range nodes {
+			if node.ID == nodeID || strings.TrimSpace(node.Ref) == locator.Ref {
+				return node, nil
+			}
+		}
+		return api.Node{}, fmt.Errorf("matching node not found")
+	case "role":
+		matches := selectNodes(nodes, func(node api.Node) bool {
+			if !strings.EqualFold(strings.TrimSpace(node.Role), locator.Role) {
+				return false
+			}
+			if locator.Name == "" {
+				return true
+			}
+			return nodeMatches(node, locator.Name)
+		})
+		return chooseNode(matches, inspectFirstNonEmpty(locator.Name, locator.Role))
+	case "text":
+		matches := selectNodes(nodes, func(node api.Node) bool {
+			return nodeMatches(node, locator.Value)
+		})
+		return chooseNode(matches, locator.Value)
+	case "label":
+		matches := selectNodes(nodes, func(node api.Node) bool {
+			if !node.Editable && !node.Selectable && !strings.EqualFold(node.Role, "textbox") && !strings.EqualFold(node.Role, "combobox") {
+				return false
+			}
+			return nodeMatches(node, locator.Value)
+		})
+		return chooseNode(matches, locator.Value)
+	case "testid":
+		matches := selectNodes(nodes, func(node api.Node) bool {
+			return nodeMatches(api.Node{
+				Name:  inspectFirstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]),
+				Attrs: node.Attrs,
+			}, locator.Value)
+		})
+		return chooseNode(matches, locator.Value)
+	case "href":
+		matches := selectNodes(nodes, func(node api.Node) bool {
+			return nodeMatches(api.Node{Name: node.Attrs["href"], Attrs: node.Attrs}, locator.Value)
+		})
+		return chooseNode(matches, locator.Value)
+	default:
+		return api.Node{}, fmt.Errorf("unsupported inspect locator")
+	}
+}
+
+func buildInspectReport(locator inspectLocator, cssProperties []string, oldMatch inspectMatch, newMatch inspectMatch) inspectReport {
+	properties := make([]inspectPropertyReport, 0, len(cssProperties))
+	same := true
+	for _, property := range cssProperties {
+		oldValue := strings.TrimSpace(oldMatch.Node.Styles[property])
+		newValue := strings.TrimSpace(newMatch.Node.Styles[property])
+		entry := inspectPropertyReport{
+			Name: property,
+			Old:  oldValue,
+			New:  newValue,
+			Same: oldValue == newValue,
+		}
+		if !entry.Same {
+			same = false
+		}
+		properties = append(properties, entry)
+	}
+	return inspectReport{
+		Locator:       locator,
+		CSSProperties: append([]string(nil), cssProperties...),
+		Old:           oldMatch,
+		New:           newMatch,
+		Properties:    properties,
+		Same:          same,
+	}
+}
+
+func printInspectReport(w io.Writer, report inspectReport) {
+	fmt.Fprintf(w, "locator: %s\n", report.Locator.Raw)
+	fmt.Fprintf(w, "old: %s %s\n", report.Old.SessionID, inspectNodeSummary(report.Old.Node))
+	fmt.Fprintf(w, "new: %s %s\n", report.New.SessionID, inspectNodeSummary(report.New.Node))
+	fmt.Fprintf(w, "same: %t\n", report.Same)
+	if len(report.Properties) == 0 {
+		return
+	}
+
+	fmt.Fprintln(w, "")
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "property\told\tnew\tstatus")
+	for _, property := range report.Properties {
+		status := "same"
+		if !property.Same {
+			status = "changed"
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", property.Name, property.Old, property.New, status)
+	}
+	tw.Flush()
+}
+
+func inspectNodeSummary(node api.Node) string {
+	label := displayNodeRef(node)
+	text := inspectFirstNonEmpty(node.Name, node.Text, node.Value)
+	if text == "" {
+		return fmt.Sprintf("%s %s", label, node.Role)
+	}
+	return fmt.Sprintf("%s %s %q", label, node.Role, text)
+}
+
+func inspectFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type stateFilterOptions struct {

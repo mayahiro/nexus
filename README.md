@@ -120,6 +120,8 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --cs
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
+nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -134,6 +136,7 @@ Available command groups include:
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
 - navigation: `open`, `back`, `scroll`
 - inspection: `state`, `observe`, `get`, `screenshot`
+- targeted style diff: `inspect`
 - interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
 - migration diff: `compare`
 - automation flow: `batch`
@@ -148,6 +151,7 @@ Examples: `nxctl open --session work https://example.com`, `nxctl click @e3 --js
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
+Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 
 ## Viewport
 

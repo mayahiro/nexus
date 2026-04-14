@@ -222,6 +222,73 @@ func TestGet(t *testing.T) {
 	}
 }
 
+func TestInspect(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, inspectRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"inspect", `role button --name "Submit"`, "--old-session", "old", "--new-session", "new"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect exit code: %d\n%s", code, stdout.String())
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `locator: role button --name "Submit"`) {
+		t.Fatalf("unexpected inspect output: %s", output)
+	}
+	if !strings.Contains(output, "color") || !strings.Contains(output, "rgb(0, 0, 0)") || !strings.Contains(output, "rgb(255, 0, 0)") {
+		t.Fatalf("unexpected inspect output: %s", output)
+	}
+	if !strings.Contains(output, "changed") {
+		t.Fatalf("unexpected inspect output: %s", output)
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button --name "Submit"`, "--old-session", "old", "--new-session", "new", "--css-property", "color", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect json exit code: %d\n%s", code, stdout.String())
+	}
+	var report inspectReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected inspect json: %v\n%s", err, stdout.String())
+	}
+	if len(report.Properties) != 1 || report.Properties[0].Name != "color" {
+		t.Fatalf("unexpected inspect properties: %+v", report.Properties)
+	}
+	if report.Same {
+		t.Fatalf("expected inspect report to differ: %+v", report)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestFind(t *testing.T) {
 	configureXDGTestEnv(t)
 

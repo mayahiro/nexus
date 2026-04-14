@@ -55,6 +55,7 @@ type viewportRPCHandler struct{ noopRPCHandler }
 type waitRPCHandler struct{ noopRPCHandler }
 type getRPCHandler struct{ noopRPCHandler }
 type findRPCHandler struct{ noopRPCHandler }
+type inspectRPCHandler struct{ noopRPCHandler }
 type selectUploadRPCHandler struct{ noopRPCHandler }
 
 func (evalRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
@@ -264,6 +265,48 @@ func (findRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 	default:
 		return api.ActSessionResponse{}, nil
 	}
+}
+
+func (inspectRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	node := api.Node{
+		ID:      1,
+		Ref:     "@e1",
+		Role:    "button",
+		Name:    "Submit",
+		Visible: true,
+		Enabled: true,
+		Styles:  map[string]string{},
+	}
+	for _, property := range req.Options.CSSProperties {
+		switch req.SessionID {
+		case "old":
+			switch property {
+			case "color":
+				node.Styles[property] = "rgb(0, 0, 0)"
+			case "display":
+				node.Styles[property] = "inline-block"
+			default:
+				node.Styles[property] = ""
+			}
+		case "new":
+			switch property {
+			case "color":
+				node.Styles[property] = "rgb(255, 0, 0)"
+			case "display":
+				node.Styles[property] = "inline-block"
+			default:
+				node.Styles[property] = ""
+			}
+		}
+	}
+	return api.ObserveSessionResponse{
+		Observation: api.Observation{
+			SessionID:   req.SessionID,
+			URLOrScreen: "https://example.com",
+			Title:       "Inspect",
+			Tree:        []api.Node{node},
+		},
+	}, nil
 }
 
 func (selectUploadRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {

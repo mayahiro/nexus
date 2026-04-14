@@ -215,7 +215,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
-	cssProperties := resolveCompareCSSProperties(run.CompareCSS, run.CSSProperties)
+	cssProperties := ResolveCSSProperties(run.CompareCSS, run.CSSProperties)
 
 	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, run.OldEndpoint, run.NewEndpoint, run.Backend, run.TargetRef, run.Viewport)
 	if err != nil {

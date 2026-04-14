@@ -69,6 +69,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runHelp(args[1:], stdout, stderr)
 	case "hover":
 		return runHover(ctx, args[1:], stdout, stderr)
+	case "inspect":
+		return runInspect(ctx, args[1:], stdout, stderr)
 	case "input":
 		return runInput(ctx, args[1:], stdout, stderr)
 	case "keys":

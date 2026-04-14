@@ -98,6 +98,17 @@ func TestHelp(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "inspect"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help inspect exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id>`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `role <role> [--name <text>]`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "batch"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help batch exit code: %d\n%s", code, stdout.String())
 	}
