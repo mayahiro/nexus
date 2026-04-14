@@ -327,6 +327,14 @@ func TestFind(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "label", "Email", "fill", "hello@example.com"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find label fill exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "filled into @e3" {
+		t.Fatalf("unexpected find label fill output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"find", "role", "button", "click"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected ambiguous find role to fail\n%s", stdout.String())
 	}

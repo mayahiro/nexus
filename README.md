@@ -53,11 +53,12 @@ Nexus is built around sessions.
 The primary interaction loop is:
 
 ```text
-open -> state/find -> click/type/input/keys -> wait/get/state
+open -> state/find -> click/type/fill/input/keys -> wait/get/state
 ```
 
-`state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `input`, `select`, `upload`, `hover`, and `get`.
+`state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, and `get`.
 `state` also prints short locator hints derived from the current tree, so an agent can switch from `@eN` refs to `find role|text|label|testid|href` without recomputing selectors.
+Use `fill` when you want to replace the current value, and `type` when you want keystroke-style input against the current focus or target.
 
 When you want a meaning-based locator instead of a ref, use `find`:
 
@@ -65,6 +66,7 @@ When you want a meaning-based locator instead of a ref, use `find`:
 - `find role link get attributes --name "Docs"`
 - `find role button --all`
 - `find text "Sign in" click`
+- `find label "Email" fill "hello@example.com"`
 - `find label "Email" input "hello@example.com"`
 
 If multiple nodes match, `find` fails with candidate refs so you can narrow the query or switch to `@eN` from `state`.
@@ -99,8 +101,10 @@ nxctl state --role button --limit 20
 nxctl click @e3
 nxctl find role button click --name "Submit"
 nxctl find role link get attributes --name "Docs"
+nxctl find label "Email" fill "hello@example.com"
 nxctl find label "Email" input "hello@example.com"
 nxctl click 120 240
+nxctl fill @e4 "hello@example.com"
 nxctl input @e4 "hello@example.com"
 nxctl batch --cmd "state" --cmd "find role button --all"
 nxctl keys "Enter"
@@ -124,7 +128,7 @@ Available command groups include:
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
 - navigation: `open`, `back`, `scroll`
 - inspection: `state`, `observe`, `get`, `screenshot`
-- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `input`, `keys`, `select`, `upload`, `eval`, `find`
+- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
 - migration diff: `compare`
 - automation flow: `batch`
 - session control: `sessions`, `detach`, `close`

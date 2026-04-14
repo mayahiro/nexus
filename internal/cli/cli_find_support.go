@@ -161,6 +161,13 @@ func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID strin
 		}
 		action = api.Action{Kind: "type", NodeID: &node.ID, Text: actionValue}
 		fallbackMessage = fmt.Sprintf("typed into %s", displayNodeRef(node))
+	case "fill":
+		if actionValue == "" {
+			fmt.Fprintln(stderr, `fill action requires "text"`)
+			return 1
+		}
+		action = api.Action{Kind: "fill", NodeID: &node.ID, Text: actionValue}
+		fallbackMessage = fmt.Sprintf("filled into %s", displayNodeRef(node))
 	case "get":
 		if !isFindGetTarget(actionValue) {
 			fmt.Fprintln(stderr, "get action requires text, value, attributes, or bbox")

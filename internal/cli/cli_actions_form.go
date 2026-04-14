@@ -61,11 +61,68 @@ func runInput(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
-	return runTypeAction(ctx, stdout, stderr, typeActionOptions{
+	return runTextAction(ctx, stdout, stderr, textActionOptions{
 		SessionID: *sessionID,
 		JSON:      *asJSON,
 		NodeID:    &nodeID,
+		Kind:      "type",
 		Text:      textArg,
+	})
+}
+
+func runFill(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		printFillHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("fill", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	sessionID := fs.String("session", "default", "session id")
+	asJSON := fs.Bool("json", false, "print as json")
+	indexArg := ""
+	textArg := ""
+
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		indexArg = args[0]
+		args = args[1:]
+	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		textArg = args[0]
+		args = args[1:]
+	}
+
+	if err := parseCommandFlags(fs, args, stderr, "fill"); err != nil {
+		return 1
+	}
+
+	positionals := make([]string, 0, 2)
+	if indexArg != "" {
+		positionals = append(positionals, indexArg)
+	}
+	if textArg != "" {
+		positionals = append(positionals, textArg)
+	}
+	positionals = append(positionals, fs.Args()...)
+
+	if len(positionals) != 2 {
+		fmt.Fprintln(stderr, "fill requires an index and text")
+		printCommandHint(stderr, "fill", `nxctl fill @e3 "hello@example.com" --json`)
+		return 1
+	}
+
+	nodeID, _, err := parseNodeSelector(positionals[0])
+	if err != nil {
+		fmt.Fprintln(stderr, "fill requires a positive integer index or @eN ref")
+		return 1
+	}
+
+	return runTextAction(ctx, stdout, stderr, textActionOptions{
+		SessionID: *sessionID,
+		JSON:      *asJSON,
+		NodeID:    &nodeID,
+		Kind:      "fill",
+		Text:      positionals[1],
 	})
 }
 
@@ -292,21 +349,23 @@ func runType(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 
-	return runTypeAction(ctx, stdout, stderr, typeActionOptions{
+	return runTextAction(ctx, stdout, stderr, textActionOptions{
 		SessionID: *sessionID,
 		JSON:      *asJSON,
+		Kind:      "type",
 		Text:      textArg,
 	})
 }
 
-type typeActionOptions struct {
+type textActionOptions struct {
 	SessionID string
 	JSON      bool
 	NodeID    *int
+	Kind      string
 	Text      string
 }
 
-func runTypeAction(ctx context.Context, stdout io.Writer, stderr io.Writer, opts typeActionOptions) int {
+func runTextAction(ctx context.Context, stdout io.Writer, stderr io.Writer, opts textActionOptions) int {
 	client, err := connectClient(ctx)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -317,7 +376,7 @@ func runTypeAction(ctx context.Context, stdout io.Writer, stderr io.Writer, opts
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
 		SessionID: opts.SessionID,
 		Action: api.Action{
-			Kind:   "type",
+			Kind:   opts.Kind,
 			NodeID: opts.NodeID,
 			Text:   opts.Text,
 		},
@@ -348,6 +407,13 @@ func runTypeAction(ctx context.Context, stdout io.Writer, stderr io.Writer, opts
 		return 0
 	}
 
-	fmt.Fprintln(stdout, "typed")
+	fmt.Fprintln(stdout, defaultTextActionMessage(opts.Kind))
 	return 0
+}
+
+func defaultTextActionMessage(kind string) string {
+	if kind == "fill" {
+		return "filled"
+	}
+	return "typed"
 }

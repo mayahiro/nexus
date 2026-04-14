@@ -69,7 +69,7 @@ func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io
 	}
 
 	if role == "" || (!*matchAll && actionName == "") {
-		fmt.Fprintln(stderr, "find role requires <role> <click|input|get> or --all")
+		fmt.Fprintln(stderr, "find role requires <role> <click|input|fill|get> or --all")
 		printCommandHint(stderr, "find", `nxctl find role button click --name "Submit"`)
 		return 1
 	}
@@ -121,6 +121,7 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 	matchAll := fs.Bool("all", false, "list all matching nodes")
 	textValue := ""
 	actionName := ""
+	actionValue := ""
 
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		textValue = args[0]
@@ -130,13 +131,17 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 		actionName = args[0]
 		args = args[1:]
 	}
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		actionValue = args[0]
+		args = args[1:]
+	}
 
 	if err := parseCommandFlags(fs, args, stderr, "find"); err != nil {
 		return 1
 	}
 
 	if textValue == "" || (!*matchAll && actionName == "") {
-		fmt.Fprintln(stderr, "find text requires <text> <click|get> or --all")
+		fmt.Fprintln(stderr, "find text requires <text> <click|fill|get> or --all")
 		printCommandHint(stderr, "find", `nxctl find text "Sign In" click`)
 		return 1
 	}
@@ -170,7 +175,7 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return 1
 	}
 
-	return executeFoundAction(ctx, client, *sessionID, node, actionName, "", *asJSON, stdout, stderr)
+	return executeFoundAction(ctx, client, *sessionID, node, actionName, actionValue, *asJSON, stdout, stderr)
 }
 
 func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -202,8 +207,8 @@ func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr i
 	}
 
 	if label == "" || (!*matchAll && actionName == "") {
-		fmt.Fprintln(stderr, `find label requires "label" input "text", get <target>, or --all`)
-		printCommandHint(stderr, "find", `nxctl find label "Email" input "hello@example.com"`)
+		fmt.Fprintln(stderr, `find label requires "label" input|fill "text", get <target>, or --all`)
+		printCommandHint(stderr, "find", `nxctl find label "Email" fill "hello@example.com"`)
 		return 1
 	}
 	if *matchAll && actionName != "" {
@@ -271,7 +276,7 @@ func runFindAttr(ctx context.Context, kind string, attrs []string, args []string
 	}
 
 	if attrValue == "" || (!*matchAll && actionName == "") {
-		fmt.Fprintf(stderr, "find %s requires <value> <click|get> or --all\n", kind)
+		fmt.Fprintf(stderr, "find %s requires <value> <click|fill|get> or --all\n", kind)
 		printCommandHint(stderr, "find", fmt.Sprintf(`nxctl find %s "value" --all`, kind))
 		return 1
 	}

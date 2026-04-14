@@ -22,6 +22,7 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  help")
 	fmt.Fprintln(w, "  eval")
 	fmt.Fprintln(w, "  dblclick")
+	fmt.Fprintln(w, "  fill")
 	fmt.Fprintln(w, "  find")
 	fmt.Fprintln(w, "  get")
 	fmt.Fprintln(w, "  hover")
@@ -66,6 +67,8 @@ func printCommandHelp(w io.Writer, command string) bool {
 		printNodeActionHelp(w, "dblclick")
 	case "eval":
 		printEvalHelp(w)
+	case "fill":
+		printFillHelp(w)
 	case "find":
 		printFindHelp(w)
 	case "get":
@@ -165,17 +168,20 @@ func printEvalHelp(w io.Writer) {
 func printFindHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl find role <role> click [--name <text>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find role <role> input "text" [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> fill "text" [--name <text>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find role <role> get text|value|attributes|bbox [--name <text>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find role <role> --all [--name <text>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find text "text" click [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" fill "text" [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find text "text" get text|value|attributes|bbox [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find text "text" --all [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find label "label" input "text" [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" fill "text" [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find label "label" get value|attributes|bbox [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find label "label" --all [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find testid "value" click|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find testid "value" click|fill|get ... [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find testid "value" --all [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find href "value" click|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find href "value" click|fill|get ... [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find href "value" --all [--session <id>] [--json]`)
 }
 
@@ -187,6 +193,10 @@ func printGetHelp(w io.Writer) {
 
 func printInputHelp(w io.Writer) {
 	fmt.Fprintln(w, `usage: nxctl input <index|@eN> "text" [--session <id>] [--json]`)
+}
+
+func printFillHelp(w io.Writer) {
+	fmt.Fprintln(w, `usage: nxctl fill <index|@eN> "text" [--session <id>] [--json]`)
 }
 
 func printKeysHelp(w io.Writer) {

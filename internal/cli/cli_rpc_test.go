@@ -115,12 +115,19 @@ func (mouseRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) 
 }
 
 func (typeRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
-	if req.Action.Kind != "type" || req.Action.Text == "" {
+	if (req.Action.Kind != "type" && req.Action.Kind != "fill") || req.Action.Text == "" {
 		return api.ActSessionResponse{}, nil
 	}
 	message := "typed"
+	if req.Action.Kind == "fill" {
+		message = "filled"
+	}
 	if req.Action.NodeID != nil {
-		message = "typed into 3"
+		if req.Action.Kind == "fill" {
+			message = "filled into 3"
+		} else {
+			message = "typed into 3"
+		}
 	}
 	return api.ActSessionResponse{
 		Result: api.ActionResult{
@@ -250,6 +257,8 @@ func (findRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "clicked " + strconv.Itoa(*req.Action.NodeID)}}, nil
 	case "type":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "typed into " + strconv.Itoa(*req.Action.NodeID)}}, nil
+	case "fill":
+		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "filled into " + strconv.Itoa(*req.Action.NodeID)}}, nil
 	case "get":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: map[string]interface{}{"href": "/signin"}}}, nil
 	default:

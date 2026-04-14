@@ -859,6 +859,8 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult
 		return b.uploadViaCDP(ctx, url, action)
 	case "eval":
 		return b.evalViaCDP(ctx, url, action)
+	case "fill":
+		return b.fillViaCDP(ctx, url, action)
 	case "viewport":
 		return b.viewportViaCDP(ctx, url, action)
 	default:
@@ -1321,6 +1323,34 @@ func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api
 			OK:      true,
 			Changed: true,
 			Message: message,
+			Value:   value,
+			Meta: map[string]string{
+				"devtools_url":   devtoolsURL,
+				"page_target_id": targetInfo.ID,
+			},
+		}, nil
+	})
+}
+
+func (b *Backend) fillViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
+	if action.NodeID == nil || *action.NodeID <= 0 {
+		return nil, errors.New("fill requires a positive index")
+	}
+	if strings.TrimSpace(action.Text) == "" {
+		return nil, errors.New("fill text is required")
+	}
+
+	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		var value map[string]interface{}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(typeExpression(*action.NodeID, action.Text), &value, chromedp.EvalAsValue)); err != nil {
+			return nil, err
+		}
+		value["method"] = "dom_set"
+
+		return &api.ActionResult{
+			OK:      true,
+			Changed: true,
+			Message: fmt.Sprintf("filled into %d", *action.NodeID),
 			Value:   value,
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,

@@ -144,7 +144,7 @@ func TestHoverDblclickRightclick(t *testing.T) {
 	}
 }
 
-func TestTypeAndInput(t *testing.T) {
+func TestTypeInputAndFill(t *testing.T) {
 	configureXDGTestEnv(t)
 
 	paths, err := config.DefaultPaths()
@@ -199,6 +199,22 @@ func TestTypeAndInput(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"message": "typed into 3"`) {
 		t.Fatalf("unexpected input --json output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"fill", "3", "hello@example.com"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected fill exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "filled into 3" {
+		t.Fatalf("unexpected fill output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"fill", "@e3", "hello@example.com", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected fill --json exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"message": "filled into 3"`) {
+		t.Fatalf("unexpected fill --json output: %s", stdout.String())
 	}
 
 	cancel()

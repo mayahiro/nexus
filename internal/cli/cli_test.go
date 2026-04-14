@@ -90,7 +90,10 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `usage: nxctl find role <role> click`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `find testid "value" click|get`) {
+	if !strings.Contains(stdout.String(), `find role <role> fill "text"`) {
+		t.Fatalf("unexpected help find output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `find testid "value" click|fill|get`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
 

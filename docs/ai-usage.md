@@ -21,12 +21,13 @@ nxctl state
 The default execution loop is:
 
 ```text
-open -> state/find -> click/type/input/keys -> wait -> get/state -> close
+open -> state/find -> click/type/fill/input/keys -> wait -> get/state -> close
 ```
 
 `state` emits element refs such as `@e1`. Reuse those refs in node-targeting commands instead of relying on raw indexes when possible.
 When a stable semantic locator is clearer than a ref, prefer `find role`, `find text`, `find label`, `find testid`, or `find href`.
 `state` also includes short locator hints for each node so you can promote a recent `@eN` observation into a semantic locator without re-deriving it yourself.
+Use `fill` when you want to replace the current value, and `type` when you want keystroke-style input.
 If `find` reports multiple matches, narrow the query or fall back to `@eN` from the latest `state`.
 
 ## 3. Session Model
@@ -64,7 +65,9 @@ nxctl click @e3
 nxctl find role button click --name "Submit"
 nxctl find role button --all
 nxctl find role link get attributes --name "Docs"
+nxctl find label "Email" fill "hello@example.com"
 nxctl find label "Email" input "hello@example.com"
+nxctl fill @e4 "hello@example.com"
 nxctl input @e4 "hello@example.com"
 nxctl batch --cmd "state" --cmd "find role button --all"
 nxctl keys "Enter"

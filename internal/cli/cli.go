@@ -59,6 +59,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runDblclick(ctx, args[1:], stdout, stderr)
 	case "eval":
 		return runEval(ctx, args[1:], stdout, stderr)
+	case "fill":
+		return runFill(ctx, args[1:], stdout, stderr)
 	case "find":
 		return runFind(ctx, args[1:], stdout, stderr)
 	case "get":
