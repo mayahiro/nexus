@@ -50,6 +50,8 @@ Nexus is built around sessions.
 - `nxd` is the local daemon
 - each browser attachment becomes a named session
 - commands operate against the default session unless `--session` is provided
+- `close` stops `nxd` when it closes the last remaining session
+- `close --all` closes every session and stops `nxd`
 
 The primary interaction loop is:
 

@@ -35,8 +35,8 @@ If `find` reports multiple matches, narrow the query or fall back to `@eN` from 
 
 - the default session is `default`
 - use `--session <id>` to target another session
-- `close` closes the default session
-- `close --all` closes every session
+- `close` closes the default session and stops the daemon if it was the last session
+- `close --all` closes every session and stops the daemon
 - `detach --session <id>` detaches a specific session
 
 Use `sessions --json` when you need to inspect current state across multiple sessions.

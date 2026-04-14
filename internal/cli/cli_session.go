@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/rpc"
 )
 
 func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -38,19 +39,15 @@ func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if len(listed.Sessions) == 0 {
-			if _, err := client.StopDaemon(ctx); err != nil {
-				fmt.Fprintln(stderr, err)
-				return 1
-			}
-			fmt.Fprintln(stdout, "closed all sessions")
-			return 0
-		}
 		for _, session := range listed.Sessions {
 			if _, err := client.DetachSession(ctx, api.DetachSessionRequest{SessionID: session.ID}); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
+		}
+		if err := stopDaemonIfNoSessions(ctx, client); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
 		}
 		fmt.Fprintln(stdout, "closed all sessions")
 		return 0
@@ -61,9 +58,25 @@ func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if err := stopDaemonIfNoSessions(ctx, client); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	fmt.Fprintf(stdout, "closed %s\n", res.Session.ID)
 	return 0
+}
+
+func stopDaemonIfNoSessions(ctx context.Context, client *rpc.Client) error {
+	listed, err := client.ListSessions(ctx)
+	if err != nil {
+		return err
+	}
+	if len(listed.Sessions) != 0 {
+		return nil
+	}
+	_, err = client.StopDaemon(ctx)
+	return err
 }
 
 func runSessions(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
