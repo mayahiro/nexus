@@ -1,6 +1,6 @@
-# Nexus
+# Nexus: An A-eye for Agents
 
-Nexus is a browser automation gateway for AI-driven workflows on macOS.
+Nexus is an A-eye for agents, designed to observe, navigate, and compare browser state in practical local workflows on macOS.
 
 It is inspired by Browser Use CLI, but it is not a compatibility project. Nexus is a native Go implementation with a session-oriented daemon, managed browser installs, and a CLI designed for practical local automation without a Python runtime dependency.
 
