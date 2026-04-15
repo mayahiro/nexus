@@ -69,6 +69,8 @@ func (h *flowRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest
 	switch req.Action.Kind {
 	case "wait":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Message: "waited"}}, nil
+	case "navigate":
+		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "navigated"}}, nil
 	case "fill":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "filled"}}, nil
 	case "invoke":
@@ -157,6 +159,10 @@ func TestFlowRunManifest(t *testing.T) {
 						"text":    "{{ email }}",
 					},
 					{
+						"action": "navigate",
+						"value":  "https://example.com/dashboard",
+					},
+					{
 						"action":  "click",
 						"locator": "role=button&name=Sign in",
 					},
@@ -211,6 +217,7 @@ func TestFlowRunManifest(t *testing.T) {
 	desktopCount := 0
 	mobileCount := 0
 	fillCount := 0
+	navigateCount := 0
 	clickCount := 0
 	for _, req := range handler.attachRequests {
 		switch {
@@ -224,6 +231,9 @@ func TestFlowRunManifest(t *testing.T) {
 		if req.Action.Kind == "fill" && req.Action.Text == "user@example.com" {
 			fillCount++
 		}
+		if req.Action.Kind == "navigate" && req.Action.Args["url"] == "https://example.com/dashboard" {
+			navigateCount++
+		}
 		if req.Action.Kind == "invoke" {
 			clickCount++
 		}
@@ -233,6 +243,9 @@ func TestFlowRunManifest(t *testing.T) {
 	}
 	if fillCount != 4 {
 		t.Fatalf("expected 4 fill actions, got %#v", handler.actRequests)
+	}
+	if navigateCount != 4 {
+		t.Fatalf("expected 4 navigate actions, got %#v", handler.actRequests)
 	}
 	if clickCount != 4 {
 		t.Fatalf("expected 4 click actions, got %#v", handler.actRequests)

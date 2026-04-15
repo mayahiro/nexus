@@ -623,6 +623,16 @@ func executeFlowStep(ctx context.Context, client *rpc.Client, state flowExecutio
 			}
 			return report, err
 		}
+	case "navigate":
+		err := executeFlowNavigateStep(ctx, client, state, step)
+		if err != nil {
+			report.Status = "failed"
+			report.Error = err.Error()
+			if step.ContinueOnError {
+				return report, nil
+			}
+			return report, err
+		}
 	case "click":
 		err := executeFlowNodeStep(ctx, client, state, step, "invoke")
 		if err != nil {
@@ -695,6 +705,18 @@ func executeFlowWaitStep(ctx context.Context, client *rpc.Client, state flowExec
 		args["timeout_ms"] = strconv.Itoa(*step.Timeout)
 	}
 	return executeFlowActionOnSides(ctx, client, state, step, api.Action{Kind: "wait", Args: args})
+}
+
+func executeFlowNavigateStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep) error {
+	if strings.TrimSpace(step.Value) == "" {
+		return errors.New("navigate step requires value")
+	}
+	return executeFlowActionOnSides(ctx, client, state, step, api.Action{
+		Kind: "navigate",
+		Args: map[string]string{
+			"url": strings.TrimSpace(step.Value),
+		},
+	})
 }
 
 func executeFlowNodeStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep, actionKind string) error {

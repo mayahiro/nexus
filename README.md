@@ -163,7 +163,7 @@ Node-level compare findings include a best-effort `locator` when Nexus can infer
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 
-`flow run` currently supports `wait`, `click`, `fill`, `viewport`, and `compare` steps.
+`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, and `compare` steps.
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 

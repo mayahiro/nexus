@@ -108,7 +108,8 @@ Use `inspect` when the whole-page diff is too broad and you want to compare one 
 
 When you need to keep a session alive across multiple actions, use `flow run --manifest`.
 This is the right shape for login flows, checkout flows, and responsive checks where the same user journey should run against multiple matrices.
-The current implementation supports `wait`, `click`, `fill`, `viewport`, and `compare` steps.
+The current implementation supports `wait`, `navigate`, `click`, `fill`, `viewport`, and `compare` steps.
+Use `navigate -> wait -> compare` when the post-login landing page is not the page you actually want to inspect.
 
 Use this manifest shape for multi-page compare:
 
@@ -200,12 +201,17 @@ Use this manifest shape for scenario flow:
           "text": "{{ email }}"
         },
         {
-          "action": "click",
-          "locator": "role=button&name=Sign in"
+          "action": "navigate",
+          "value": "https://example.com/orders"
+        },
+        {
+          "action": "wait",
+          "target": "selector",
+          "value": "[data-testid='orders-loaded']"
         },
         {
           "action": "compare",
-          "name": "post-login"
+          "name": "orders"
         }
       ]
     }
@@ -221,6 +227,7 @@ Flow rules:
 - `matrix` expands one scenario into multiple runs
 - `backend`, `target_ref`, and `viewport` inherit from `defaults`, then `matrix`, then endpoint override
 - `{{ name }}` variables resolve from `matrix.variables` and `scenario.variables`
+- use `navigate` when you need to move to a target page directly before `wait` and `compare`
 - attached sessions are detached after the scenario finishes
 - existing sessions are reused and not detached
 
