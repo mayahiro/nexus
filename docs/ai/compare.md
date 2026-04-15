@@ -1,0 +1,81 @@
+# Nexus AI Compare Guide
+
+Use this guide when you need reliable compare results.
+
+## Default Approach
+
+1. Decide what you are comparing
+2. Decide what "ready" means for that page
+3. Run compare with the smallest meaningful scope
+4. Split the work into multiple passes when the diff is noisy
+
+## Readiness Rules
+
+- Treat `document.readyState === "complete"` as a baseline, not a guarantee
+- Prefer a page-specific `--wait-selector`
+- Use `--wait-function` when readiness depends on data count or application state
+- Use `--wait-network-idle` only as a supporting signal
+
+Good wait targets:
+
+- a ready marker such as `[data-testid="orders-loaded"]`
+- a main-content selector such as `main table tbody tr`
+- a function such as `document.querySelectorAll("tbody tr").length > 0`
+
+Bad wait targets:
+
+- `footer`
+- a layout element that appears before the page content is ready
+- an authentication-only indicator in the sidebar when the compare target is the main content
+
+## Compare Scope
+
+Do not try to validate everything in one pass.
+
+Recommended passes:
+
+- major text and labels
+- actionable controls such as buttons, links, and form fields
+- important styles such as `color`, `background-color`, and `pointer-events`
+
+## Noise Control
+
+- Keep `--ignore-text-regex` minimal
+- Use `--mask-selector` for sensitive values, timestamps, and IDs that are expected to differ
+- Use `--ignore-selector` only for nodes that are truly outside the compare target
+- If a diff is suspicious, reduce the suppression rules and rerun
+
+## Command Patterns
+
+Page-to-page compare:
+
+```text
+nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector '[data-testid="orders-loaded"]'
+```
+
+Session-to-session compare:
+
+```text
+nxctl compare --old-session old --new-session new --wait-function 'document.querySelectorAll("tbody tr").length > 0'
+```
+
+Targeted inspection:
+
+```text
+nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+```
+
+Style-focused compare:
+
+```text
+nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
+```
+
+## Failure Triage
+
+If the new page looks incomplete:
+
+1. Run `state` just before compare
+2. Check whether the target content is really present
+3. Strengthen readiness with `--wait-selector` or `--wait-function`
+4. Narrow the compare scope before assuming there is a product bug

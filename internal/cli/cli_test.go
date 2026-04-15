@@ -66,12 +66,18 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
 		t.Fatalf("unexpected help output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), aiUsageDocURL) {
+		t.Fatalf("unexpected help output: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "wait"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help wait exit code: %d\n%s", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `usage: nxctl wait selector`) {
+		t.Fatalf("unexpected help wait output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), aiCompareDocURL) {
 		t.Fatalf("unexpected help wait output: %s", stdout.String())
 	}
 
@@ -128,6 +134,20 @@ func TestHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `--compare-css`) || !strings.Contains(stdout.String(), `--css-property <name>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), aiCompareDocURL) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), migrationPlaybookDocURL) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "flow"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help flow exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), aiFlowDocURL) {
+		t.Fatalf("unexpected help flow output: %s", stdout.String())
 	}
 
 	stdout.Reset()

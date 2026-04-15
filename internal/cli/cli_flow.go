@@ -1043,8 +1043,16 @@ func writeFlowJSONFile(path string, value any) error {
 
 func printFlowHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl flow run --manifest <file> [--scenario <name>] [--matrix <name>] [--continue-on-error] [--output-json <file>] [--json]")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "flow guide", aiFlowDocURL)
+	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
+	printDocLink(w, "ai guide", aiUsageDocURL)
 }
 
 func printFlowRunHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl flow run --manifest <file> [--scenario <name>] [--matrix <name>] [--continue-on-error] [--output-json <file>] [--json]")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "flow guide", aiFlowDocURL)
+	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
+	printDocLink(w, "ai guide", aiUsageDocURL)
 }

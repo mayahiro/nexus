@@ -48,6 +48,9 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  doctor")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "run `nxctl help <command>` for command-specific usage")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "ai guide", aiUsageDocURL)
+	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
 }
 
 func printCommandHelp(w io.Writer, command string) bool {
@@ -282,6 +285,9 @@ func printWaitHelp(w io.Writer) {
 	fmt.Fprintln(w, `   or: nxctl wait url "value" [--timeout <ms>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl wait navigation [--timeout <ms>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl wait function "js expr" [--timeout <ms>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, "")
+	printDocLink(w, "compare guide", aiCompareDocURL)
+	printDocLink(w, "ai guide", aiUsageDocURL)
 }
 
 func printDetachHelp(w io.Writer) {

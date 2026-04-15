@@ -17,6 +17,10 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
 	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
 	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, wait_*, compare_css, css_property, ignore_selector, and mask_selector")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "compare guide", aiCompareDocURL)
+	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
+	printDocLink(w, "ai guide", aiUsageDocURL)
 }
 
 func isHelpArgs(args []string) bool {

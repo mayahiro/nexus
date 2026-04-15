@@ -208,4 +208,8 @@ Fallbacks:
 
 ## Documentation
 
-- AI usage guide: [`docs/ai-usage.md`](docs/ai-usage.md)
+- AI guide: [`docs/ai/usage.md`](docs/ai/usage.md)
+- AI compare guide: [`docs/ai/compare.md`](docs/ai/compare.md)
+- AI flow guide: [`docs/ai/flow.md`](docs/ai/flow.md)
+- AI playbooks: [`docs/ai/playbooks/README.md`](docs/ai/playbooks/README.md)
+- AI migration playbook: [`docs/ai/playbooks/migration.md`](docs/ai/playbooks/migration.md)
