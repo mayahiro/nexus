@@ -421,6 +421,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	oldSession := fs.String("old-session", "", "old session id")
 	newSession := fs.String("new-session", "", "new session id")
 	asJSON := fs.Bool("json", false, "print as json")
+	nth := fs.Int("nth", 0, "choose the nth matching node")
 	var cssProperty inspectStringValues
 	fs.Var(&cssProperty, "css-property", "computed css property to compare")
 
@@ -449,6 +450,10 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 		return 1
 	}
+	if isInvalidNthFlag(fs, *nth) {
+		fmt.Fprintln(stderr, "inspect --nth must be a positive integer")
+		return 1
+	}
 
 	locator, err := parseInspectLocator(positionals[0])
 	if err != nil {
@@ -475,12 +480,13 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	oldNode, err := resolveInspectNode(oldObservation.Tree, locator)
+	selection := nodeSelectionOptions{Nth: *nth}
+	oldNode, err := resolveInspectNode(oldObservation.Tree, locator, selection)
 	if err != nil {
 		fmt.Fprintf(stderr, "old session %s: %v\n", *oldSession, err)
 		return 1
 	}
-	newNode, err := resolveInspectNode(newObservation.Tree, locator)
+	newNode, err := resolveInspectNode(newObservation.Tree, locator, selection)
 	if err != nil {
 		fmt.Fprintf(stderr, "new session %s: %v\n", *newSession, err)
 		return 1
@@ -584,7 +590,7 @@ func parseInspectRoleName(args []string) (string, error) {
 	return strings.TrimSpace(*name), nil
 }
 
-func resolveInspectNode(nodes []api.Node, locator inspectLocator) (api.Node, error) {
+func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection nodeSelectionOptions) (api.Node, error) {
 	switch locator.Kind {
 	case "ref":
 		nodeID, _, err := parseNodeSelector(locator.Ref)
@@ -607,12 +613,12 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator) (api.Node, err
 			}
 			return nodeMatches(node, locator.Name)
 		})
-		return chooseNode(matches, inspectFirstNonEmpty(locator.Name, locator.Role))
+		return chooseNode(matches, inspectFirstNonEmpty(locator.Name, locator.Role), selection)
 	case "text":
 		matches := selectNodes(nodes, func(node api.Node) bool {
 			return nodeMatches(node, locator.Value)
 		})
-		return chooseNode(matches, locator.Value)
+		return chooseNode(matches, locator.Value, selection)
 	case "label":
 		matches := selectNodes(nodes, func(node api.Node) bool {
 			if !node.Editable && !node.Selectable && !strings.EqualFold(node.Role, "textbox") && !strings.EqualFold(node.Role, "combobox") {
@@ -620,7 +626,7 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator) (api.Node, err
 			}
 			return nodeMatches(node, locator.Value)
 		})
-		return chooseNode(matches, locator.Value)
+		return chooseNode(matches, locator.Value, selection)
 	case "testid":
 		matches := selectNodes(nodes, func(node api.Node) bool {
 			return nodeMatches(api.Node{
@@ -628,12 +634,12 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator) (api.Node, err
 				Attrs: node.Attrs,
 			}, locator.Value)
 		})
-		return chooseNode(matches, locator.Value)
+		return chooseNode(matches, locator.Value, selection)
 	case "href":
 		matches := selectNodes(nodes, func(node api.Node) bool {
 			return nodeMatches(api.Node{Name: node.Attrs["href"], Attrs: node.Attrs}, locator.Value)
 		})
-		return chooseNode(matches, locator.Value)
+		return chooseNode(matches, locator.Value, selection)
 	default:
 		return api.Node{}, fmt.Errorf("unsupported inspect locator")
 	}

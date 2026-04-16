@@ -178,22 +178,22 @@ func printEvalHelp(w io.Writer) {
 }
 
 func printFindHelp(w io.Writer) {
-	fmt.Fprintln(w, `usage: nxctl find role <role> click [--name <text>] [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find role <role> input "text" [--name <text>] [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find role <role> fill "text" [--name <text>] [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find role <role> get text|value|attributes|bbox [--name <text>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `usage: nxctl find role <role> click [--name <text>] [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> input "text" [--name <text>] [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> fill "text" [--name <text>] [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find role <role> get text|value|attributes|bbox [--name <text>] [--nth <n>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find role <role> --all [--name <text>] [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find text "text" click [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find text "text" fill "text" [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find text "text" get text|value|attributes|bbox [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" click [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" fill "text" [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find text "text" get text|value|attributes|bbox [--nth <n>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find text "text" --all [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find label "label" input "text" [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find label "label" fill "text" [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find label "label" get value|attributes|bbox [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" input "text" [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" fill "text" [--nth <n>] [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find label "label" get value|attributes|bbox [--nth <n>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find label "label" --all [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find testid "value" click|fill|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find testid "value" click|fill|get ... [--nth <n>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find testid "value" --all [--session <id>] [--json]`)
-	fmt.Fprintln(w, `   or: nxctl find href "value" click|fill|get ... [--session <id>] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl find href "value" click|fill|get ... [--nth <n>] [--session <id>] [--json]`)
 	fmt.Fprintln(w, `   or: nxctl find href "value" --all [--session <id>] [--json]`)
 }
 
@@ -208,10 +208,10 @@ func printInputHelp(w io.Writer) {
 }
 
 func printInspectHelp(w io.Writer) {
-	fmt.Fprintln(w, `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id> [--css-property <name>]... [--json]`)
+	fmt.Fprintln(w, `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id> [--nth <n>] [--css-property <name>]... [--json]`)
 	fmt.Fprintln(w, `locator: @eN, role <role> [--name <text>], text <text>, label <text>, testid <value>, or href <value>`)
 	fmt.Fprintln(w, `examples: nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
-	fmt.Fprintln(w, `          nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color`)
+	fmt.Fprintln(w, `          nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color`)
 }
 
 func printFillHelp(w io.Writer) {

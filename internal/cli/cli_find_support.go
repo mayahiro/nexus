@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -37,9 +38,19 @@ func selectNodes(nodes []api.Node, match func(api.Node) bool) []api.Node {
 	return matches
 }
 
-func chooseNode(matches []api.Node, query string) (api.Node, error) {
+type nodeSelectionOptions struct {
+	Nth int
+}
+
+func chooseNode(matches []api.Node, query string, options nodeSelectionOptions) (api.Node, error) {
 	if len(matches) == 0 {
 		return api.Node{}, errors.New("matching node not found")
+	}
+	if options.Nth > 0 {
+		if options.Nth <= len(matches) {
+			return matches[options.Nth-1], nil
+		}
+		return api.Node{}, nthNodeError(matches, options.Nth)
 	}
 	if len(matches) == 1 {
 		return matches[0], nil
@@ -121,6 +132,14 @@ func nodeMatchCandidates(node api.Node) []string {
 }
 
 func ambiguousNodeError(nodes []api.Node) error {
+	return fmt.Errorf("multiple matching nodes found: %s. narrow the query, use --nth <n>, or use @eN from `nxctl state`", formatNodeCandidates(nodes))
+}
+
+func nthNodeError(nodes []api.Node, nth int) error {
+	return fmt.Errorf("match %d not found: %d candidate nodes available: %s", nth, len(nodes), formatNodeCandidates(nodes))
+}
+
+func formatNodeCandidates(nodes []api.Node) string {
 	parts := make([]string, 0, len(nodes))
 	for i, node := range nodes {
 		if i == 5 {
@@ -139,7 +158,20 @@ func ambiguousNodeError(nodes []api.Node) error {
 		}
 		parts = append(parts, fmt.Sprintf("%s %s", label, node.Role))
 	}
-	return fmt.Errorf("multiple matching nodes found: %s. narrow the query or use @eN from `nxctl state`", strings.Join(parts, ", "))
+	return strings.Join(parts, ", ")
+}
+
+func isInvalidNthFlag(fs interface{ Visit(func(*flag.Flag)) }, nth int) bool {
+	if nth > 0 {
+		return false
+	}
+	invalid := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "nth" {
+			invalid = true
+		}
+	})
+	return invalid
 }
 
 func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID string, node api.Node, actionName string, actionValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {

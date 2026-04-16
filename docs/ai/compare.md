@@ -63,6 +63,7 @@ Targeted inspection:
 
 ```text
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 ```
 
 Style-focused compare:

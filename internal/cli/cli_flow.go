@@ -912,7 +912,7 @@ func resolveFlowLocator(ctx context.Context, client *rpc.Client, sessionID strin
 		}
 		return true
 	})
-	return chooseNode(matches, locator)
+	return chooseNode(matches, locator, nodeSelectionOptions{})
 }
 
 func parseFlowLocator(locator string) ([]flowSelectorTerm, error) {

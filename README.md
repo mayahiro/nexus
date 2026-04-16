@@ -66,13 +66,14 @@ Use `fill` when you want to replace the current value, and `type` when you want 
 When you want a meaning-based locator instead of a ref, use `find`:
 
 - `find role button click --name "Submit"`
+- `find role button click --nth 2`
 - `find role link get attributes --name "Docs"`
 - `find role button --all`
 - `find text "Sign in" click`
 - `find label "Email" fill "hello@example.com"`
 - `find label "Email" input "hello@example.com"`
 
-If multiple nodes match, `find` fails with candidate refs so you can narrow the query or switch to `@eN` from `state`.
+If multiple nodes match, `find` fails with candidate refs so you can narrow the query, select one with `--nth`, or switch to `@eN` from `state`.
 
 ## Browser Management
 
@@ -104,6 +105,7 @@ nxctl state
 nxctl state --role button --limit 20
 nxctl click @e3
 nxctl find role button click --name "Submit"
+nxctl find role button click --nth 2
 nxctl find role link get attributes --name "Docs"
 nxctl find label "Email" fill "hello@example.com"
 nxctl find label "Email" input "hello@example.com"
@@ -126,6 +128,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ou
 nxctl compare --manifest migration-pages.json --output-md compare.md
 nxctl flow run --manifest login-flow.json --json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
 nxctl get attributes @e3
 nxctl screenshot
@@ -163,6 +166,7 @@ Use `--css-property` one or more times when you want explicit computed-style pro
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
+Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 
 `flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, and `compare` steps.
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.

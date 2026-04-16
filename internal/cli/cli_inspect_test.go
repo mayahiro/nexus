@@ -263,6 +263,26 @@ func TestInspect(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button`, "--old-session", "old", "--new-session", "new", "--nth", "2", "--css-property", "color"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect nth exit code: %d\n%s", code, stdout.String())
+	}
+	output = stdout.String()
+	if !strings.Contains(output, `old: old @e4 button "Cancel"`) {
+		t.Fatalf("unexpected inspect nth output: %s", output)
+	}
+	if !strings.Contains(output, `new: new @e4 button "Cancel"`) {
+		t.Fatalf("unexpected inspect nth output: %s", output)
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button`, "--old-session", "old", "--new-session", "new", "--nth", "0"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected inspect nth validation to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "inspect --nth must be a positive integer") {
+		t.Fatalf("unexpected inspect nth validation output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"inspect", `role button --name "Submit"`, "--old-session", "old", "--new-session", "new", "--css-property", "color", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected inspect json exit code: %d\n%s", code, stdout.String())
 	}
@@ -410,6 +430,30 @@ func TestFind(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "@e1 button") || !strings.Contains(stdout.String(), "@e4 button") {
 		t.Fatalf("unexpected ambiguous find output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "click", "--nth", "2"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected find nth exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e4" {
+		t.Fatalf("unexpected find nth output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "click", "--nth", "0"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected invalid find nth to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "find role --nth must be a positive integer") {
+		t.Fatalf("unexpected invalid find nth output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "--all", "--nth", "2"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected find --all --nth to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "find role --all does not accept --nth") {
+		t.Fatalf("unexpected find --all --nth output: %s", stdout.String())
 	}
 
 	cancel()

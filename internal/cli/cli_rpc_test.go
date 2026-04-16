@@ -283,34 +283,55 @@ func (findRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 }
 
 func (inspectRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
-	node := api.Node{
-		ID:      1,
-		Ref:     "@e1",
-		Role:    "button",
-		Name:    "Submit",
-		Visible: true,
-		Enabled: true,
-		Styles:  map[string]string{},
+	nodes := []api.Node{
+		{
+			ID:      1,
+			Ref:     "@e1",
+			Role:    "button",
+			Name:    "Submit",
+			Visible: true,
+			Enabled: true,
+			Styles:  map[string]string{},
+		},
+		{
+			ID:      4,
+			Ref:     "@e4",
+			Role:    "button",
+			Name:    "Cancel",
+			Visible: true,
+			Enabled: true,
+			Styles:  map[string]string{},
+		},
 	}
-	for _, property := range req.Options.CSSProperties {
-		switch req.SessionID {
-		case "old":
-			switch property {
-			case "color":
-				node.Styles[property] = "rgb(0, 0, 0)"
-			case "display":
-				node.Styles[property] = "inline-block"
-			default:
-				node.Styles[property] = ""
-			}
-		case "new":
-			switch property {
-			case "color":
-				node.Styles[property] = "rgb(255, 0, 0)"
-			case "display":
-				node.Styles[property] = "inline-block"
-			default:
-				node.Styles[property] = ""
+	for i := range nodes {
+		for _, property := range req.Options.CSSProperties {
+			switch req.SessionID {
+			case "old":
+				switch property {
+				case "color":
+					if nodes[i].ID == 4 {
+						nodes[i].Styles[property] = "rgb(64, 64, 64)"
+					} else {
+						nodes[i].Styles[property] = "rgb(0, 0, 0)"
+					}
+				case "display":
+					nodes[i].Styles[property] = "inline-block"
+				default:
+					nodes[i].Styles[property] = ""
+				}
+			case "new":
+				switch property {
+				case "color":
+					if nodes[i].ID == 4 {
+						nodes[i].Styles[property] = "rgb(0, 0, 255)"
+					} else {
+						nodes[i].Styles[property] = "rgb(255, 0, 0)"
+					}
+				case "display":
+					nodes[i].Styles[property] = "inline-block"
+				default:
+					nodes[i].Styles[property] = ""
+				}
 			}
 		}
 	}
@@ -319,7 +340,7 @@ func (inspectRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 			SessionID:   req.SessionID,
 			URLOrScreen: "https://example.com",
 			Title:       "Inspect",
-			Tree:        []api.Node{node},
+			Tree:        nodes,
 		},
 	}, nil
 }

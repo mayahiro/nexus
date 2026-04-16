@@ -46,6 +46,7 @@ func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 	matchAll := fs.Bool("all", false, "list all matching nodes")
+	nth := fs.Int("nth", 0, "choose the nth matching node")
 	name := fs.String("name", "", "accessible name")
 	role := ""
 	actionName := ""
@@ -77,6 +78,14 @@ func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fmt.Fprintln(stderr, "find role --all does not accept an action")
 		return 1
 	}
+	if isInvalidNthFlag(fs, *nth) {
+		fmt.Fprintln(stderr, "find role --nth must be a positive integer")
+		return 1
+	}
+	if *matchAll && *nth > 0 {
+		fmt.Fprintln(stderr, "find role --all does not accept --nth")
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -103,7 +112,7 @@ func runFindRole(ctx context.Context, args []string, stdout io.Writer, stderr io
 	if *matchAll {
 		return renderFindMatches(nodes, *asJSON, stdout, stderr)
 	}
-	node, err := chooseNode(nodes, *name)
+	node, err := chooseNode(nodes, *name, nodeSelectionOptions{Nth: *nth})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -119,6 +128,7 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 	matchAll := fs.Bool("all", false, "list all matching nodes")
+	nth := fs.Int("nth", 0, "choose the nth matching node")
 	textValue := ""
 	actionName := ""
 	actionValue := ""
@@ -149,6 +159,14 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 		fmt.Fprintln(stderr, "find text --all does not accept an action")
 		return 1
 	}
+	if isInvalidNthFlag(fs, *nth) {
+		fmt.Fprintln(stderr, "find text --nth must be a positive integer")
+		return 1
+	}
+	if *matchAll && *nth > 0 {
+		fmt.Fprintln(stderr, "find text --all does not accept --nth")
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -169,7 +187,7 @@ func runFindText(ctx context.Context, args []string, stdout io.Writer, stderr io
 	if *matchAll {
 		return renderFindMatches(nodes, *asJSON, stdout, stderr)
 	}
-	node, err := chooseNode(nodes, textValue)
+	node, err := chooseNode(nodes, textValue, nodeSelectionOptions{Nth: *nth})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -185,6 +203,7 @@ func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr i
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 	matchAll := fs.Bool("all", false, "list all matching nodes")
+	nth := fs.Int("nth", 0, "choose the nth matching node")
 	label := ""
 	actionName := ""
 	actionValue := ""
@@ -215,6 +234,14 @@ func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr i
 		fmt.Fprintln(stderr, "find label --all does not accept an action")
 		return 1
 	}
+	if isInvalidNthFlag(fs, *nth) {
+		fmt.Fprintln(stderr, "find label --nth must be a positive integer")
+		return 1
+	}
+	if *matchAll && *nth > 0 {
+		fmt.Fprintln(stderr, "find label --all does not accept --nth")
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -238,7 +265,7 @@ func runFindLabel(ctx context.Context, args []string, stdout io.Writer, stderr i
 	if *matchAll {
 		return renderFindMatches(nodes, *asJSON, stdout, stderr)
 	}
-	node, err := chooseNode(nodes, label)
+	node, err := chooseNode(nodes, label, nodeSelectionOptions{Nth: *nth})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -254,6 +281,7 @@ func runFindAttr(ctx context.Context, kind string, attrs []string, args []string
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 	matchAll := fs.Bool("all", false, "list all matching nodes")
+	nth := fs.Int("nth", 0, "choose the nth matching node")
 	attrValue := ""
 	actionName := ""
 	actionValue := ""
@@ -284,6 +312,14 @@ func runFindAttr(ctx context.Context, kind string, attrs []string, args []string
 		fmt.Fprintf(stderr, "find %s --all does not accept an action\n", kind)
 		return 1
 	}
+	if isInvalidNthFlag(fs, *nth) {
+		fmt.Fprintf(stderr, "find %s --nth must be a positive integer\n", kind)
+		return 1
+	}
+	if *matchAll && *nth > 0 {
+		fmt.Fprintf(stderr, "find %s --all does not accept --nth\n", kind)
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -310,7 +346,7 @@ func runFindAttr(ctx context.Context, kind string, attrs []string, args []string
 	if *matchAll {
 		return renderFindMatches(nodes, *asJSON, stdout, stderr)
 	}
-	node, err := chooseNode(nodes, attrValue)
+	node, err := chooseNode(nodes, attrValue, nodeSelectionOptions{Nth: *nth})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1

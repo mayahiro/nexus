@@ -118,6 +118,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `find role <role> fill "text"`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `--nth <n>`) {
+		t.Fatalf("unexpected help find output: %s", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), `find testid "value" click|fill|get`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
@@ -130,6 +133,9 @@ func TestHelp(t *testing.T) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `role <role> [--name <text>]`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `--nth <n>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
 
