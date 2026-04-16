@@ -33,6 +33,7 @@ open/navigate -> state/find -> click/type/fill/input/keys -> wait -> compare/ins
 ## Quick Start
 
 ```text
+nxctl --help
 nxctl doctor
 nxctl browser setup
 nxctl open https://example.com

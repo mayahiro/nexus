@@ -151,6 +151,7 @@ Available command groups include:
 - session control: `sessions`, `detach`, `close`
 
 Run `nxctl help <command>` for command-specific usage.
+Run `nxctl --help` or `nxctl -h` for the top-level command list and documentation links.
 
 Most command flags can be placed before or after positional arguments.
 Examples: `nxctl open --session work https://example.com`, `nxctl navigate --session work https://example.com/docs`, `nxctl click @e3 --json`

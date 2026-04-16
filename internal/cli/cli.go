@@ -39,6 +39,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		printUsage(stderr)
 		return 1
 	}
+	if isHelpArgs(args) {
+		printUsage(stdout)
+		return 0
+	}
 
 	switch args[0] {
 	case "attach":

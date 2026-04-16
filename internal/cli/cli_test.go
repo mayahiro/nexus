@@ -71,6 +71,25 @@ func TestHelp(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"--help"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected --help exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
+		t.Fatalf("unexpected --help output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), migrationPlaybookDocURL) {
+		t.Fatalf("unexpected --help output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"-h"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected -h exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "commands:") {
+		t.Fatalf("unexpected -h output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "wait"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help wait exit code: %d\n%s", code, stdout.String())
 	}
