@@ -168,9 +168,10 @@ Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` be
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 
-`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, and `compare` steps.
+`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
+Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.
 
 ## Viewport
 

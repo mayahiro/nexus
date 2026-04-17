@@ -19,7 +19,13 @@ import (
 	"golang.org/x/image/math/fixed"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/rpc"
 )
+
+type screenshotCaptureOptions struct {
+	Annotate bool
+	Full     bool
+}
 
 func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpArgs(args) {
@@ -61,34 +67,13 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 	}
 	defer client.Close()
 
-	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
-		SessionID: *sessionID,
-		Options: api.ObserveOptions{
-			WithScreenshot: true,
-			WithTree:       *annotate,
-			FullScreenshot: *full,
-		},
+	data, err := captureScreenshotBytes(ctx, client, *sessionID, screenshotCaptureOptions{
+		Annotate: *annotate,
+		Full:     *full,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
-	}
-	if res.Observation.Screenshot == "" {
-		fmt.Fprintln(stderr, "empty screenshot")
-		return 1
-	}
-
-	data, err := base64.StdEncoding.DecodeString(res.Observation.Screenshot)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if *annotate {
-		data, err = annotateScreenshot(data, res.Observation.Tree)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
 	}
 	if err := os.WriteFile(pathArg, data, 0o644); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -97,6 +82,33 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 
 	fmt.Fprintf(stdout, "saved screenshot %s\n", pathArg)
 	return 0
+}
+
+func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID string, opts screenshotCaptureOptions) ([]byte, error) {
+	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+		SessionID: sessionID,
+		Options: api.ObserveOptions{
+			WithScreenshot: true,
+			WithTree:       opts.Annotate,
+			FullScreenshot: opts.Full,
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if res.Observation.Screenshot == "" {
+		return nil, fmt.Errorf("empty screenshot")
+	}
+
+	data, err := base64.StdEncoding.DecodeString(res.Observation.Screenshot)
+	if err != nil {
+		return nil, err
+	}
+	if !opts.Annotate {
+		return data, nil
+	}
+
+	return annotateScreenshot(data, res.Observation.Tree)
 }
 
 func annotateScreenshot(data []byte, nodes []api.Node) ([]byte, error) {

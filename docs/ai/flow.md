@@ -19,6 +19,61 @@ navigate -> wait -> compare
 ```
 
 Use `navigate` when the post-login landing page is not the page you actually need to inspect.
+Insert `screenshot` before `compare` when the flow should keep visual artifacts.
+
+## Manifest Summary
+
+Use a JSON manifest with these top-level keys:
+
+- `defaults`: shared defaults such as `backend`, `target_ref`, `viewport`, `wait_timeout`, `compare_css`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`
+- `matrices`: named viewport or variable sets that a scenario can replay against
+- `scenarios`: the runnable flow list
+
+Each scenario usually includes:
+
+- `name`
+- `matrix`
+- `variables`
+- `old`
+- `new`
+- `steps`
+
+Each `old` and `new` endpoint supports:
+
+- `url` or `session`
+- `backend`
+- `target_ref`
+- `viewport`
+
+Use `url` when Nexus should attach a fresh browser session.
+Use `session` when the flow should reuse an existing session.
+String values support simple `{{ name }}` substitution from `scenario.variables` and `matrix.variables`.
+
+## Supported Steps
+
+The currently implemented flow actions are:
+
+- `wait`
+- `navigate`
+- `click`
+- `fill`
+- `viewport`
+- `screenshot`
+- `compare`
+
+Useful step fields:
+
+- `side`: `old`, `new`, or `both`
+- `continue_on_error`
+- `timeout` for `wait`
+- `locator` for `click` and `fill`
+- `text` for `fill`
+- `value` for `wait`, `navigate`, and `viewport`
+- `path`, `full`, and `annotate` for `screenshot`
+
+`screenshot` writes a PNG to `path`.
+With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
+`compare` supports step-level overrides such as `compare_css`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 
 ## Why `navigate` Matters
 
@@ -61,6 +116,7 @@ Use `navigate` when the post-login landing page is not the page you actually nee
 - prefer a page-specific wait target over a layout-level wait target
 - keep scenarios short and outcome-oriented
 - use matrices only when the same scenario truly needs to run in multiple viewports
+- use `screenshot` only at checkpoints that need a PNG artifact; with `side: both`, the saved files automatically gain `-old` and `-new` suffixes
 
 ## When To Avoid Flow
 

@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -69,9 +71,12 @@ type flowStep struct {
 	Text            string   `json:"text,omitempty"`
 	Target          string   `json:"target,omitempty"`
 	Value           string   `json:"value,omitempty"`
+	Path            string   `json:"path,omitempty"`
 	State           string   `json:"state,omitempty"`
 	Timeout         *int     `json:"timeout,omitempty"`
 	ContinueOnError bool     `json:"continue_on_error,omitempty"`
+	Full            bool     `json:"full,omitempty"`
+	Annotate        bool     `json:"annotate,omitempty"`
 	CompareCSS      *bool    `json:"compare_css,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
@@ -126,12 +131,13 @@ type flowScenarioReport struct {
 }
 
 type flowStepReport struct {
-	Name    string          `json:"name,omitempty"`
-	Action  string          `json:"action"`
-	Side    string          `json:"side,omitempty"`
-	Status  string          `json:"status"`
-	Error   string          `json:"error,omitempty"`
-	Compare json.RawMessage `json:"compare,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Action      string            `json:"action"`
+	Side        string            `json:"side,omitempty"`
+	Status      string            `json:"status"`
+	Error       string            `json:"error,omitempty"`
+	Compare     json.RawMessage   `json:"compare,omitempty"`
+	Screenshots map[string]string `json:"screenshots,omitempty"`
 }
 
 type flowCompareSummary struct {
@@ -475,6 +481,10 @@ func resolveFlowStep(step flowStep, vars map[string]string) (flowStep, error) {
 	if err != nil {
 		return flowStep{}, err
 	}
+	step.Path, err = expandFlowString(step.Path, vars)
+	if err != nil {
+		return flowStep{}, err
+	}
 	step.State, err = expandFlowString(step.State, vars)
 	if err != nil {
 		return flowStep{}, err
@@ -674,6 +684,17 @@ func executeFlowStep(ctx context.Context, client *rpc.Client, state flowExecutio
 			}
 			return report, err
 		}
+	case "screenshot":
+		paths, err := executeFlowScreenshotStep(ctx, client, state, step)
+		report.Screenshots = paths
+		if err != nil {
+			report.Status = "failed"
+			report.Error = err.Error()
+			if step.ContinueOnError {
+				return report, nil
+			}
+			return report, err
+		}
 	default:
 		err := fmt.Errorf("unsupported flow action: %s", strings.TrimSpace(step.Action))
 		report.Status = "failed"
@@ -847,6 +868,35 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	return raw, nil
 }
 
+func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep) (map[string]string, error) {
+	basePath := strings.TrimSpace(step.Path)
+	if basePath == "" {
+		return nil, errors.New("screenshot step requires path")
+	}
+
+	targets := flowStepTargets(state, step)
+	paths := make(map[string]string, len(targets))
+	multi := len(targets) > 1
+
+	for _, target := range targets {
+		data, err := captureScreenshotBytes(ctx, client, target.SessionID, screenshotCaptureOptions{
+			Annotate: step.Annotate,
+			Full:     step.Full,
+		})
+		if err != nil {
+			return paths, err
+		}
+
+		path := flowScreenshotPath(basePath, target.Side, multi)
+		if err := writeFlowScreenshotFile(path, data); err != nil {
+			return paths, err
+		}
+		paths[target.Side] = path
+	}
+
+	return paths, nil
+}
+
 func executeFlowActionOnSides(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep, action api.Action) error {
 	for _, sessionID := range flowStepSessions(state, step) {
 		res, err := client.ActSession(ctx, api.ActSessionRequest{
@@ -866,15 +916,32 @@ func executeFlowActionOnSides(ctx context.Context, client *rpc.Client, state flo
 	return nil
 }
 
-func flowStepSessions(state flowExecutionState, step flowStep) []string {
+type flowSessionTarget struct {
+	Side      string
+	SessionID string
+}
+
+func flowStepTargets(state flowExecutionState, step flowStep) []flowSessionTarget {
 	switch flowStepSide(step) {
 	case "old":
-		return []string{state.Old.SessionID}
+		return []flowSessionTarget{{Side: "old", SessionID: state.Old.SessionID}}
 	case "new":
-		return []string{state.New.SessionID}
+		return []flowSessionTarget{{Side: "new", SessionID: state.New.SessionID}}
 	default:
-		return []string{state.Old.SessionID, state.New.SessionID}
+		return []flowSessionTarget{
+			{Side: "old", SessionID: state.Old.SessionID},
+			{Side: "new", SessionID: state.New.SessionID},
+		}
 	}
+}
+
+func flowStepSessions(state flowExecutionState, step flowStep) []string {
+	targets := flowStepTargets(state, step)
+	sessionIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		sessionIDs = append(sessionIDs, target.SessionID)
+	}
+	return sessionIDs
 }
 
 func flowStepSide(step flowStep) string {
@@ -1029,6 +1096,16 @@ func printFlowReport(w io.Writer, report flowReport) {
 			if step.Error != "" {
 				fmt.Fprintf(w, "  error: %s\n", step.Error)
 			}
+			if len(step.Screenshots) > 0 {
+				sides := make([]string, 0, len(step.Screenshots))
+				for side := range step.Screenshots {
+					sides = append(sides, side)
+				}
+				sort.Strings(sides)
+				for _, side := range sides {
+					fmt.Fprintf(w, "  screenshot[%s]: %s\n", side, step.Screenshots[side])
+				}
+			}
 		}
 	}
 }
@@ -1039,6 +1116,30 @@ func writeFlowJSONFile(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o644)
+}
+
+func flowScreenshotPath(path string, side string, multi bool) string {
+	cleaned := filepath.Clean(strings.TrimSpace(path))
+	ext := filepath.Ext(cleaned)
+	if ext == "" {
+		cleaned += ".png"
+		ext = ".png"
+	}
+	if !multi {
+		return cleaned
+	}
+	base := strings.TrimSuffix(cleaned, ext)
+	return base + "-" + side + ext
+}
+
+func writeFlowScreenshotFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	if dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 func printFlowHelp(w io.Writer) {

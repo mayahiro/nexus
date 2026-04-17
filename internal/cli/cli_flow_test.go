@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net"
 	"os"
@@ -20,10 +21,11 @@ import (
 type flowRPCHandler struct {
 	noopRPCHandler
 
-	mu             sync.Mutex
-	attachRequests []api.AttachSessionRequest
-	actRequests    []api.ActSessionRequest
-	detachIDs      []string
+	mu              sync.Mutex
+	attachRequests  []api.AttachSessionRequest
+	observeRequests []api.ObserveSessionRequest
+	actRequests     []api.ActSessionRequest
+	detachIDs       []string
 }
 
 func (h *flowRPCHandler) AttachSession(_ context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
@@ -40,6 +42,19 @@ func (h *flowRPCHandler) AttachSession(_ context.Context, req api.AttachSessionR
 }
 
 func (h *flowRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	h.mu.Lock()
+	h.observeRequests = append(h.observeRequests, req)
+	h.mu.Unlock()
+
+	if req.Options.WithScreenshot {
+		return api.ObserveSessionResponse{
+			Observation: api.Observation{
+				SessionID:  req.SessionID,
+				Screenshot: base64.StdEncoding.EncodeToString([]byte("pngdata-" + req.SessionID)),
+			},
+		}, nil
+	}
+
 	sessionID := req.SessionID
 	isOld := strings.Contains(sessionID, "old")
 	label := "New Dashboard"
@@ -117,7 +132,9 @@ func TestFlowRunManifest(t *testing.T) {
 		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
 	}()
 
-	manifestPath := filepath.Join(t.TempDir(), "flow-manifest.json")
+	tempDir := t.TempDir()
+	artifactsDir := filepath.Join(tempDir, "artifacts")
+	manifestPath := filepath.Join(tempDir, "flow-manifest.json")
 	manifest := map[string]any{
 		"defaults": map[string]any{
 			"backend":    "chromium",
@@ -126,9 +143,15 @@ func TestFlowRunManifest(t *testing.T) {
 		"matrices": map[string]any{
 			"desktop": map[string]any{
 				"viewport": "1440x900",
+				"variables": map[string]any{
+					"device": "desktop",
+				},
 			},
 			"mobile": map[string]any{
 				"viewport": "390x844",
+				"variables": map[string]any{
+					"device": "mobile",
+				},
 			},
 		},
 		"scenarios": []map[string]any{
@@ -165,6 +188,11 @@ func TestFlowRunManifest(t *testing.T) {
 					{
 						"action":  "click",
 						"locator": "role=button&name=Sign in",
+					},
+					{
+						"action": "screenshot",
+						"path":   filepath.Join(artifactsDir, "{{ device }}", "dashboard.png"),
+						"full":   true,
 					},
 					{
 						"action": "compare",
@@ -206,6 +234,12 @@ func TestFlowRunManifest(t *testing.T) {
 	if len(report.Scenarios) != 2 {
 		t.Fatalf("unexpected flow scenarios: %+v", report.Scenarios)
 	}
+	if got := report.Scenarios[0].Steps[4].Screenshots["old"]; got == "" {
+		t.Fatalf("expected screenshot path in report: %+v", report.Scenarios[0].Steps)
+	}
+	if got := report.Scenarios[0].Steps[4].Screenshots["new"]; got == "" {
+		t.Fatalf("expected screenshot path in report: %+v", report.Scenarios[0].Steps)
+	}
 
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
@@ -219,6 +253,7 @@ func TestFlowRunManifest(t *testing.T) {
 	fillCount := 0
 	navigateCount := 0
 	clickCount := 0
+	screenshotCount := 0
 	for _, req := range handler.attachRequests {
 		switch {
 		case req.Options["viewport_width"] == "1440" && req.Options["viewport_height"] == "900":
@@ -238,6 +273,11 @@ func TestFlowRunManifest(t *testing.T) {
 			clickCount++
 		}
 	}
+	for _, req := range handler.observeRequests {
+		if req.Options.WithScreenshot && req.Options.FullScreenshot {
+			screenshotCount++
+		}
+	}
 	if desktopCount != 2 || mobileCount != 2 {
 		t.Fatalf("unexpected viewport attach distribution: desktop=%d mobile=%d requests=%#v", desktopCount, mobileCount, handler.attachRequests)
 	}
@@ -250,8 +290,27 @@ func TestFlowRunManifest(t *testing.T) {
 	if clickCount != 4 {
 		t.Fatalf("expected 4 click actions, got %#v", handler.actRequests)
 	}
+	if screenshotCount != 4 {
+		t.Fatalf("expected 4 screenshot requests, got %#v", handler.observeRequests)
+	}
 	if len(handler.detachIDs) != 4 {
 		t.Fatalf("expected 4 detached sessions, got %#v", handler.detachIDs)
+	}
+
+	expectedFiles := []string{
+		filepath.Join(artifactsDir, "desktop", "dashboard-old.png"),
+		filepath.Join(artifactsDir, "desktop", "dashboard-new.png"),
+		filepath.Join(artifactsDir, "mobile", "dashboard-old.png"),
+		filepath.Join(artifactsDir, "mobile", "dashboard-new.png"),
+	}
+	for _, path := range expectedFiles {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("expected screenshot file %s: %v", path, err)
+		}
+		if !strings.HasPrefix(string(data), "pngdata-flow-") {
+			t.Fatalf("unexpected screenshot contents for %s: %q", path, string(data))
+		}
 	}
 
 	cancel()
