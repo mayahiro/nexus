@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"image/png"
 	"net"
 	"os"
 	"path/filepath"
@@ -26,6 +27,14 @@ type flowRPCHandler struct {
 	observeRequests []api.ObserveSessionRequest
 	actRequests     []api.ActSessionRequest
 	detachIDs       []string
+}
+
+type flowLocatorScreenshotRPCHandler struct {
+	noopRPCHandler
+
+	mu              sync.Mutex
+	observeRequests []api.ObserveSessionRequest
+	actRequests     []api.ActSessionRequest
 }
 
 func (h *flowRPCHandler) AttachSession(_ context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
@@ -311,6 +320,197 @@ func TestFlowRunManifest(t *testing.T) {
 		if !strings.HasPrefix(string(data), "pngdata-flow-") {
 			t.Fatalf("unexpected screenshot contents for %s: %q", path, string(data))
 		}
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func (h *flowLocatorScreenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	h.mu.Lock()
+	h.observeRequests = append(h.observeRequests, req)
+	h.mu.Unlock()
+
+	if req.Options.WithScreenshot {
+		return api.ObserveSessionResponse{
+			Observation: api.Observation{
+				SessionID:  req.SessionID,
+				Screenshot: testPNGBase64(),
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
+					{ID: 2, Ref: "@e2", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+				},
+			},
+		}, nil
+	}
+
+	return api.ObserveSessionResponse{
+		Observation: api.Observation{
+			SessionID: req.SessionID,
+			Tree: []api.Node{
+				{ID: 1, Ref: "@e1", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
+				{ID: 2, Ref: "@e2", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+			},
+		},
+	}, nil
+}
+
+func (h *flowLocatorScreenshotRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	h.mu.Lock()
+	h.actRequests = append(h.actRequests, req)
+	h.mu.Unlock()
+
+	if req.Action.Kind != "eval" {
+		return api.ActSessionResponse{}, nil
+	}
+
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK: true,
+			Value: map[string]any{
+				"x": 10.0,
+				"y": 12.0,
+				"w": 15.0,
+				"h": 8.0,
+			},
+		},
+	}, nil
+}
+
+func TestFlowRunManifestScreenshotLocator(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &flowLocatorScreenshotRPCHandler{}
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	tempDir := t.TempDir()
+	manifestPath := filepath.Join(tempDir, "flow-manifest.json")
+	outputPath := filepath.Join(tempDir, "email.png")
+	manifest := map[string]any{
+		"scenarios": []map[string]any{
+			{
+				"name": "targeted-screenshot",
+				"old": map[string]any{
+					"session": "old",
+				},
+				"new": map[string]any{
+					"session": "new",
+				},
+				"steps": []map[string]any{
+					{
+						"action":  "screenshot",
+						"path":    outputPath,
+						"locator": "label=Email",
+					},
+				},
+			},
+		},
+	}
+
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	args := []string{
+		"flow",
+		"run",
+		"--manifest", manifestPath,
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected flow run exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report flowReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected flow report json: %v\n%s", err, stdout.String())
+	}
+	if got := report.Scenarios[0].Steps[0].Screenshots["old"]; got == "" {
+		t.Fatalf("expected old screenshot path in report: %+v", report.Scenarios[0].Steps)
+	}
+	if got := report.Scenarios[0].Steps[0].Screenshots["new"]; got == "" {
+		t.Fatalf("expected new screenshot path in report: %+v", report.Scenarios[0].Steps)
+	}
+
+	oldFile, err := os.Open(filepath.Join(tempDir, "email-old.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer oldFile.Close()
+	oldConfig, err := png.DecodeConfig(oldFile)
+	if err != nil {
+		t.Fatalf("expected png screenshot: %v", err)
+	}
+	if oldConfig.Width != 15 || oldConfig.Height != 8 {
+		t.Fatalf("unexpected old screenshot size: %+v", oldConfig)
+	}
+
+	newFile, err := os.Open(filepath.Join(tempDir, "email-new.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer newFile.Close()
+	newConfig, err := png.DecodeConfig(newFile)
+	if err != nil {
+		t.Fatalf("expected png screenshot: %v", err)
+	}
+	if newConfig.Width != 15 || newConfig.Height != 8 {
+		t.Fatalf("unexpected new screenshot size: %+v", newConfig)
+	}
+
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+
+	evalCount := 0
+	screenshotCount := 0
+	for _, req := range handler.actRequests {
+		if req.Action.Kind == "eval" {
+			evalCount++
+		}
+	}
+	for _, req := range handler.observeRequests {
+		if req.Options.WithScreenshot && !req.Options.FullScreenshot {
+			screenshotCount++
+		}
+	}
+	if evalCount != 2 {
+		t.Fatalf("expected 2 eval actions for locator screenshot, got %#v", handler.actRequests)
+	}
+	if screenshotCount != 2 {
+		t.Fatalf("expected 2 screenshot requests, got %#v", handler.observeRequests)
 	}
 
 	cancel()

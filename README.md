@@ -59,7 +59,7 @@ The primary interaction loop is:
 open/navigate -> state/find -> click/type/fill/input/keys -> wait/get/state
 ```
 
-`state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, and `get`.
+`state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, `get`, and `screenshot`.
 `state` also prints short locator hints derived from the current tree, so an agent can switch from `@eN` refs to `find role|text|label|testid|href` without recomputing selectors.
 Use `fill` when you want to replace the current value, and `type` when you want keystroke-style input against the current focus or target.
 
@@ -133,6 +133,8 @@ nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-propert
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
+nxctl screenshot email.png --locator label=Email
+nxctl screenshot submit.png --locator @e1
 nxctl viewport 1280x720
 nxctl close
 ```
@@ -172,6 +174,7 @@ Use `--nth` with `find` or `inspect` when repeated controls intentionally share 
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.
+Screenshot steps can also target one element with `locator` and optional `nth`, using the same selector DSL as flow `click` and `fill`.
 
 ## Viewport
 

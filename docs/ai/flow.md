@@ -66,13 +66,17 @@ Useful step fields:
 - `side`: `old`, `new`, or `both`
 - `continue_on_error`
 - `timeout` for `wait`
-- `locator` for `click` and `fill`
+- `locator` for `click`, `fill`, and targeted `screenshot`
+- `nth` for repeated locator matches
 - `text` for `fill`
 - `value` for `wait`, `navigate`, and `viewport`
 - `path`, `full`, and `annotate` for `screenshot`
 
 `screenshot` writes a PNG to `path`.
 With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
+When `locator` is present, `screenshot` captures just the matched element instead of the whole viewport.
+Use `nth` when multiple nodes intentionally share the same locator.
+`full` is not supported together with `locator`.
 `compare` supports step-level overrides such as `compare_css`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 
 ## Why `navigate` Matters

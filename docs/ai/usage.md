@@ -48,8 +48,28 @@ nxctl help flow
 - Prefer semantic locators such as `role`, `label`, `text`, `testid`, or `href` when they are stable
 - Use `fill` when you want replacement semantics
 - Use `type` when you want keystroke-style input
+- Use `screenshot --locator` when you need a PNG for one specific element instead of the whole viewport
 - Add `wait` after actions that trigger async UI updates
 - Move to `inspect` when whole-page compare is too broad
+
+## Targeted Screenshot
+
+Use `screenshot --locator` when the task needs a PNG artifact for one control or content block.
+
+Examples:
+
+- `nxctl screenshot email.png --locator label=Email`
+- `nxctl screenshot submit.png --locator @e1`
+- `nxctl screenshot cta.png --locator role=button&name=Submit`
+- `nxctl screenshot second-button.png --locator role=button --nth 2`
+
+Rules:
+
+- `--locator` supports `@eN`, `role=...`, `name=...`, `text=...`, `label=...`, `testid=...`, `href=...`, and combined forms such as `role=button&name=Submit`
+- use `--nth` only when multiple nodes intentionally share the same locator
+- `--full` is not supported together with `--locator`
+- refresh the locator from a recent `state` output if the page changed after navigation or interaction
+- in flow manifests, use `{"action":"screenshot","path":"...","locator":"..."}` for the same targeted capture behavior
 
 ## Which Guide To Open Next
 

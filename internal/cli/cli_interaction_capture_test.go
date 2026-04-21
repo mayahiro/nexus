@@ -150,6 +150,66 @@ func TestScreenshotAnnotate(t *testing.T) {
 	}
 }
 
+func TestScreenshotLocator(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, elementScreenshotRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "email.png")
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"screenshot", outputPath, "--locator", "label=Email"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected screenshot --locator exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "saved screenshot "+outputPath {
+		t.Fatalf("unexpected screenshot --locator output: %s", stdout.String())
+	}
+
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("expected cropped png: %v", err)
+	}
+	if img.Bounds().Dx() != 15 || img.Bounds().Dy() != 8 {
+		t.Fatalf("unexpected cropped bounds: %v", img.Bounds())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestScroll(t *testing.T) {
 	configureXDGTestEnv(t)
 

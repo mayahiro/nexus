@@ -68,6 +68,7 @@ type flowStep struct {
 	Side            string   `json:"side,omitempty"`
 	Action          string   `json:"action,omitempty"`
 	Locator         string   `json:"locator,omitempty"`
+	Nth             int      `json:"nth,omitempty"`
 	Text            string   `json:"text,omitempty"`
 	Target          string   `json:"target,omitempty"`
 	Value           string   `json:"value,omitempty"`
@@ -744,12 +745,15 @@ func executeFlowNodeStep(ctx context.Context, client *rpc.Client, state flowExec
 	if strings.TrimSpace(step.Locator) == "" {
 		return fmt.Errorf("%s step requires locator", actionKind)
 	}
+	if step.Nth < 0 {
+		return errors.New("nth must be a positive integer")
+	}
 	if actionKind == "fill" && step.Text == "" {
 		return errors.New("fill step requires text")
 	}
 
 	for _, sessionID := range flowStepSessions(state, step) {
-		node, err := resolveFlowLocator(ctx, client, sessionID, step.Locator)
+		node, err := resolveFlowLocator(ctx, client, sessionID, step.Locator, nodeSelectionOptions{Nth: step.Nth})
 		if err != nil {
 			return err
 		}
@@ -873,6 +877,12 @@ func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state fl
 	if basePath == "" {
 		return nil, errors.New("screenshot step requires path")
 	}
+	if step.Nth < 0 {
+		return nil, errors.New("nth must be a positive integer")
+	}
+	if strings.TrimSpace(step.Locator) != "" && step.Full {
+		return nil, errors.New("full is not supported with screenshot locator")
+	}
 
 	targets := flowStepTargets(state, step)
 	paths := make(map[string]string, len(targets))
@@ -882,6 +892,8 @@ func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state fl
 		data, err := captureScreenshotBytes(ctx, client, target.SessionID, screenshotCaptureOptions{
 			Annotate: step.Annotate,
 			Full:     step.Full,
+			Locator:  strings.TrimSpace(step.Locator),
+			Nth:      step.Nth,
 		})
 		if err != nil {
 			return paths, err
@@ -962,7 +974,7 @@ func flowStepName(step flowStep) string {
 	return "step"
 }
 
-func resolveFlowLocator(ctx context.Context, client *rpc.Client, sessionID string, locator string) (api.Node, error) {
+func resolveFlowLocator(ctx context.Context, client *rpc.Client, sessionID string, locator string, selection nodeSelectionOptions) (api.Node, error) {
 	observation, err := observeTreeForFind(ctx, client, sessionID)
 	if err != nil {
 		return api.Node{}, err
@@ -979,7 +991,7 @@ func resolveFlowLocator(ctx context.Context, client *rpc.Client, sessionID strin
 		}
 		return true
 	})
-	return chooseNode(matches, locator, nodeSelectionOptions{})
+	return chooseNode(matches, locator, selection)
 }
 
 func parseFlowLocator(locator string) ([]flowSelectorTerm, error) {

@@ -49,6 +49,7 @@ type typeRPCHandler struct{ noopRPCHandler }
 type keysRPCHandler struct{ noopRPCHandler }
 type screenshotRPCHandler struct{ noopRPCHandler }
 type annotateScreenshotRPCHandler struct{ noopRPCHandler }
+type elementScreenshotRPCHandler struct{ noopRPCHandler }
 type scrollRPCHandler struct{ noopRPCHandler }
 type backRPCHandler struct{ noopRPCHandler }
 type navigateRPCHandler struct{ noopRPCHandler }
@@ -168,6 +169,36 @@ func (annotateScreenshotRPCHandler) ObserveSession(_ context.Context, req api.Ob
 			Screenshot: testPNGBase64(),
 			Tree: []api.Node{
 				{ID: 1, Ref: "@e1", Role: "button", Name: "Submit", Visible: true, Enabled: true, Bounds: api.Rect{X: 4, Y: 6, W: 18, H: 12}},
+			},
+		},
+	}, nil
+}
+
+func (elementScreenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	return api.ObserveSessionResponse{
+		Observation: api.Observation{
+			Screenshot: testPNGBase64(),
+			Tree: []api.Node{
+				{ID: 1, Ref: "@e1", Role: "button", Name: "Submit", Visible: true, Enabled: true, Attrs: map[string]string{"data-testid": "submit-primary"}, Bounds: api.Rect{X: 4, Y: 6, W: 18, H: 12}},
+				{ID: 2, Ref: "@e2", Role: "link", Text: "Sign In", Visible: true, Enabled: true, Attrs: map[string]string{"href": "/signin"}, Bounds: api.Rect{X: 8, Y: 20, W: 20, H: 10}},
+				{ID: 3, Ref: "@e3", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true, Bounds: api.Rect{X: 10, Y: 12, W: 15, H: 8}},
+			},
+		},
+	}, nil
+}
+
+func (elementScreenshotRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
+	if req.Action.Kind != "eval" {
+		return api.ActSessionResponse{}, nil
+	}
+	return api.ActSessionResponse{
+		Result: api.ActionResult{
+			OK: true,
+			Value: map[string]interface{}{
+				"x": float64(10),
+				"y": float64(12),
+				"w": float64(15),
+				"h": float64(8),
 			},
 		},
 	}, nil
