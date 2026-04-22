@@ -36,6 +36,7 @@ Recommended passes:
 
 - major text and labels
 - actionable controls such as buttons, links, and form fields
+- container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
 - important styles such as `color`, `background-color`, and `pointer-events`
 
 ## Noise Control
@@ -53,6 +54,12 @@ Page-to-page compare:
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector '[data-testid="orders-loaded"]'
 ```
 
+Scoped compare:
+
+```text
+nxctl compare https://old.example.com/products https://new.example.com/products --wait-selector '.ready' --scope-selector 'aside.filters' --compare-css --css-property width --css-property padding
+```
+
 Session-to-session compare:
 
 ```text
@@ -64,6 +71,7 @@ Targeted inspection:
 ```text
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
+nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width
 ```
 
 Style-focused compare:
@@ -80,3 +88,17 @@ If the new page looks incomplete:
 2. Check whether the target content is really present
 3. Strengthen readiness with `--wait-selector` or `--wait-function`
 4. Narrow the compare scope before assuming there is a product bug
+
+## Scope Selector Rules
+
+- `--scope-selector` accepts a raw CSS selector and restricts compare to exactly one matched subtree on each side
+- positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
+- prefer stable ids, classes, or attributes before positional selectors
+- if the selector matches 0 or multiple elements on either side, compare fails early
+
+## Inspect Selector Rules
+
+- `inspect --selector` accepts a raw CSS selector and compares the computed styles for exactly one matched element on each side
+- positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
+- do not combine `--selector` with a positional inspect locator
+- do not combine `--selector` with `--nth`

@@ -58,6 +58,13 @@ func printCompareReport(w io.Writer, report compareReport) {
 		fmt.Fprintf(w, " (%s)", report.New.Title)
 	}
 	fmt.Fprintln(w)
+	if report.Scope != nil {
+		fmt.Fprintf(w, "scope: %s", report.Scope.Selector)
+		if report.Scope.Old.Tag != "" || report.Scope.New.Tag != "" {
+			fmt.Fprintf(w, " (%s -> %s)", firstNonEmpty(report.Scope.Old.Tag, "?"), firstNonEmpty(report.Scope.New.Tag, "?"))
+		}
+		fmt.Fprintln(w)
+	}
 
 	fmt.Fprintf(w, "summary: %d findings\n", report.Summary.TotalFindings)
 	if report.Summary.Same {
@@ -141,6 +148,9 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintln(w)
 	fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(report.Old.URL, report.Old.SessionID))
 	fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(report.New.URL, report.New.SessionID))
+	if report.Scope != nil {
+		fmt.Fprintf(w, "- Scope: `%s`\n", report.Scope.Selector)
+	}
 	if report.Old.Title != "" || report.New.Title != "" {
 		fmt.Fprintf(w, "- Titles: `%s` -> `%s`\n", report.Old.Title, report.New.Title)
 	}
@@ -202,6 +212,9 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 		}
 		fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(page.Report.Old.URL, page.Report.Old.SessionID))
 		fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(page.Report.New.URL, page.Report.New.SessionID))
+		if page.Report.Scope != nil {
+			fmt.Fprintf(w, "- Scope: `%s`\n", page.Report.Scope.Selector)
+		}
 		fmt.Fprintf(w, "- Findings: %d\n", page.Report.Summary.TotalFindings)
 		fmt.Fprintf(w, "- Critical: %d\n", page.Report.Summary.Critical)
 		fmt.Fprintf(w, "- Warning: %d\n", page.Report.Summary.Warning)

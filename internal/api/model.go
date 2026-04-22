@@ -74,6 +74,7 @@ type ObserveOptions struct {
 	WithScreenshot bool     `json:"with_screenshot"`
 	FullScreenshot bool     `json:"full_screenshot"`
 	CSSProperties  []string `json:"css_properties,omitempty"`
+	ScopeSelector  string   `json:"scope_selector,omitempty"`
 }
 
 type LogOptions struct {

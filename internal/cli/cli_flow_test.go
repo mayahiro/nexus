@@ -146,8 +146,9 @@ func TestFlowRunManifest(t *testing.T) {
 	manifestPath := filepath.Join(tempDir, "flow-manifest.json")
 	manifest := map[string]any{
 		"defaults": map[string]any{
-			"backend":    "chromium",
-			"target_ref": "/tmp/fake-browser",
+			"backend":        "chromium",
+			"target_ref":     "/tmp/fake-browser",
+			"scope_selector": "main",
 		},
 		"matrices": map[string]any{
 			"desktop": map[string]any{
@@ -204,8 +205,9 @@ func TestFlowRunManifest(t *testing.T) {
 						"full":   true,
 					},
 					{
-						"action": "compare",
-						"name":   "dashboard",
+						"action":         "compare",
+						"name":           "dashboard",
+						"scope_selector": "aside.filters",
 					},
 				},
 			},
@@ -301,6 +303,15 @@ func TestFlowRunManifest(t *testing.T) {
 	}
 	if screenshotCount != 4 {
 		t.Fatalf("expected 4 screenshot requests, got %#v", handler.observeRequests)
+	}
+	compareScopeCount := 0
+	for _, req := range handler.observeRequests {
+		if req.Options.WithTree && !req.Options.WithScreenshot && req.Options.ScopeSelector == "aside.filters" {
+			compareScopeCount++
+		}
+	}
+	if compareScopeCount != 4 {
+		t.Fatalf("expected 4 compare observe requests with scope selector, got %#v", handler.observeRequests)
 	}
 	if len(handler.detachIDs) != 4 {
 		t.Fatalf("expected 4 detached sessions, got %#v", handler.detachIDs)

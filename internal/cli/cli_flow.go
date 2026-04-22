@@ -33,6 +33,7 @@ type flowDefaults struct {
 	Viewport        string   `json:"viewport,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	CompareCSS      bool     `json:"compare_css,omitempty"`
+	ScopeSelector   string   `json:"scope_selector,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
@@ -79,6 +80,7 @@ type flowStep struct {
 	Full            bool     `json:"full,omitempty"`
 	Annotate        bool     `json:"annotate,omitempty"`
 	CompareCSS      *bool    `json:"compare_css,omitempty"`
+	ScopeSelector   string   `json:"scope_selector,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
 	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
@@ -490,6 +492,10 @@ func resolveFlowStep(step flowStep, vars map[string]string) (flowStep, error) {
 	if err != nil {
 		return flowStep{}, err
 	}
+	step.ScopeSelector, err = expandFlowString(step.ScopeSelector, vars)
+	if err != nil {
+		return flowStep{}, err
+	}
 	return step, nil
 }
 
@@ -830,6 +836,13 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	}
 	if compareCSS {
 		args = append(args, "--compare-css")
+	}
+	scopeSelector := strings.TrimSpace(state.Defaults.ScopeSelector)
+	if strings.TrimSpace(step.ScopeSelector) != "" {
+		scopeSelector = strings.TrimSpace(step.ScopeSelector)
+	}
+	if scopeSelector != "" {
+		args = append(args, "--scope-selector", scopeSelector)
 	}
 	cssProperties := state.Defaults.CSSProperty
 	if len(step.CSSProperty) > 0 {

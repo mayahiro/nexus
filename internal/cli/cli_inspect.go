@@ -420,6 +420,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 
 	oldSession := fs.String("old-session", "", "old session id")
 	newSession := fs.String("new-session", "", "new session id")
+	selector := fs.String("selector", "", "raw css selector to inspect")
 	asJSON := fs.Bool("json", false, "print as json")
 	nth := fs.Int("nth", 0, "choose the nth matching node")
 	var cssProperty inspectStringValues
@@ -440,8 +441,8 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		positionals = append(positionals, locatorValue)
 	}
 	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 1 {
-		fmt.Fprintln(stderr, "inspect requires exactly one locator")
+	if len(positionals) != 1 && strings.TrimSpace(*selector) == "" {
+		fmt.Fprintln(stderr, "inspect requires exactly one locator or --selector")
 		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 		return 1
 	}
@@ -450,15 +451,29 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 		return 1
 	}
+	if len(positionals) > 0 && strings.TrimSpace(*selector) != "" {
+		fmt.Fprintln(stderr, "inspect can not combine a locator with --selector")
+		return 1
+	}
+	if strings.TrimSpace(*selector) != "" && *nth > 0 {
+		fmt.Fprintln(stderr, "inspect --selector does not support --nth")
+		return 1
+	}
 	if isInvalidNthFlag(fs, *nth) {
 		fmt.Fprintln(stderr, "inspect --nth must be a positive integer")
 		return 1
 	}
 
-	locator, err := parseInspectLocator(positionals[0])
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+	locator := inspectLocator{}
+	if strings.TrimSpace(*selector) != "" {
+		locator = inspectLocator{Raw: "selector: " + strings.TrimSpace(*selector), Kind: "selector", Value: strings.TrimSpace(*selector)}
+	} else {
+		var err error
+		locator, err = parseInspectLocator(positionals[0])
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 
 	client, err := connectClient(ctx)
@@ -469,12 +484,16 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	defer client.Close()
 
 	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
-	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties)
+	scopeSelector := ""
+	if locator.Kind == "selector" {
+		scopeSelector = locator.Value
+	}
+	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, scopeSelector)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties)
+	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, scopeSelector)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -518,12 +537,13 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	return 0
 }
 
-func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string) (api.Observation, error) {
+func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string, scopeSelector string) (api.Observation, error) {
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
 			WithTree:      true,
 			CSSProperties: append([]string(nil), cssProperties...),
+			ScopeSelector: strings.TrimSpace(scopeSelector),
 		},
 	})
 	if err != nil {
@@ -640,6 +660,11 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection node
 			return nodeMatches(api.Node{Name: node.Attrs["href"], Attrs: node.Attrs}, locator.Value)
 		})
 		return chooseNode(matches, locator.Value, selection)
+	case "selector":
+		if len(nodes) == 0 {
+			return api.Node{}, fmt.Errorf("matching node not found")
+		}
+		return nodes[0], nil
 	default:
 		return api.Node{}, fmt.Errorf("unsupported inspect locator")
 	}

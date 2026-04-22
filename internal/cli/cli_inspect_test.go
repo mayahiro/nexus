@@ -297,6 +297,36 @@ func TestInspect(t *testing.T) {
 		t.Fatalf("expected inspect report to differ: %+v", report)
 	}
 
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", "--selector", "aside.filters", "--old-session", "old", "--new-session", "new", "--css-property", "color", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect selector exit code: %d\n%s", code, stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected inspect selector json: %v\n%s", err, stdout.String())
+	}
+	if report.Locator.Kind != "selector" || report.Locator.Value != "aside.filters" {
+		t.Fatalf("unexpected inspect selector locator: %+v", report.Locator)
+	}
+	if report.Old.Node.ID != 1 || report.New.Node.ID != 1 {
+		t.Fatalf("unexpected inspect selector nodes: %+v", report)
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", "--selector", "aside.filters", "--old-session", "old", "--new-session", "new", "--nth", "2"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected inspect selector nth validation to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "inspect --selector does not support --nth") {
+		t.Fatalf("unexpected inspect selector nth output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button`, "--selector", "aside.filters", "--old-session", "old", "--new-session", "new"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected inspect selector mixed-input validation to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "inspect can not combine a locator with --selector") {
+		t.Fatalf("unexpected inspect selector mixed-input output: %s", stdout.String())
+	}
+
 	cancel()
 
 	select {

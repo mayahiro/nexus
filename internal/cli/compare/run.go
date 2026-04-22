@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/config"
 	"github.com/mayahiro/nexus/internal/rpc"
 )
@@ -38,6 +39,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
+	scopeSelector := fs.String("scope-selector", "", "restrict compare to a single CSS selector subtree")
 	waitFunction := fs.String("wait-function", "", "wait until javascript expression returns true before compare")
 	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
 	compareCSS := fs.Bool("compare-css", false, "compare computed css values for matching nodes")
@@ -104,6 +106,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		TargetRef:       *targetRef,
 		Viewport:        *viewport,
 		WaitSelector:    *waitSelector,
+		ScopeSelector:   *scopeSelector,
 		WaitFunction:    *waitFunction,
 		WaitNetworkIdle: *waitNetworkIdle,
 		CompareCSS:      *compareCSS,
@@ -264,13 +267,13 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		}
 	}
 
-	oldObservation, err := observeCompareSession(ctx, client, oldPrepared.SessionID, cssProperties)
+	oldObservation, err := observeScopedCompareSession(ctx, client, oldPrepared.SessionID, cssProperties, run.ScopeSelector)
 	if err != nil {
-		return compareReport{}, err
+		return compareReport{}, fmt.Errorf("old side %w", err)
 	}
-	newObservation, err := observeCompareSession(ctx, client, newPrepared.SessionID, cssProperties)
+	newObservation, err := observeScopedCompareSession(ctx, client, newPrepared.SessionID, cssProperties, run.ScopeSelector)
 	if err != nil {
-		return compareReport{}, err
+		return compareReport{}, fmt.Errorf("new side %w", err)
 	}
 
 	return buildCompareReport(
@@ -286,5 +289,24 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 			MaskNode:      maskRules,
 			CSSProperties: cssProperties,
 		}),
+		compareScopeFromObservations(run.ScopeSelector, oldObservation, newObservation),
 	), nil
+}
+
+func compareScopeFromObservations(selector string, oldObservation api.Observation, newObservation api.Observation) *compareScope {
+	trimmed := strings.TrimSpace(selector)
+	if trimmed == "" {
+		return nil
+	}
+	return &compareScope{
+		Selector: trimmed,
+		Old: compareScopeSide{
+			Matched: true,
+			Tag:     strings.TrimSpace(oldObservation.Meta["scope_tag"]),
+		},
+		New: compareScopeSide{
+			Matched: true,
+			Tag:     strings.TrimSpace(newObservation.Meta["scope_tag"]),
+		},
+	}
 }

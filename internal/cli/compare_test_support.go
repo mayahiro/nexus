@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -11,8 +12,20 @@ import (
 type compareReportJSON struct {
 	Old      compareSnapshotJSON  `json:"old"`
 	New      compareSnapshotJSON  `json:"new"`
+	Scope    *compareScopeJSON    `json:"scope"`
 	Summary  compareSummaryJSON   `json:"summary"`
 	Findings []compareFindingJSON `json:"findings"`
+}
+
+type compareScopeJSON struct {
+	Selector string               `json:"selector"`
+	Old      compareScopeSideJSON `json:"old"`
+	New      compareScopeSideJSON `json:"new"`
+}
+
+type compareScopeSideJSON struct {
+	Matched bool   `json:"matched"`
+	Tag     string `json:"tag"`
 }
 
 type compareSnapshotJSON struct {
@@ -72,6 +85,8 @@ type compareURLRPCHandler struct {
 	sessionObservations map[string]api.Observation
 	observations        map[string]api.Observation
 	observeCount        map[string]int
+	observeScopes       map[string][]string
+	scopeErrors         map[string]string
 	waitTargets         map[string][]string
 	waitValues          map[string][]string
 }
@@ -97,6 +112,11 @@ func (compareRPCHandler) StopDaemon(context.Context, api.StopDaemonRequest) (api
 }
 
 func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	scopeMeta := map[string]string{}
+	if req.Options.ScopeSelector != "" {
+		scopeMeta["scope_selector"] = req.Options.ScopeSelector
+		scopeMeta["scope_tag"] = "aside"
+	}
 	switch req.SessionID {
 	case "old":
 		return api.ObserveSessionResponse{
@@ -111,6 +131,7 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 					{ID: 3, Ref: "@e3", Fingerprint: "legacy-link", Role: "link", Text: "Legacy", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/legacy"}},
 					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-13", Visible: true, Enabled: true},
 				},
+				Meta: scopeMeta,
 			},
 		}, nil
 	case "new":
@@ -126,6 +147,7 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 					{ID: 3, Ref: "@e3", Fingerprint: "next-link", Role: "link", Text: "Next", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"href": "/next"}},
 					{ID: 4, Ref: "@e4", Fingerprint: "status", Role: "status", Text: "Ready 2026-04-14", Visible: true, Enabled: true},
 				},
+				Meta: scopeMeta,
 			},
 		}, nil
 	default:
@@ -197,6 +219,14 @@ func (h *compareURLRPCHandler) ObserveSession(_ context.Context, req api.Observe
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	if message := strings.TrimSpace(h.scopeErrors[req.Options.ScopeSelector]); message != "" {
+		return api.ObserveSessionResponse{}, errors.New(message)
+	}
+	if h.observeScopes == nil {
+		h.observeScopes = map[string][]string{}
+	}
+	h.observeScopes[req.SessionID] = append(h.observeScopes[req.SessionID], req.Options.ScopeSelector)
+
 	if observation, ok := h.sessionObservations[req.SessionID]; ok {
 		observation.SessionID = req.SessionID
 		return api.ObserveSessionResponse{Observation: observation}, nil
@@ -220,6 +250,13 @@ func (h *compareURLRPCHandler) ObserveSession(_ context.Context, req api.Observe
 		}, nil
 	}
 	observation.SessionID = req.SessionID
+	if req.Options.ScopeSelector != "" {
+		if observation.Meta == nil {
+			observation.Meta = map[string]string{}
+		}
+		observation.Meta["scope_selector"] = req.Options.ScopeSelector
+		observation.Meta["scope_tag"] = "aside"
+	}
 	return api.ObserveSessionResponse{Observation: observation}, nil
 }
 

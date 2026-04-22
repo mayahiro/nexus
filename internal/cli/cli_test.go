@@ -138,6 +138,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `--nth <n>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `nxctl inspect --selector <css> --old-session <id> --new-session <id>`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "batch"}, &stdout, &stdout); code != 0 {
@@ -158,6 +161,9 @@ func TestHelp(t *testing.T) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `--compare-css`) || !strings.Contains(stdout.String(), `--css-property <name>`) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `--scope-selector <css>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), aiCompareDocURL) {

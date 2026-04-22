@@ -73,6 +73,17 @@ type compareSummary struct {
 	Info            int  `json:"info"`
 }
 
+type compareScopeSide struct {
+	Matched bool   `json:"matched"`
+	Tag     string `json:"tag,omitempty"`
+}
+
+type compareScope struct {
+	Selector string           `json:"selector"`
+	Old      compareScopeSide `json:"old"`
+	New      compareScopeSide `json:"new"`
+}
+
 type compareFinding struct {
 	Kind        string `json:"kind"`
 	Severity    string `json:"severity,omitempty"`
@@ -89,6 +100,7 @@ type compareFinding struct {
 type compareReport struct {
 	Old      compareSnapshot  `json:"old"`
 	New      compareSnapshot  `json:"new"`
+	Scope    *compareScope    `json:"scope,omitempty"`
 	Summary  compareSummary   `json:"summary"`
 	Findings []compareFinding `json:"findings"`
 }
@@ -102,6 +114,7 @@ type compareManifestDefaults struct {
 	Backend         string   `json:"backend,omitempty"`
 	Viewport        string   `json:"viewport,omitempty"`
 	WaitSelector    string   `json:"wait_selector,omitempty"`
+	ScopeSelector   string   `json:"scope_selector,omitempty"`
 	WaitFunction    string   `json:"wait_function,omitempty"`
 	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
 	CompareCSS      bool     `json:"compare_css,omitempty"`
@@ -121,6 +134,7 @@ type compareManifestPage struct {
 	Backend         *string  `json:"backend,omitempty"`
 	Viewport        *string  `json:"viewport,omitempty"`
 	WaitSelector    *string  `json:"wait_selector,omitempty"`
+	ScopeSelector   *string  `json:"scope_selector,omitempty"`
 	WaitFunction    *string  `json:"wait_function,omitempty"`
 	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`
 	CompareCSS      *bool    `json:"compare_css,omitempty"`
@@ -162,6 +176,7 @@ type compareRun struct {
 	TargetRef       string
 	Viewport        string
 	WaitSelector    string
+	ScopeSelector   string
 	WaitFunction    string
 	WaitNetworkIdle bool
 	CompareCSS      bool

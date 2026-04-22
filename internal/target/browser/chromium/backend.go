@@ -34,7 +34,7 @@ const pageTargetTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
-func observeTreeExpression(cssProperties []string) string {
+func observeTreeExpression(cssProperties []string, scopeSelector string) string {
 	properties := make([]string, 0, len(cssProperties))
 	for _, value := range cssProperties {
 		trimmed := strings.TrimSpace(value)
@@ -44,10 +44,13 @@ func observeTreeExpression(cssProperties []string) string {
 		properties = append(properties, strconv.Quote(trimmed))
 	}
 
+	scope := strconv.Quote(strings.TrimSpace(scopeSelector))
+
 	return `(function () {
-  const selector = [
-    'button',
-    'a[href]',
+	  const scopeSelector = ` + scope + `;
+	  const selector = [
+	    'button',
+	    'a[href]',
     'input',
     'textarea',
     'select',
@@ -145,7 +148,7 @@ func observeTreeExpression(cssProperties []string) string {
 
   const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 
-  const cssProperties = [` + strings.Join(properties, ",") + `];
+	  const cssProperties = [` + strings.Join(properties, ",") + `];
   const colorPropertyPattern = /(^|-)color$/;
   const colorPropertyNames = new Set(['fill', 'stroke']);
   const colorProbe = document.createElement('span');
@@ -230,8 +233,35 @@ func observeTreeExpression(cssProperties []string) string {
     return parts.join('|');
   };
 
-  const candidates = Array.from(document.querySelectorAll(selector))
-    .filter((el) => visible(el));
+	  let scopeRoot = null;
+	  if (scopeSelector) {
+	    let scopeMatches;
+	    try {
+	      scopeMatches = Array.from(document.querySelectorAll(scopeSelector));
+	    } catch (error) {
+	      throw new Error('scope selector is invalid: ' + scopeSelector);
+	    }
+	    if (scopeMatches.length === 0) {
+	      throw new Error('scope selector matched 0 nodes: ' + scopeSelector);
+	    }
+	    if (scopeMatches.length !== 1) {
+	      throw new Error('scope selector matched ' + scopeMatches.length + ' nodes: ' + scopeSelector);
+	    }
+	    scopeRoot = scopeMatches[0];
+	  }
+
+	  const baseCandidates = Array.from(document.querySelectorAll(selector))
+	    .filter((el) => !scopeRoot || scopeRoot.contains(el))
+	    .filter((el) => visible(el));
+
+	  const candidates = [];
+	  if (scopeRoot) {
+	    candidates.push(scopeRoot);
+	  }
+	  for (const el of baseCandidates) {
+	    if (scopeRoot && el === scopeRoot) continue;
+	    candidates.push(el);
+	  }
 
   const ids = new Map();
   candidates.forEach((el, index) => ids.set(el, index + 1));
@@ -260,7 +290,7 @@ func observeTreeExpression(cssProperties []string) string {
         w: Math.round(rect.width),
         h: Math.round(rect.height)
       },
-      visible: true,
+      visible: visible(el),
       enabled: !el.disabled && el.getAttribute('aria-disabled') !== 'true',
       focused: document.activeElement === el,
       editable: el.isContentEditable || el.tagName === 'INPUT' || el.tagName === 'TEXTAREA',
@@ -274,6 +304,49 @@ func observeTreeExpression(cssProperties []string) string {
   });
 
   return JSON.stringify(nodes);
+})()`
+}
+
+func scopeTextExpression(scopeSelector string) string {
+	return `(function () {
+  const selector = ` + strconv.Quote(strings.TrimSpace(scopeSelector)) + `;
+  let matches;
+  try {
+    matches = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    throw new Error('scope selector is invalid: ' + selector);
+  }
+  if (matches.length === 0) {
+    throw new Error('scope selector matched 0 nodes: ' + selector);
+  }
+  if (matches.length !== 1) {
+    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector);
+  }
+  const root = matches[0];
+  return (root.innerText || root.textContent || '').trim();
+})()`
+}
+
+func scopeMetaExpression(scopeSelector string) string {
+	return `(function () {
+  const selector = ` + strconv.Quote(strings.TrimSpace(scopeSelector)) + `;
+  let matches;
+  try {
+    matches = Array.from(document.querySelectorAll(selector));
+  } catch (error) {
+    throw new Error('scope selector is invalid: ' + selector);
+  }
+  if (matches.length === 0) {
+    throw new Error('scope selector matched 0 nodes: ' + selector);
+  }
+  if (matches.length !== 1) {
+    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector);
+  }
+  const root = matches[0];
+  return {
+    scope_selector: selector,
+    scope_tag: root.tagName ? root.tagName.toLowerCase() : ''
+  };
 })()`
 }
 
@@ -1147,16 +1220,24 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 		var title string
 		var text string
 		var treeJSON string
+		var scopeMeta map[string]string
 		var screenshot []byte
 		actions := []chromedp.Action{
 			chromedp.Location(&currentURL),
 			chromedp.Title(&title),
 		}
 		if opts.WithText {
-			actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
+			if strings.TrimSpace(opts.ScopeSelector) != "" {
+				actions = append(actions, chromedp.Evaluate(scopeTextExpression(opts.ScopeSelector), &text))
+			} else {
+				actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
+			}
 		}
 		if opts.WithTree {
-			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties), &treeJSON))
+			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector), &treeJSON))
+			if strings.TrimSpace(opts.ScopeSelector) != "" {
+				actions = append(actions, chromedp.Evaluate(scopeMetaExpression(opts.ScopeSelector), &scopeMeta))
+			}
 		}
 		if opts.WithScreenshot {
 			if opts.FullScreenshot {
@@ -1175,16 +1256,24 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 			return nil, err
 		}
 
+		meta := map[string]string{
+			"devtools_url":   devtoolsURL,
+			"page_target_id": targetInfo.ID,
+		}
+		for key, value := range scopeMeta {
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+				continue
+			}
+			meta[key] = strings.TrimSpace(value)
+		}
+
 		return &api.Observation{
 			URLOrScreen: currentURL,
 			Title:       title,
 			Text:        strings.TrimSpace(text),
 			Tree:        tree,
 			Screenshot:  base64.StdEncoding.EncodeToString(screenshot),
-			Meta: map[string]string{
-				"devtools_url":   devtoolsURL,
-				"page_target_id": targetInfo.ID,
-			},
+			Meta:        meta,
 		}, nil
 	}, allocatorOptions...)
 }

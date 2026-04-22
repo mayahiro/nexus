@@ -80,10 +80,11 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 	}
 }
 
-func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot) compareReport {
+func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope) compareReport {
 	report := compareReport{
-		Old: oldSnapshot,
-		New: newSnapshot,
+		Old:   oldSnapshot,
+		New:   newSnapshot,
+		Scope: scope,
 	}
 
 	add := func(finding compareFinding) {

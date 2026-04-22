@@ -358,6 +358,170 @@ func TestCompareURLWaitOptions(t *testing.T) {
 	}
 }
 
+func TestCompareScopeSelector(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/products": {
+				URLOrScreen: "https://old.example.test/products",
+				Title:       "Products",
+				Text:        "Filters",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "filters", Role: "aside", Name: "Filters", Visible: true, Enabled: true},
+				},
+			},
+			"https://new.example.test/products": {
+				URLOrScreen: "https://new.example.test/products",
+				Title:       "Products",
+				Text:        "Filters",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "filters", Role: "aside", Name: "Filters", Visible: true, Enabled: true},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"https://old.example.test/products",
+		"https://new.example.test/products",
+		"--target-ref", "/tmp/fake-chromium",
+		"--scope-selector", "aside.filters",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare scope exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare scope json: %v\n%s", err, stdout.String())
+	}
+	if report.Scope == nil {
+		t.Fatalf("expected scope in compare report: %+v", report)
+	}
+	if report.Scope.Selector != "aside.filters" {
+		t.Fatalf("unexpected scope selector: %+v", report.Scope)
+	}
+	if !report.Scope.Old.Matched || report.Scope.Old.Tag != "aside" {
+		t.Fatalf("unexpected old scope: %+v", report.Scope)
+	}
+	if !report.Scope.New.Matched || report.Scope.New.Tag != "aside" {
+		t.Fatalf("unexpected new scope: %+v", report.Scope)
+	}
+	for _, sessionID := range handler.attachIDs {
+		scopes := handler.observeScopes[sessionID]
+		if len(scopes) == 0 || scopes[len(scopes)-1] != "aside.filters" {
+			t.Fatalf("expected scope selector to reach observe for %s, got %#v", sessionID, scopes)
+		}
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareScopeSelectorError(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/products": {
+				URLOrScreen: "https://old.example.test/products",
+				Title:       "Products",
+				Text:        "Products",
+			},
+			"https://new.example.test/products": {
+				URLOrScreen: "https://new.example.test/products",
+				Title:       "Products",
+				Text:        "Products",
+			},
+		},
+		scopeErrors: map[string]string{
+			"aside.filters": "scope selector matched 0 nodes: aside.filters",
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"https://old.example.test/products",
+		"https://new.example.test/products",
+		"--target-ref", "/tmp/fake-chromium",
+		"--scope-selector", "aside.filters",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected compare scope error\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "old side scope selector matched 0 nodes: aside.filters") {
+		t.Fatalf("unexpected compare scope error: %s", stdout.String())
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestCompareIgnoreAndMaskSelectors(t *testing.T) {
 	configureXDGTestEnv(t)
 

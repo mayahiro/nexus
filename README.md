@@ -121,6 +121,7 @@ nxctl wait function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-network-idle
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
+nxctl compare https://old.example.com/orders https://new.example.com/orders --scope-selector "aside.filters"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
@@ -130,6 +131,7 @@ nxctl flow run --manifest login-flow.json --json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
+nxctl inspect --selector "aside.filters" --old-session old --new-session new --css-property width
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -139,7 +141,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `compare_css`, and `css_property` can be set in `defaults` and overridden per page.
+In compare manifests, `backend`, `viewport`, `scope_selector`, `compare_css`, and `css_property` can be set in `defaults` and overridden per page.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -163,11 +165,15 @@ Examples: `nxctl open --session work https://example.com`, `nxctl navigate --ses
 
 `compare` waits for document load completion on URL-based runs.
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
+Use `--scope-selector` when you want to restrict compare to one CSS-selected subtree such as `aside.filters` or `main section.hero`.
+`--scope-selector` accepts a raw CSS selector, requires exactly one match on each side, and may use positional selectors such as `:nth-child()` or `:nth-of-type()`, though stable ids, classes, or attributes are preferred.
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
+Use `inspect --selector` when you need the computed styles for one CSS-selected container rather than a semantic locator.
+`inspect --selector` accepts a raw CSS selector, requires exactly one match on each side, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 
 `flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.

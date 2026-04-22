@@ -130,6 +130,22 @@ func observeCompareSession(ctx context.Context, client *rpc.Client, sessionID st
 	return res.Observation, nil
 }
 
+func observeScopedCompareSession(ctx context.Context, client *rpc.Client, sessionID string, cssProperties []string, scopeSelector string) (api.Observation, error) {
+	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+		SessionID: sessionID,
+		Options: api.ObserveOptions{
+			WithText:      true,
+			WithTree:      true,
+			CSSProperties: append([]string(nil), cssProperties...),
+			ScopeSelector: strings.TrimSpace(scopeSelector),
+		},
+	})
+	if err != nil {
+		return api.Observation{}, err
+	}
+	return res.Observation, nil
+}
+
 func waitForCompareURLReady(ctx context.Context, client *rpc.Client, sessionID string) error {
 	waitCtx, cancel := context.WithTimeout(ctx, compareURLReadyTimeout)
 	defer cancel()

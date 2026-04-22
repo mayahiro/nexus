@@ -92,14 +92,16 @@ func TestCompareManifest(t *testing.T) {
 		"defaults": map[string]any{
 			"ignore_text_regex": []string{`20\d\d-\d\d-\d\d`},
 			"mask_selector":     []string{"role=textbox&name=Email"},
+			"scope_selector":    "main",
 			"wait_function":     `window.appReady === true`,
 			"wait_network_idle": true,
 		},
 		"pages": []map[string]any{
 			{
-				"name":    "dashboard-url",
-				"old_url": "https://old.example.test/dashboard",
-				"new_url": "https://new.example.test/dashboard",
+				"name":           "dashboard-url",
+				"old_url":        "https://old.example.test/dashboard",
+				"new_url":        "https://new.example.test/dashboard",
+				"scope_selector": "aside.filters",
 			},
 			{
 				"name":              "dashboard-session",
@@ -158,6 +160,18 @@ func TestCompareManifest(t *testing.T) {
 	}
 	if len(handler.waitValues["new"]) != 1 || handler.waitValues["new"][0] != `window.appReady === true` {
 		t.Fatalf("expected merged wait_function on new session page, got %#v", handler.waitValues["new"])
+	}
+	for _, sessionID := range handler.attachIDs {
+		scopes := handler.observeScopes[sessionID]
+		if len(scopes) == 0 || scopes[len(scopes)-1] != "aside.filters" {
+			t.Fatalf("expected page scope selector on %s, got %#v", sessionID, scopes)
+		}
+	}
+	if len(handler.observeScopes["old"]) == 0 || handler.observeScopes["old"][0] != "main" {
+		t.Fatalf("expected default scope selector on old session page, got %#v", handler.observeScopes["old"])
+	}
+	if len(handler.observeScopes["new"]) == 0 || handler.observeScopes["new"][0] != "main" {
+		t.Fatalf("expected default scope selector on new session page, got %#v", handler.observeScopes["new"])
 	}
 
 	cancel()

@@ -250,7 +250,7 @@ func TestEvalExpression(t *testing.T) {
 }
 
 func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
-	script := observeTreeExpression([]string{"color", "fill", "pointer-events"})
+	script := observeTreeExpression([]string{"color", "fill", "pointer-events"}, "")
 
 	if !strings.Contains(script, "normalizeStyleValue(property, style.getPropertyValue(property).trim())") {
 		t.Fatalf("expected color normalization in script: %s", script)
