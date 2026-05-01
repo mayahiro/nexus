@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mayahiro/nexus/internal/api"
 )
 
 var newCompareSessionSuffix = func() string {
@@ -33,11 +35,12 @@ type compareEndpoint struct {
 }
 
 type compareSnapshot struct {
-	SessionID string                `json:"session_id,omitempty"`
-	URL       string                `json:"url,omitempty"`
-	Title     string                `json:"title,omitempty"`
-	Text      string                `json:"text,omitempty"`
-	Nodes     []compareSnapshotNode `json:"nodes,omitempty"`
+	SessionID       string                `json:"session_id,omitempty"`
+	URL             string                `json:"url,omitempty"`
+	Title           string                `json:"title,omitempty"`
+	Text            string                `json:"text,omitempty"`
+	Nodes           []compareSnapshotNode `json:"nodes,omitempty"`
+	ReferenceBounds *api.Rect             `json:"-"`
 }
 
 type compareSnapshotNode struct {
@@ -51,6 +54,7 @@ type compareSnapshotNode struct {
 	Href        string            `json:"href,omitempty"`
 	TestID      string            `json:"testid,omitempty"`
 	CSS         map[string]string `json:"css,omitempty"`
+	Bounds      *api.Rect         `json:"bounds,omitempty"`
 	Visible     bool              `json:"visible"`
 	Enabled     bool              `json:"enabled"`
 	Editable    bool              `json:"editable"`
@@ -67,6 +71,7 @@ type compareSummary struct {
 	NewNodes        int  `json:"new_nodes"`
 	StateChanged    int  `json:"state_changed"`
 	CSSChanged      int  `json:"css_changed"`
+	LayoutChanged   int  `json:"layout_changed"`
 	PageTextChanged int  `json:"page_text_changed"`
 	Critical        int  `json:"critical"`
 	Warning         int  `json:"warning"`
@@ -118,6 +123,7 @@ type compareManifestDefaults struct {
 	WaitFunction    string   `json:"wait_function,omitempty"`
 	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
 	CompareCSS      bool     `json:"compare_css,omitempty"`
+	CompareLayout   bool     `json:"compare_layout,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
@@ -138,6 +144,7 @@ type compareManifestPage struct {
 	WaitFunction    *string  `json:"wait_function,omitempty"`
 	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`
 	CompareCSS      *bool    `json:"compare_css,omitempty"`
+	CompareLayout   *bool    `json:"compare_layout,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
@@ -180,6 +187,7 @@ type compareRun struct {
 	WaitFunction    string
 	WaitNetworkIdle bool
 	CompareCSS      bool
+	CompareLayout   bool
 	WaitTimeout     int
 	CSSProperties   []string
 	IgnoreTextRegex []string
@@ -206,12 +214,15 @@ type compareSnapshotOptions struct {
 	IgnoreNode    []compareSelectorRule
 	MaskNode      []compareSelectorRule
 	CSSProperties []string
+	CompareLayout bool
 }
 
 const compareURLReadyTimeout = 10 * time.Second
 const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
+const compareLayoutThreshold = 12
+const compareLayoutWarningThreshold = 48
 
 var DefaultCSSProperties = []string{
 	"color",

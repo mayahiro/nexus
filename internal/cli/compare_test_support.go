@@ -43,6 +43,7 @@ type compareSummaryJSON struct {
 	NewNodes        int  `json:"new_nodes"`
 	StateChanged    int  `json:"state_changed"`
 	CSSChanged      int  `json:"css_changed"`
+	LayoutChanged   int  `json:"layout_changed"`
 	PageTextChanged int  `json:"page_text_changed"`
 	Critical        int  `json:"critical"`
 	Warning         int  `json:"warning"`
@@ -50,10 +51,13 @@ type compareSummaryJSON struct {
 }
 
 type compareFindingJSON struct {
+	Kind     string `json:"kind"`
 	Severity string `json:"severity"`
 	Impact   string `json:"impact"`
 	Locator  string `json:"locator"`
 	Field    string `json:"field"`
+	Old      string `json:"old"`
+	New      string `json:"new"`
 }
 
 type compareManifestReportJSON struct {

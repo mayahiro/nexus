@@ -33,6 +33,7 @@ type flowDefaults struct {
 	Viewport        string   `json:"viewport,omitempty"`
 	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
 	CompareCSS      bool     `json:"compare_css,omitempty"`
+	CompareLayout   bool     `json:"compare_layout,omitempty"`
 	ScopeSelector   string   `json:"scope_selector,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
@@ -80,6 +81,7 @@ type flowStep struct {
 	Full            bool     `json:"full,omitempty"`
 	Annotate        bool     `json:"annotate,omitempty"`
 	CompareCSS      *bool    `json:"compare_css,omitempty"`
+	CompareLayout   *bool    `json:"compare_layout,omitempty"`
 	ScopeSelector   string   `json:"scope_selector,omitempty"`
 	CSSProperty     []string `json:"css_property,omitempty"`
 	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
@@ -836,6 +838,13 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	}
 	if compareCSS {
 		args = append(args, "--compare-css")
+	}
+	compareLayout := state.Defaults.CompareLayout
+	if step.CompareLayout != nil {
+		compareLayout = *step.CompareLayout
+	}
+	if compareLayout {
+		args = append(args, "--compare-layout")
 	}
 	scopeSelector := strings.TrimSpace(state.Defaults.ScopeSelector)
 	if strings.TrimSpace(step.ScopeSelector) != "" {

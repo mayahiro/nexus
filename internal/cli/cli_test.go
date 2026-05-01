@@ -166,6 +166,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `--compare-css`) || !strings.Contains(stdout.String(), `--css-property <name>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `--compare-layout`) {
+		t.Fatalf("unexpected help compare output: %s", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), `--scope-selector <css>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}

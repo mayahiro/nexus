@@ -268,6 +268,104 @@ func TestCompareCSSProperties(t *testing.T) {
 	}
 }
 
+func TestCompareLayout(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		sessionObservations: map[string]api.Observation{
+			"old": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/layout",
+				Title:       "Layout",
+				Text:        "Save",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Text: "Save", Visible: true, Enabled: true, Invokable: true, Bounds: api.Rect{X: 450, Y: 380, W: 100, H: 40}},
+				},
+				Meta: map[string]string{"viewport_width": "1000", "viewport_height": "800"},
+			},
+			"new": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/layout",
+				Title:       "Layout",
+				Text:        "Save",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "cta-save", Role: "button", Name: "Save", Text: "Save", Visible: true, Enabled: true, Invokable: true, Bounds: api.Rect{X: 40, Y: 380, W: 100, H: 40}},
+				},
+				Meta: map[string]string{"viewport_width": "1000", "viewport_height": "800"},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--compare-layout",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare layout exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare layout json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.TotalFindings != 1 || report.Summary.LayoutChanged != 1 {
+		t.Fatalf("unexpected layout summary: %+v", report.Summary)
+	}
+	if report.Summary.Warning != 1 || report.Summary.Info != 0 {
+		t.Fatalf("unexpected layout severity summary: %+v", report.Summary)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("expected one layout finding: %+v", report.Findings)
+	}
+	finding := report.Findings[0]
+	if finding.Kind != "layout_changed" || finding.Field != "bounds" || finding.Impact != "layout_changed" {
+		t.Fatalf("unexpected layout finding: %+v", finding)
+	}
+	if !strings.Contains(finding.Old, "center/middle") || !strings.Contains(finding.New, "left/middle") {
+		t.Fatalf("unexpected layout placement: %+v", finding)
+	}
+	if finding.Locator != `role button --name "Save"` {
+		t.Fatalf("unexpected layout locator: %+v", finding)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestCompareURLWaitOptions(t *testing.T) {
 	configureXDGTestEnv(t)
 

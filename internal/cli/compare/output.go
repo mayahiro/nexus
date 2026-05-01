@@ -96,6 +96,9 @@ func printCompareReport(w io.Writer, report compareReport) {
 	if report.Summary.CSSChanged > 0 {
 		fmt.Fprintf(w, "css_changed: %d\n", report.Summary.CSSChanged)
 	}
+	if report.Summary.LayoutChanged > 0 {
+		fmt.Fprintf(w, "layout_changed: %d\n", report.Summary.LayoutChanged)
+	}
 
 	fmt.Fprintln(w)
 	for _, finding := range report.Findings {
@@ -114,6 +117,8 @@ func printCompareReport(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q: %s -> %s%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
 		case "css_changed":
 			fmt.Fprintf(w, "[%s] [css_changed] %s %s %q %s: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
+		case "layout_changed":
+			fmt.Fprintf(w, "[%s] [layout_changed] %s %s %q: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
 		}
 	}
 }
@@ -184,6 +189,8 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
 		case "css_changed":
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+		case "layout_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
 		}
 	}
 }
@@ -241,6 +248,8 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
 			case "css_changed":
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+			case "layout_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
 			}
 		}
 	}

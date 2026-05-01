@@ -124,6 +124,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --wa
 nxctl compare https://old.example.com/orders https://new.example.com/orders --scope-selector "aside.filters"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
+nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
@@ -142,7 +143,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `scope_selector`, `compare_css`, and `css_property` can be set in `defaults` and overridden per page.
+In compare manifests, `backend`, `viewport`, `scope_selector`, `compare_css`, `compare_layout`, and `css_property` can be set in `defaults` and overridden per page.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -170,6 +171,7 @@ Use `--scope-selector` when you want to restrict compare to one CSS-selected sub
 `--scope-selector` accepts a raw CSS selector, requires exactly one match on each side, and may use positional selectors such as `:nth-child()` or `:nth-of-type()`, though stable ids, classes, or attributes are preferred.
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
+Use `--compare-layout` when you want opt-in viewport-relative bounds findings for matching nodes, such as a button moving from center to left. Layout findings report observed placement changes; use `inspect --layout-context` when you need ancestor CSS context to investigate why the movement happened.
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.

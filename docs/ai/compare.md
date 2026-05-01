@@ -38,6 +38,7 @@ Recommended passes:
 - actionable controls such as buttons, links, and form fields
 - container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
 - important styles such as `color`, `background-color`, and `pointer-events`
+- significant visual placement changes using `--compare-layout`
 
 ## Noise Control
 
@@ -80,6 +81,14 @@ Style-focused compare:
 ```text
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 ```
+
+Layout-focused compare:
+
+```text
+nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
+```
+
+`--compare-layout` reports significant viewport-relative bounds changes for matching nodes. It is useful for findings such as a control moving from center to left, but it does not infer the ancestor CSS change that caused the movement. Use `inspect --layout-context` for that follow-up.
 
 ## Failure Triage
 

@@ -1,6 +1,7 @@
 package comparecmd
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +37,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			value = ""
 		}
 		css := compareNodeCSS(node, options.CSSProperties)
+		bounds := compareNodeBounds(node, options.CompareLayout)
 
 		nodes = append(nodes, compareSnapshotNode{
 			Fingerprint: fingerprint,
@@ -48,6 +50,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Href:        href,
 			TestID:      testID,
 			CSS:         css,
+			Bounds:      bounds,
 			Visible:     node.Visible,
 			Enabled:     node.Enabled,
 			Editable:    node.Editable,
@@ -72,11 +75,12 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 	})
 
 	return compareSnapshot{
-		SessionID: observation.SessionID,
-		URL:       normalizeCompareString(observation.URLOrScreen, options.IgnoreText),
-		Title:     normalizeCompareString(observation.Title, options.IgnoreText),
-		Text:      normalizeCompareString(observation.Text, options.IgnoreText),
-		Nodes:     nodes,
+		SessionID:       observation.SessionID,
+		URL:             normalizeCompareString(observation.URLOrScreen, options.IgnoreText),
+		Title:           normalizeCompareString(observation.Title, options.IgnoreText),
+		Text:            normalizeCompareString(observation.Text, options.IgnoreText),
+		Nodes:           nodes,
+		ReferenceBounds: compareReferenceBounds(observation, options.CompareLayout),
 	}
 }
 
@@ -88,7 +92,13 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 	}
 
 	add := func(finding compareFinding) {
-		finding.Severity, finding.Impact = classifyCompareFinding(finding)
+		severity, impact := classifyCompareFinding(finding)
+		if finding.Severity == "" {
+			finding.Severity = severity
+		}
+		if finding.Impact == "" {
+			finding.Impact = impact
+		}
 		report.Findings = append(report.Findings, finding)
 		report.Summary.TotalFindings++
 		switch finding.Kind {
@@ -104,6 +114,8 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 			report.Summary.StateChanged++
 		case "css_changed":
 			report.Summary.CSSChanged++
+		case "layout_changed":
+			report.Summary.LayoutChanged++
 		case "page_text_changed":
 			report.Summary.PageTextChanged++
 		}
@@ -252,6 +264,24 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 						New:         newValue,
 					})
 				}
+				if compareNodeLayoutChanged(oldNode, newNode) {
+					severity := "info"
+					if compareNodeLayoutWarning(oldNode, newNode) {
+						severity = "warning"
+					}
+					add(compareFinding{
+						Kind:        "layout_changed",
+						Severity:    severity,
+						Impact:      "layout_changed",
+						Locator:     locator,
+						Fingerprint: oldNode.Fingerprint,
+						Role:        oldNode.Role,
+						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+						Field:       "bounds",
+						Old:         compareLayoutValue(oldNode, oldSnapshot.ReferenceBounds),
+						New:         compareLayoutValue(newNode, newSnapshot.ReferenceBounds),
+					})
+				}
 			}
 		}
 	}
@@ -317,6 +347,135 @@ func compareNodeCSS(node api.Node, properties []string) map[string]string {
 		values[property] = strings.TrimSpace(node.Styles[property])
 	}
 	return values
+}
+
+func compareNodeBounds(node api.Node, enabled bool) *api.Rect {
+	if !enabled || !compareRectValid(node.Bounds) {
+		return nil
+	}
+	bounds := node.Bounds
+	return &bounds
+}
+
+func compareReferenceBounds(observation api.Observation, enabled bool) *api.Rect {
+	if !enabled {
+		return nil
+	}
+	width, widthOK := compareMetaInt(observation.Meta, "viewport_width")
+	height, heightOK := compareMetaInt(observation.Meta, "viewport_height")
+	if !widthOK || !heightOK || width <= 0 || height <= 0 {
+		return nil
+	}
+	return &api.Rect{W: width, H: height}
+}
+
+func compareMetaInt(meta map[string]string, key string) (int, bool) {
+	value, ok := meta[key]
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
+}
+
+func compareNodeLayoutChanged(oldNode compareSnapshotNode, newNode compareSnapshotNode) bool {
+	if oldNode.Bounds == nil || newNode.Bounds == nil {
+		return false
+	}
+	return compareRectDelta(*oldNode.Bounds, *newNode.Bounds) >= compareLayoutThreshold
+}
+
+func compareNodeLayoutWarning(oldNode compareSnapshotNode, newNode compareSnapshotNode) bool {
+	if oldNode.Bounds == nil || newNode.Bounds == nil {
+		return false
+	}
+	if !compareNodeInteractive(oldNode) && !compareNodeInteractive(newNode) {
+		return false
+	}
+	return compareRectDelta(*oldNode.Bounds, *newNode.Bounds) >= compareLayoutWarningThreshold
+}
+
+func compareNodeInteractive(node compareSnapshotNode) bool {
+	if node.Editable || node.Selectable || node.Invokable {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(node.Role)) {
+	case "button", "link", "textbox", "combobox", "checkbox", "radio", "tab":
+		return true
+	default:
+		return false
+	}
+}
+
+func compareRectDelta(oldRect api.Rect, newRect api.Rect) int {
+	return max(
+		compareAbs(oldRect.X-newRect.X),
+		compareAbs(oldRect.Y-newRect.Y),
+		compareAbs(oldRect.W-newRect.W),
+		compareAbs(oldRect.H-newRect.H),
+	)
+}
+
+func compareAbs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func compareRectValid(rect api.Rect) bool {
+	return rect.W > 0 && rect.H > 0
+}
+
+func compareLayoutValue(node compareSnapshotNode, reference *api.Rect) string {
+	if node.Bounds == nil {
+		return ""
+	}
+	position := comparePlacement(*node.Bounds, reference)
+	if position == "" {
+		return compareRectValue(*node.Bounds)
+	}
+	return position + " " + compareRectValue(*node.Bounds)
+}
+
+func compareRectValue(rect api.Rect) string {
+	return fmt.Sprintf("%d,%d %dx%d", rect.X, rect.Y, rect.W, rect.H)
+}
+
+func comparePlacement(rect api.Rect, reference *api.Rect) string {
+	if reference == nil || reference.W <= 0 || reference.H <= 0 {
+		return ""
+	}
+	centerX := rect.X + rect.W/2
+	centerY := rect.Y + rect.H/2
+	x := centerX - reference.X
+	y := centerY - reference.Y
+	return compareHorizontalPlacement(x, reference.W) + "/" + compareVerticalPlacement(y, reference.H)
+}
+
+func compareHorizontalPlacement(center int, width int) string {
+	switch {
+	case center*3 < width:
+		return "left"
+	case center*3 > width*2:
+		return "right"
+	default:
+		return "center"
+	}
+}
+
+func compareVerticalPlacement(center int, height int) string {
+	switch {
+	case center*3 < height:
+		return "top"
+	case center*3 > height*2:
+		return "bottom"
+	default:
+		return "middle"
+	}
 }
 
 func sortedCompareCSSPropertyKeys(left map[string]string, right map[string]string) []string {
@@ -408,6 +567,8 @@ func classifyCompareFinding(finding compareFinding) (string, string) {
 		default:
 			return "info", "content_changed"
 		}
+	case "layout_changed":
+		return "info", "layout_changed"
 	case "text_changed":
 		if finding.Role == "textbox" || finding.Role == "combobox" {
 			return "warning", "form_input_changed"

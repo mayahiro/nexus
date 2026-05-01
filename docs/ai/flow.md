@@ -25,7 +25,7 @@ Insert `screenshot` before `compare` when the flow should keep visual artifacts.
 
 Use a JSON manifest with these top-level keys:
 
-- `defaults`: shared defaults such as `backend`, `target_ref`, `viewport`, `wait_timeout`, `compare_css`, `scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`
+- `defaults`: shared defaults such as `backend`, `target_ref`, `viewport`, `wait_timeout`, `compare_css`, `compare_layout`, `scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`
 - `matrices`: named viewport or variable sets that a scenario can replay against
 - `scenarios`: the runnable flow list
 
@@ -77,7 +77,7 @@ With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
 When `locator` is present, `screenshot` captures just the matched element instead of the whole viewport.
 Use `nth` when multiple nodes intentionally share the same locator.
 `full` is not supported together with `locator`.
-`compare` supports step-level overrides such as `compare_css`, `scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
+`compare` supports step-level overrides such as `compare_css`, `compare_layout`, `scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 
 ## Why `navigate` Matters
 

@@ -1277,6 +1277,7 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 		var text string
 		var treeJSON string
 		var scopeMeta map[string]string
+		var viewportMeta map[string]int
 		var screenshot []byte
 		var layoutProperties []string
 		if opts.WithLayoutContext {
@@ -1285,6 +1286,7 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 		actions := []chromedp.Action{
 			chromedp.Location(&currentURL),
 			chromedp.Title(&title),
+			chromedp.Evaluate(`({width: window.innerWidth || 0, height: window.innerHeight || 0})`, &viewportMeta),
 		}
 		if opts.WithText {
 			if strings.TrimSpace(opts.ScopeSelector) != "" {
@@ -1319,6 +1321,12 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 		meta := map[string]string{
 			"devtools_url":   devtoolsURL,
 			"page_target_id": targetInfo.ID,
+		}
+		if viewportMeta["width"] > 0 {
+			meta["viewport_width"] = strconv.Itoa(viewportMeta["width"])
+		}
+		if viewportMeta["height"] > 0 {
+			meta["viewport_height"] = strconv.Itoa(viewportMeta["height"])
 		}
 		for key, value := range scopeMeta {
 			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
