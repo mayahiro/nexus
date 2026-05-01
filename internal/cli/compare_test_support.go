@@ -24,8 +24,9 @@ type compareScopeJSON struct {
 }
 
 type compareScopeSideJSON struct {
-	Matched bool   `json:"matched"`
-	Tag     string `json:"tag"`
+	Selector string `json:"selector"`
+	Matched  bool   `json:"matched"`
+	Tag      string `json:"tag"`
 }
 
 type compareSnapshotJSON struct {

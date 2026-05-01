@@ -75,20 +75,22 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 			SessionID: strings.TrimSpace(page.NewSession),
 			URL:       strings.TrimSpace(page.NewURL),
 		},
-		Backend:         base.Backend,
-		TargetRef:       base.TargetRef,
-		Viewport:        base.Viewport,
-		WaitSelector:    base.WaitSelector,
-		ScopeSelector:   base.ScopeSelector,
-		WaitFunction:    base.WaitFunction,
-		WaitNetworkIdle: base.WaitNetworkIdle,
-		CompareCSS:      base.CompareCSS,
-		CompareLayout:   base.CompareLayout,
-		WaitTimeout:     base.WaitTimeout,
-		CSSProperties:   append([]string(nil), base.CSSProperties...),
-		IgnoreTextRegex: append([]string(nil), base.IgnoreTextRegex...),
-		IgnoreSelector:  append([]string(nil), base.IgnoreSelector...),
-		MaskSelector:    append([]string(nil), base.MaskSelector...),
+		Backend:          base.Backend,
+		TargetRef:        base.TargetRef,
+		Viewport:         base.Viewport,
+		WaitSelector:     base.WaitSelector,
+		ScopeSelector:    base.ScopeSelector,
+		OldScopeSelector: base.OldScopeSelector,
+		NewScopeSelector: base.NewScopeSelector,
+		WaitFunction:     base.WaitFunction,
+		WaitNetworkIdle:  base.WaitNetworkIdle,
+		CompareCSS:       base.CompareCSS,
+		CompareLayout:    base.CompareLayout,
+		WaitTimeout:      base.WaitTimeout,
+		CSSProperties:    append([]string(nil), base.CSSProperties...),
+		IgnoreTextRegex:  append([]string(nil), base.IgnoreTextRegex...),
+		IgnoreSelector:   append([]string(nil), base.IgnoreSelector...),
+		MaskSelector:     append([]string(nil), base.MaskSelector...),
 	}
 
 	if defaults.WaitSelector != "" {
@@ -96,6 +98,14 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	}
 	if defaults.ScopeSelector != "" {
 		run.ScopeSelector = defaults.ScopeSelector
+		run.OldScopeSelector = ""
+		run.NewScopeSelector = ""
+	}
+	if defaults.OldScopeSelector != "" {
+		run.OldScopeSelector = defaults.OldScopeSelector
+	}
+	if defaults.NewScopeSelector != "" {
+		run.NewScopeSelector = defaults.NewScopeSelector
 	}
 	if strings.TrimSpace(defaults.Backend) != "" {
 		run.Backend = strings.TrimSpace(defaults.Backend)
@@ -130,6 +140,14 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	}
 	if page.ScopeSelector != nil {
 		run.ScopeSelector = strings.TrimSpace(*page.ScopeSelector)
+		run.OldScopeSelector = ""
+		run.NewScopeSelector = ""
+	}
+	if page.OldScopeSelector != nil {
+		run.OldScopeSelector = strings.TrimSpace(*page.OldScopeSelector)
+	}
+	if page.NewScopeSelector != nil {
+		run.NewScopeSelector = strings.TrimSpace(*page.NewScopeSelector)
 	}
 	if page.Backend != nil && strings.TrimSpace(*page.Backend) != "" {
 		run.Backend = strings.TrimSpace(*page.Backend)

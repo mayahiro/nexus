@@ -101,6 +101,96 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestCompareSideSpecificScopeSelectors(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		sessionObservations: map[string]api.Observation{
+			"old": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Orders", Visible: true, Enabled: true},
+				},
+			},
+			"new": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Orders", Visible: true, Enabled: true},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--old-scope-selector", "main.legacy",
+		"--new-scope-selector", "main.next",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare side-specific scope exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare side-specific scope json: %v\n%s", err, stdout.String())
+	}
+	if report.Scope == nil {
+		t.Fatalf("expected scope in compare report: %+v", report)
+	}
+	if report.Scope.Selector != "" || report.Scope.Old.Selector != "main.legacy" || report.Scope.New.Selector != "main.next" {
+		t.Fatalf("unexpected side-specific scope report: %+v", report.Scope)
+	}
+	if got := handler.observeScopes["old"]; len(got) != 1 || got[0] != "main.legacy" {
+		t.Fatalf("unexpected old observe scopes: %#v", got)
+	}
+	if got := handler.observeScopes["new"]; len(got) != 1 || got[0] != "main.next" {
+		t.Fatalf("unexpected new observe scopes: %#v", got)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestCompareURLs(t *testing.T) {
 	configureXDGTestEnv(t)
 

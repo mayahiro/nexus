@@ -98,10 +98,11 @@ func TestCompareManifest(t *testing.T) {
 		},
 		"pages": []map[string]any{
 			{
-				"name":           "dashboard-url",
-				"old_url":        "https://old.example.test/dashboard",
-				"new_url":        "https://new.example.test/dashboard",
-				"scope_selector": "aside.filters",
+				"name":               "dashboard-url",
+				"old_url":            "https://old.example.test/dashboard",
+				"new_url":            "https://new.example.test/dashboard",
+				"old_scope_selector": "aside.legacy-filters",
+				"new_scope_selector": "main.filters",
 			},
 			{
 				"name":              "dashboard-session",
@@ -163,8 +164,12 @@ func TestCompareManifest(t *testing.T) {
 	}
 	for _, sessionID := range handler.attachIDs {
 		scopes := handler.observeScopes[sessionID]
-		if len(scopes) == 0 || scopes[len(scopes)-1] != "aside.filters" {
-			t.Fatalf("expected page scope selector on %s, got %#v", sessionID, scopes)
+		expected := "main.filters"
+		if handler.sessionURLs[sessionID] == "https://old.example.test/dashboard" {
+			expected = "aside.legacy-filters"
+		}
+		if len(scopes) == 0 || scopes[len(scopes)-1] != expected {
+			t.Fatalf("expected page scope selector %q on %s, got %#v", expected, sessionID, scopes)
 		}
 	}
 	if len(handler.observeScopes["old"]) == 0 || handler.observeScopes["old"][0] != "main" {

@@ -37,6 +37,7 @@ Recommended passes:
 - major text and labels
 - actionable controls such as buttons, links, and form fields
 - container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
+- migration-scoped passes using `--old-scope-selector` and `--new-scope-selector` when old and new DOM structures differ
 - important styles such as `color`, `background-color`, and `pointer-events`
 - significant visual placement changes using `--compare-layout`
 
@@ -59,6 +60,7 @@ Scoped compare:
 
 ```text
 nxctl compare https://old.example.com/products https://new.example.com/products --wait-selector '.ready' --scope-selector 'aside.filters' --compare-css --css-property width --css-property padding
+nxctl compare https://old.example.com/products https://new.example.com/products --old-scope-selector '#legacy-filters' --new-scope-selector 'aside.filters'
 ```
 
 Session-to-session compare:
@@ -73,6 +75,7 @@ Targeted inspection:
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width
+nxctl inspect --old-scope-selector '#legacy-filters' --new-scope-selector 'aside.filters' --old-session old --new-session new --css-property width
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 ```
 
@@ -102,6 +105,8 @@ If the new page looks incomplete:
 ## Scope Selector Rules
 
 - `--scope-selector` accepts a raw CSS selector and restricts compare to exactly one matched subtree on each side
+- `--old-scope-selector` and `--new-scope-selector` override the compare subtree per side
+- if only one side-specific scope selector is set, `--scope-selector` must provide the missing side's fallback
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - prefer stable ids, classes, or attributes before positional selectors
 - if the selector matches 0 or multiple elements on either side, compare fails early
@@ -109,6 +114,9 @@ If the new page looks incomplete:
 ## Inspect Selector Rules
 
 - `inspect --selector` accepts a raw CSS selector and compares the computed styles for exactly one matched element on each side
+- `inspect --scope-selector` limits semantic locator inspection to exactly one matched subtree on each side
+- `inspect --old-scope-selector` and `inspect --new-scope-selector` override the inspect subtree per side
+- when no semantic locator is provided, side-specific scope selectors identify the inspected roots
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - do not combine `--selector` with a positional inspect locator
 - do not combine `--selector` with `--nth`

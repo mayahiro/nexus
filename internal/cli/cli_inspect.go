@@ -395,6 +395,17 @@ type inspectMatch struct {
 	Node      api.Node `json:"node"`
 }
 
+type inspectScopeSide struct {
+	Selector string `json:"selector,omitempty"`
+	Tag      string `json:"tag,omitempty"`
+}
+
+type inspectScope struct {
+	Selector string           `json:"selector,omitempty"`
+	Old      inspectScopeSide `json:"old"`
+	New      inspectScopeSide `json:"new"`
+}
+
 type inspectPropertyReport struct {
 	Name string `json:"name"`
 	Old  string `json:"old,omitempty"`
@@ -404,6 +415,7 @@ type inspectPropertyReport struct {
 
 type inspectReport struct {
 	Locator          inspectLocator          `json:"locator"`
+	Scope            *inspectScope           `json:"scope,omitempty"`
 	CSSProperties    []string                `json:"css_properties"`
 	LayoutProperties []string                `json:"layout_properties,omitempty"`
 	Old              inspectMatch            `json:"old"`
@@ -463,6 +475,9 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	oldSession := fs.String("old-session", "", "old session id")
 	newSession := fs.String("new-session", "", "new session id")
 	selector := fs.String("selector", "", "raw css selector to inspect")
+	scopeSelector := fs.String("scope-selector", "", "raw css selector subtree for locator inspection")
+	oldScopeSelector := fs.String("old-scope-selector", "", "old side css selector subtree")
+	newScopeSelector := fs.String("new-scope-selector", "", "new side css selector subtree")
 	asJSON := fs.Bool("json", false, "print as json")
 	withLayoutContext := fs.Bool("layout-context", false, "include ancestor layout context")
 	nth := fs.Int("nth", 0, "choose the nth matching node")
@@ -484,7 +499,17 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		positionals = append(positionals, locatorValue)
 	}
 	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 1 && strings.TrimSpace(*selector) == "" {
+	if len(positionals) > 1 {
+		fmt.Fprintln(stderr, "inspect requires exactly one locator or selector")
+		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
+		return 1
+	}
+	hasLocator := len(positionals) == 1
+	selectorValue := strings.TrimSpace(*selector)
+	scopeSelectorValue := strings.TrimSpace(*scopeSelector)
+	oldScopeSelectorValue := strings.TrimSpace(*oldScopeSelector)
+	newScopeSelectorValue := strings.TrimSpace(*newScopeSelector)
+	if !hasLocator && selectorValue == "" && scopeSelectorValue == "" && oldScopeSelectorValue == "" && newScopeSelectorValue == "" {
 		fmt.Fprintln(stderr, "inspect requires exactly one locator or --selector")
 		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 		return 1
@@ -494,11 +519,16 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 		return 1
 	}
-	if len(positionals) > 0 && strings.TrimSpace(*selector) != "" {
+	if hasLocator && selectorValue != "" {
 		fmt.Fprintln(stderr, "inspect can not combine a locator with --selector")
 		return 1
 	}
-	if strings.TrimSpace(*selector) != "" && *nth > 0 {
+	if selectorValue != "" && scopeSelectorValue != "" {
+		fmt.Fprintln(stderr, "inspect can not combine --selector with --scope-selector")
+		return 1
+	}
+	targetSelectorMode := !hasLocator
+	if targetSelectorMode && *nth > 0 {
 		fmt.Fprintln(stderr, "inspect --selector does not support --nth")
 		return 1
 	}
@@ -508,10 +538,18 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 
 	locator := inspectLocator{}
-	if strings.TrimSpace(*selector) != "" {
-		locator = inspectLocator{Raw: "selector: " + strings.TrimSpace(*selector), Kind: "selector", Value: strings.TrimSpace(*selector)}
+	commonScopeSelector := scopeSelectorValue
+	if targetSelectorMode {
+		commonScopeSelector = firstNonEmpty(selectorValue, scopeSelectorValue)
+	}
+	oldEffectiveScopeSelector, newEffectiveScopeSelector, err := resolveInspectScopeSelectors(commonScopeSelector, oldScopeSelectorValue, newScopeSelectorValue)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if targetSelectorMode {
+		locator = inspectSelectorLocator(oldEffectiveScopeSelector, newEffectiveScopeSelector)
 	} else {
-		var err error
 		locator, err = parseInspectLocator(positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -528,16 +566,12 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 
 	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
 	layoutProperties := inspectResolveLayoutProperties(*withLayoutContext)
-	scopeSelector := ""
-	if locator.Kind == "selector" {
-		scopeSelector = locator.Value
-	}
-	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, scopeSelector, *withLayoutContext, layoutProperties)
+	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, oldEffectiveScopeSelector, *withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, scopeSelector, *withLayoutContext, layoutProperties)
+	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, newEffectiveScopeSelector, *withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -565,7 +599,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		URL:       newObservation.URLOrScreen,
 		Title:     newObservation.Title,
 		Node:      newNode,
-	})
+	}, inspectScopeFromObservations(oldEffectiveScopeSelector, newEffectiveScopeSelector, oldObservation, newObservation))
 
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
@@ -579,6 +613,54 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 
 	printInspectReport(stdout, report)
 	return 0
+}
+
+func resolveInspectScopeSelectors(scopeSelector string, oldScopeSelector string, newScopeSelector string) (string, string, error) {
+	common := strings.TrimSpace(scopeSelector)
+	oldSelector := strings.TrimSpace(oldScopeSelector)
+	newSelector := strings.TrimSpace(newScopeSelector)
+	if oldSelector == "" {
+		oldSelector = common
+	}
+	if newSelector == "" {
+		newSelector = common
+	}
+	if oldSelector == "" && newSelector != "" {
+		return "", "", fmt.Errorf("inspect requires --old-scope-selector, --scope-selector, or --selector when --new-scope-selector is set")
+	}
+	if oldSelector != "" && newSelector == "" {
+		return "", "", fmt.Errorf("inspect requires --new-scope-selector, --scope-selector, or --selector when --old-scope-selector is set")
+	}
+	return oldSelector, newSelector, nil
+}
+
+func inspectSelectorLocator(oldSelector string, newSelector string) inspectLocator {
+	if oldSelector == newSelector {
+		return inspectLocator{Raw: "selector: " + oldSelector, Kind: "selector", Value: oldSelector}
+	}
+	return inspectLocator{Raw: "selector: old=" + oldSelector + " new=" + newSelector, Kind: "selector"}
+}
+
+func inspectScopeFromObservations(oldSelector string, newSelector string, oldObservation api.Observation, newObservation api.Observation) *inspectScope {
+	oldSelector = firstNonEmpty(strings.TrimSpace(oldObservation.Meta["scope_selector"]), strings.TrimSpace(oldSelector))
+	newSelector = firstNonEmpty(strings.TrimSpace(newObservation.Meta["scope_selector"]), strings.TrimSpace(newSelector))
+	if oldSelector == "" && newSelector == "" {
+		return nil
+	}
+	scope := &inspectScope{
+		Old: inspectScopeSide{
+			Selector: oldSelector,
+			Tag:      strings.TrimSpace(oldObservation.Meta["scope_tag"]),
+		},
+		New: inspectScopeSide{
+			Selector: newSelector,
+			Tag:      strings.TrimSpace(newObservation.Meta["scope_tag"]),
+		},
+	}
+	if oldSelector == newSelector {
+		scope.Selector = oldSelector
+	}
+	return scope
 }
 
 func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string, scopeSelector string, withLayoutContext bool, layoutProperties []string) (api.Observation, error) {
@@ -723,7 +805,7 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection node
 	}
 }
 
-func buildInspectReport(locator inspectLocator, cssProperties []string, layoutProperties []string, oldMatch inspectMatch, newMatch inspectMatch) inspectReport {
+func buildInspectReport(locator inspectLocator, cssProperties []string, layoutProperties []string, oldMatch inspectMatch, newMatch inspectMatch, scope *inspectScope) inspectReport {
 	properties := make([]inspectPropertyReport, 0, len(cssProperties))
 	same := true
 	for _, property := range cssProperties {
@@ -742,6 +824,7 @@ func buildInspectReport(locator inspectLocator, cssProperties []string, layoutPr
 	}
 	return inspectReport{
 		Locator:          locator,
+		Scope:            scope,
 		CSSProperties:    append([]string(nil), cssProperties...),
 		LayoutProperties: append([]string(nil), layoutProperties...),
 		Old:              oldMatch,
@@ -753,6 +836,9 @@ func buildInspectReport(locator inspectLocator, cssProperties []string, layoutPr
 
 func printInspectReport(w io.Writer, report inspectReport) {
 	fmt.Fprintf(w, "locator: %s\n", report.Locator.Raw)
+	if report.Scope != nil {
+		fmt.Fprintf(w, "scope: %s\n", inspectScopeLabel(report.Scope))
+	}
 	fmt.Fprintf(w, "old: %s %s\n", report.Old.SessionID, inspectNodeSummary(report.Old.Node))
 	fmt.Fprintf(w, "new: %s %s\n", report.New.SessionID, inspectNodeSummary(report.New.Node))
 	fmt.Fprintf(w, "same: %t\n", report.Same)
@@ -775,6 +861,16 @@ func printInspectReport(w io.Writer, report inspectReport) {
 		printInspectLayoutContext(w, "old layout context", report.Old.Node.LayoutContext)
 		printInspectLayoutContext(w, "new layout context", report.New.Node.LayoutContext)
 	}
+}
+
+func inspectScopeLabel(scope *inspectScope) string {
+	if scope == nil {
+		return ""
+	}
+	if strings.TrimSpace(scope.Selector) != "" {
+		return strings.TrimSpace(scope.Selector)
+	}
+	return "old=" + strings.TrimSpace(scope.Old.Selector) + " new=" + strings.TrimSpace(scope.New.Selector)
 }
 
 func printInspectLayoutContext(w io.Writer, title string, nodes []api.LayoutContextNode) {

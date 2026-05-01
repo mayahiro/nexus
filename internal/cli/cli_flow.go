@@ -28,17 +28,19 @@ type flowManifest struct {
 }
 
 type flowDefaults struct {
-	Backend         string   `json:"backend,omitempty"`
-	TargetRef       string   `json:"target_ref,omitempty"`
-	Viewport        string   `json:"viewport,omitempty"`
-	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
-	CompareCSS      bool     `json:"compare_css,omitempty"`
-	CompareLayout   bool     `json:"compare_layout,omitempty"`
-	ScopeSelector   string   `json:"scope_selector,omitempty"`
-	CSSProperty     []string `json:"css_property,omitempty"`
-	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
-	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
-	MaskSelector    []string `json:"mask_selector,omitempty"`
+	Backend          string   `json:"backend,omitempty"`
+	TargetRef        string   `json:"target_ref,omitempty"`
+	Viewport         string   `json:"viewport,omitempty"`
+	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
+	CompareCSS       bool     `json:"compare_css,omitempty"`
+	CompareLayout    bool     `json:"compare_layout,omitempty"`
+	ScopeSelector    string   `json:"scope_selector,omitempty"`
+	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
+	NewScopeSelector string   `json:"new_scope_selector,omitempty"`
+	CSSProperty      []string `json:"css_property,omitempty"`
+	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector   []string `json:"ignore_selector,omitempty"`
+	MaskSelector     []string `json:"mask_selector,omitempty"`
 }
 
 type flowMatrix struct {
@@ -66,27 +68,29 @@ type flowEndpoint struct {
 }
 
 type flowStep struct {
-	Name            string   `json:"name,omitempty"`
-	Side            string   `json:"side,omitempty"`
-	Action          string   `json:"action,omitempty"`
-	Locator         string   `json:"locator,omitempty"`
-	Nth             int      `json:"nth,omitempty"`
-	Text            string   `json:"text,omitempty"`
-	Target          string   `json:"target,omitempty"`
-	Value           string   `json:"value,omitempty"`
-	Path            string   `json:"path,omitempty"`
-	State           string   `json:"state,omitempty"`
-	Timeout         *int     `json:"timeout,omitempty"`
-	ContinueOnError bool     `json:"continue_on_error,omitempty"`
-	Full            bool     `json:"full,omitempty"`
-	Annotate        bool     `json:"annotate,omitempty"`
-	CompareCSS      *bool    `json:"compare_css,omitempty"`
-	CompareLayout   *bool    `json:"compare_layout,omitempty"`
-	ScopeSelector   string   `json:"scope_selector,omitempty"`
-	CSSProperty     []string `json:"css_property,omitempty"`
-	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
-	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
-	MaskSelector    []string `json:"mask_selector,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	Side             string   `json:"side,omitempty"`
+	Action           string   `json:"action,omitempty"`
+	Locator          string   `json:"locator,omitempty"`
+	Nth              int      `json:"nth,omitempty"`
+	Text             string   `json:"text,omitempty"`
+	Target           string   `json:"target,omitempty"`
+	Value            string   `json:"value,omitempty"`
+	Path             string   `json:"path,omitempty"`
+	State            string   `json:"state,omitempty"`
+	Timeout          *int     `json:"timeout,omitempty"`
+	ContinueOnError  bool     `json:"continue_on_error,omitempty"`
+	Full             bool     `json:"full,omitempty"`
+	Annotate         bool     `json:"annotate,omitempty"`
+	CompareCSS       *bool    `json:"compare_css,omitempty"`
+	CompareLayout    *bool    `json:"compare_layout,omitempty"`
+	ScopeSelector    string   `json:"scope_selector,omitempty"`
+	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
+	NewScopeSelector string   `json:"new_scope_selector,omitempty"`
+	CSSProperty      []string `json:"css_property,omitempty"`
+	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector   []string `json:"ignore_selector,omitempty"`
+	MaskSelector     []string `json:"mask_selector,omitempty"`
 }
 
 type flowResolvedEndpoint struct {
@@ -498,6 +502,14 @@ func resolveFlowStep(step flowStep, vars map[string]string) (flowStep, error) {
 	if err != nil {
 		return flowStep{}, err
 	}
+	step.OldScopeSelector, err = expandFlowString(step.OldScopeSelector, vars)
+	if err != nil {
+		return flowStep{}, err
+	}
+	step.NewScopeSelector, err = expandFlowString(step.NewScopeSelector, vars)
+	if err != nil {
+		return flowStep{}, err
+	}
 	return step, nil
 }
 
@@ -847,11 +859,27 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 		args = append(args, "--compare-layout")
 	}
 	scopeSelector := strings.TrimSpace(state.Defaults.ScopeSelector)
+	oldScopeSelector := strings.TrimSpace(state.Defaults.OldScopeSelector)
+	newScopeSelector := strings.TrimSpace(state.Defaults.NewScopeSelector)
 	if strings.TrimSpace(step.ScopeSelector) != "" {
 		scopeSelector = strings.TrimSpace(step.ScopeSelector)
+		oldScopeSelector = ""
+		newScopeSelector = ""
 	}
 	if scopeSelector != "" {
 		args = append(args, "--scope-selector", scopeSelector)
+	}
+	if strings.TrimSpace(step.OldScopeSelector) != "" {
+		oldScopeSelector = strings.TrimSpace(step.OldScopeSelector)
+	}
+	if oldScopeSelector != "" {
+		args = append(args, "--old-scope-selector", oldScopeSelector)
+	}
+	if strings.TrimSpace(step.NewScopeSelector) != "" {
+		newScopeSelector = strings.TrimSpace(step.NewScopeSelector)
+	}
+	if newScopeSelector != "" {
+		args = append(args, "--new-scope-selector", newScopeSelector)
 	}
 	cssProperties := state.Defaults.CSSProperty
 	if len(step.CSSProperty) > 0 {

@@ -72,9 +72,11 @@ Avoid:
 
 ```text
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector '[data-testid="orders-loaded"]'
+nxctl compare https://old.example.com/orders https://new.example.com/orders --old-scope-selector '#legacy-orders' --new-scope-selector 'main [data-testid="orders"]'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 nxctl flow run --manifest migration-flow.json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
+nxctl inspect --old-scope-selector '#legacy-summary' --new-scope-selector '[data-testid="order-summary"]' --old-session old --new-session new --css-property width
 ```
 
 ## If Next.js Or Another Modern Frontend Looks Incomplete

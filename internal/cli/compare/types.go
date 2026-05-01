@@ -79,12 +79,13 @@ type compareSummary struct {
 }
 
 type compareScopeSide struct {
-	Matched bool   `json:"matched"`
-	Tag     string `json:"tag,omitempty"`
+	Selector string `json:"selector,omitempty"`
+	Matched  bool   `json:"matched"`
+	Tag      string `json:"tag,omitempty"`
 }
 
 type compareScope struct {
-	Selector string           `json:"selector"`
+	Selector string           `json:"selector,omitempty"`
 	Old      compareScopeSide `json:"old"`
 	New      compareScopeSide `json:"new"`
 }
@@ -116,40 +117,44 @@ type compareManifest struct {
 }
 
 type compareManifestDefaults struct {
-	Backend         string   `json:"backend,omitempty"`
-	Viewport        string   `json:"viewport,omitempty"`
-	WaitSelector    string   `json:"wait_selector,omitempty"`
-	ScopeSelector   string   `json:"scope_selector,omitempty"`
-	WaitFunction    string   `json:"wait_function,omitempty"`
-	WaitNetworkIdle bool     `json:"wait_network_idle,omitempty"`
-	CompareCSS      bool     `json:"compare_css,omitempty"`
-	CompareLayout   bool     `json:"compare_layout,omitempty"`
-	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
-	CSSProperty     []string `json:"css_property,omitempty"`
-	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
-	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
-	MaskSelector    []string `json:"mask_selector,omitempty"`
+	Backend          string   `json:"backend,omitempty"`
+	Viewport         string   `json:"viewport,omitempty"`
+	WaitSelector     string   `json:"wait_selector,omitempty"`
+	ScopeSelector    string   `json:"scope_selector,omitempty"`
+	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
+	NewScopeSelector string   `json:"new_scope_selector,omitempty"`
+	WaitFunction     string   `json:"wait_function,omitempty"`
+	WaitNetworkIdle  bool     `json:"wait_network_idle,omitempty"`
+	CompareCSS       bool     `json:"compare_css,omitempty"`
+	CompareLayout    bool     `json:"compare_layout,omitempty"`
+	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
+	CSSProperty      []string `json:"css_property,omitempty"`
+	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector   []string `json:"ignore_selector,omitempty"`
+	MaskSelector     []string `json:"mask_selector,omitempty"`
 }
 
 type compareManifestPage struct {
-	Name            string   `json:"name,omitempty"`
-	OldURL          string   `json:"old_url,omitempty"`
-	NewURL          string   `json:"new_url,omitempty"`
-	OldSession      string   `json:"old_session,omitempty"`
-	NewSession      string   `json:"new_session,omitempty"`
-	Backend         *string  `json:"backend,omitempty"`
-	Viewport        *string  `json:"viewport,omitempty"`
-	WaitSelector    *string  `json:"wait_selector,omitempty"`
-	ScopeSelector   *string  `json:"scope_selector,omitempty"`
-	WaitFunction    *string  `json:"wait_function,omitempty"`
-	WaitNetworkIdle *bool    `json:"wait_network_idle,omitempty"`
-	CompareCSS      *bool    `json:"compare_css,omitempty"`
-	CompareLayout   *bool    `json:"compare_layout,omitempty"`
-	WaitTimeout     *int     `json:"wait_timeout,omitempty"`
-	CSSProperty     []string `json:"css_property,omitempty"`
-	IgnoreTextRegex []string `json:"ignore_text_regex,omitempty"`
-	IgnoreSelector  []string `json:"ignore_selector,omitempty"`
-	MaskSelector    []string `json:"mask_selector,omitempty"`
+	Name             string   `json:"name,omitempty"`
+	OldURL           string   `json:"old_url,omitempty"`
+	NewURL           string   `json:"new_url,omitempty"`
+	OldSession       string   `json:"old_session,omitempty"`
+	NewSession       string   `json:"new_session,omitempty"`
+	Backend          *string  `json:"backend,omitempty"`
+	Viewport         *string  `json:"viewport,omitempty"`
+	WaitSelector     *string  `json:"wait_selector,omitempty"`
+	ScopeSelector    *string  `json:"scope_selector,omitempty"`
+	OldScopeSelector *string  `json:"old_scope_selector,omitempty"`
+	NewScopeSelector *string  `json:"new_scope_selector,omitempty"`
+	WaitFunction     *string  `json:"wait_function,omitempty"`
+	WaitNetworkIdle  *bool    `json:"wait_network_idle,omitempty"`
+	CompareCSS       *bool    `json:"compare_css,omitempty"`
+	CompareLayout    *bool    `json:"compare_layout,omitempty"`
+	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
+	CSSProperty      []string `json:"css_property,omitempty"`
+	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
+	IgnoreSelector   []string `json:"ignore_selector,omitempty"`
+	MaskSelector     []string `json:"mask_selector,omitempty"`
 }
 
 type compareManifestPageReport struct {
@@ -177,22 +182,24 @@ type compareManifestReport struct {
 }
 
 type compareRun struct {
-	OldEndpoint     compareEndpoint
-	NewEndpoint     compareEndpoint
-	Backend         string
-	TargetRef       string
-	Viewport        string
-	WaitSelector    string
-	ScopeSelector   string
-	WaitFunction    string
-	WaitNetworkIdle bool
-	CompareCSS      bool
-	CompareLayout   bool
-	WaitTimeout     int
-	CSSProperties   []string
-	IgnoreTextRegex []string
-	IgnoreSelector  []string
-	MaskSelector    []string
+	OldEndpoint      compareEndpoint
+	NewEndpoint      compareEndpoint
+	Backend          string
+	TargetRef        string
+	Viewport         string
+	WaitSelector     string
+	ScopeSelector    string
+	OldScopeSelector string
+	NewScopeSelector string
+	WaitFunction     string
+	WaitNetworkIdle  bool
+	CompareCSS       bool
+	CompareLayout    bool
+	WaitTimeout      int
+	CSSProperties    []string
+	IgnoreTextRegex  []string
+	IgnoreSelector   []string
+	MaskSelector     []string
 }
 
 type preparedCompareSession struct {

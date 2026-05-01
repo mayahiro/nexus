@@ -40,6 +40,8 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	limit := fs.Int("limit", 0, "limit manifest pages")
 	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
 	scopeSelector := fs.String("scope-selector", "", "restrict compare to a single CSS selector subtree")
+	oldScopeSelector := fs.String("old-scope-selector", "", "old side CSS selector subtree")
+	newScopeSelector := fs.String("new-scope-selector", "", "new side CSS selector subtree")
 	waitFunction := fs.String("wait-function", "", "wait until javascript expression returns true before compare")
 	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
 	compareCSS := fs.Bool("compare-css", false, "compare computed css values for matching nodes")
@@ -103,20 +105,22 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 
 	base := compareRun{
-		Backend:         *backend,
-		TargetRef:       *targetRef,
-		Viewport:        *viewport,
-		WaitSelector:    *waitSelector,
-		ScopeSelector:   *scopeSelector,
-		WaitFunction:    *waitFunction,
-		WaitNetworkIdle: *waitNetworkIdle,
-		CompareCSS:      *compareCSS,
-		CompareLayout:   *compareLayout,
-		WaitTimeout:     *waitTimeout,
-		CSSProperties:   append([]string(nil), cssProperty...),
-		IgnoreTextRegex: append([]string(nil), ignoreRegex...),
-		IgnoreSelector:  append([]string(nil), ignoreSelector...),
-		MaskSelector:    append([]string(nil), maskSelector...),
+		Backend:          *backend,
+		TargetRef:        *targetRef,
+		Viewport:         *viewport,
+		WaitSelector:     *waitSelector,
+		ScopeSelector:    *scopeSelector,
+		OldScopeSelector: *oldScopeSelector,
+		NewScopeSelector: *newScopeSelector,
+		WaitFunction:     *waitFunction,
+		WaitNetworkIdle:  *waitNetworkIdle,
+		CompareCSS:       *compareCSS,
+		CompareLayout:    *compareLayout,
+		WaitTimeout:      *waitTimeout,
+		CSSProperties:    append([]string(nil), cssProperty...),
+		IgnoreTextRegex:  append([]string(nil), ignoreRegex...),
+		IgnoreSelector:   append([]string(nil), ignoreSelector...),
+		MaskSelector:     append([]string(nil), maskSelector...),
 	}
 
 	if strings.TrimSpace(*manifestPath) != "" {
@@ -221,6 +225,10 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		return compareReport{}, err
 	}
 	cssProperties := ResolveCSSProperties(run.CompareCSS, run.CSSProperties)
+	oldScopeSelector, newScopeSelector, err := resolveCompareScopeSelectors(run.ScopeSelector, run.OldScopeSelector, run.NewScopeSelector)
+	if err != nil {
+		return compareReport{}, err
+	}
 
 	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, run.OldEndpoint, run.NewEndpoint, run.Backend, run.TargetRef, run.Viewport)
 	if err != nil {
@@ -269,11 +277,11 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		}
 	}
 
-	oldObservation, err := observeScopedCompareSession(ctx, client, oldPrepared.SessionID, cssProperties, run.ScopeSelector)
+	oldObservation, err := observeScopedCompareSession(ctx, client, oldPrepared.SessionID, cssProperties, oldScopeSelector)
 	if err != nil {
 		return compareReport{}, fmt.Errorf("old side %w", err)
 	}
-	newObservation, err := observeScopedCompareSession(ctx, client, newPrepared.SessionID, cssProperties, run.ScopeSelector)
+	newObservation, err := observeScopedCompareSession(ctx, client, newPrepared.SessionID, cssProperties, newScopeSelector)
 	if err != nil {
 		return compareReport{}, fmt.Errorf("new side %w", err)
 	}
@@ -293,24 +301,49 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 			CSSProperties: cssProperties,
 			CompareLayout: run.CompareLayout,
 		}),
-		compareScopeFromObservations(run.ScopeSelector, oldObservation, newObservation),
+		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
 	), nil
 }
 
-func compareScopeFromObservations(selector string, oldObservation api.Observation, newObservation api.Observation) *compareScope {
-	trimmed := strings.TrimSpace(selector)
-	if trimmed == "" {
+func resolveCompareScopeSelectors(scopeSelector string, oldScopeSelector string, newScopeSelector string) (string, string, error) {
+	common := strings.TrimSpace(scopeSelector)
+	oldSelector := strings.TrimSpace(oldScopeSelector)
+	newSelector := strings.TrimSpace(newScopeSelector)
+	if oldSelector == "" {
+		oldSelector = common
+	}
+	if newSelector == "" {
+		newSelector = common
+	}
+	if oldSelector == "" && newSelector != "" {
+		return "", "", errors.New("compare requires --old-scope-selector or --scope-selector when --new-scope-selector is set")
+	}
+	if oldSelector != "" && newSelector == "" {
+		return "", "", errors.New("compare requires --new-scope-selector or --scope-selector when --old-scope-selector is set")
+	}
+	return oldSelector, newSelector, nil
+}
+
+func compareScopeFromObservations(oldSelector string, newSelector string, oldObservation api.Observation, newObservation api.Observation) *compareScope {
+	oldSelector = firstNonEmpty(strings.TrimSpace(oldObservation.Meta["scope_selector"]), strings.TrimSpace(oldSelector))
+	newSelector = firstNonEmpty(strings.TrimSpace(newObservation.Meta["scope_selector"]), strings.TrimSpace(newSelector))
+	if oldSelector == "" && newSelector == "" {
 		return nil
 	}
-	return &compareScope{
-		Selector: trimmed,
+	scope := &compareScope{
 		Old: compareScopeSide{
-			Matched: true,
-			Tag:     strings.TrimSpace(oldObservation.Meta["scope_tag"]),
+			Selector: oldSelector,
+			Matched:  true,
+			Tag:      strings.TrimSpace(oldObservation.Meta["scope_tag"]),
 		},
 		New: compareScopeSide{
-			Matched: true,
-			Tag:     strings.TrimSpace(newObservation.Meta["scope_tag"]),
+			Selector: newSelector,
+			Matched:  true,
+			Tag:      strings.TrimSpace(newObservation.Meta["scope_tag"]),
 		},
 	}
+	if oldSelector == newSelector {
+		scope.Selector = oldSelector
+	}
+	return scope
 }

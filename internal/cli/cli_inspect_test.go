@@ -362,6 +362,98 @@ func TestInspect(t *testing.T) {
 	}
 }
 
+func TestInspectSideSpecificScopeSelectors(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		sessionObservations: map[string]api.Observation{
+			"old": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Inspect",
+				Tree: []api.Node{
+					{ID: 10, Ref: "@e10", Role: "region", Name: "Filters", Visible: true, Enabled: true, Styles: map[string]string{"color": "rgb(0, 0, 0)"}},
+				},
+			},
+			"new": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Inspect",
+				Tree: []api.Node{
+					{ID: 20, Ref: "@e20", Role: "region", Name: "Filters", Visible: true, Enabled: true, Styles: map[string]string{"color": "rgb(255, 0, 0)"}},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"inspect",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--old-scope-selector", "#legacy-filters",
+		"--new-scope-selector", "main .filters",
+		"--css-property", "color",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect side-specific scope exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report inspectReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected inspect side-specific scope json: %v\n%s", err, stdout.String())
+	}
+	if report.Locator.Kind != "selector" || report.Locator.Value != "" {
+		t.Fatalf("unexpected inspect selector locator: %+v", report.Locator)
+	}
+	if report.Scope == nil || report.Scope.Old.Selector != "#legacy-filters" || report.Scope.New.Selector != "main .filters" {
+		t.Fatalf("unexpected inspect scope report: %+v", report.Scope)
+	}
+	if report.Old.Node.ID != 10 || report.New.Node.ID != 20 {
+		t.Fatalf("unexpected inspect nodes: %+v", report)
+	}
+	if got := handler.observeScopes["old"]; len(got) != 1 || got[0] != "#legacy-filters" {
+		t.Fatalf("unexpected old observe scopes: %#v", got)
+	}
+	if got := handler.observeScopes["new"]; len(got) != 1 || got[0] != "main .filters" {
+		t.Fatalf("unexpected new observe scopes: %#v", got)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestFind(t *testing.T) {
 	configureXDGTestEnv(t)
 

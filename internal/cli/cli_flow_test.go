@@ -205,9 +205,10 @@ func TestFlowRunManifest(t *testing.T) {
 						"full":   true,
 					},
 					{
-						"action":         "compare",
-						"name":           "dashboard",
-						"scope_selector": "aside.filters",
+						"action":             "compare",
+						"name":               "dashboard",
+						"old_scope_selector": "aside.legacy-filters",
+						"new_scope_selector": "main.filters",
 					},
 				},
 			},
@@ -304,13 +305,20 @@ func TestFlowRunManifest(t *testing.T) {
 	if screenshotCount != 4 {
 		t.Fatalf("expected 4 screenshot requests, got %#v", handler.observeRequests)
 	}
-	compareScopeCount := 0
+	oldCompareScopeCount := 0
+	newCompareScopeCount := 0
 	for _, req := range handler.observeRequests {
-		if req.Options.WithTree && !req.Options.WithScreenshot && req.Options.ScopeSelector == "aside.filters" {
-			compareScopeCount++
+		if !req.Options.WithTree || req.Options.WithScreenshot {
+			continue
+		}
+		if strings.HasPrefix(req.SessionID, "flow-old-") && req.Options.ScopeSelector == "aside.legacy-filters" {
+			oldCompareScopeCount++
+		}
+		if strings.HasPrefix(req.SessionID, "flow-new-") && req.Options.ScopeSelector == "main.filters" {
+			newCompareScopeCount++
 		}
 	}
-	if compareScopeCount != 4 {
+	if oldCompareScopeCount != 2 || newCompareScopeCount != 2 {
 		t.Fatalf("expected 4 compare observe requests with scope selector, got %#v", handler.observeRequests)
 	}
 	if len(handler.detachIDs) != 4 {

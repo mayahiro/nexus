@@ -59,7 +59,7 @@ func printCompareReport(w io.Writer, report compareReport) {
 	}
 	fmt.Fprintln(w)
 	if report.Scope != nil {
-		fmt.Fprintf(w, "scope: %s", report.Scope.Selector)
+		fmt.Fprintf(w, "scope: %s", compareScopeLabel(report.Scope))
 		if report.Scope.Old.Tag != "" || report.Scope.New.Tag != "" {
 			fmt.Fprintf(w, " (%s -> %s)", firstNonEmpty(report.Scope.Old.Tag, "?"), firstNonEmpty(report.Scope.New.Tag, "?"))
 		}
@@ -154,7 +154,7 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(report.Old.URL, report.Old.SessionID))
 	fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(report.New.URL, report.New.SessionID))
 	if report.Scope != nil {
-		fmt.Fprintf(w, "- Scope: `%s`\n", report.Scope.Selector)
+		fmt.Fprintf(w, "- Scope: `%s`\n", compareScopeLabel(report.Scope))
 	}
 	if report.Old.Title != "" || report.New.Title != "" {
 		fmt.Fprintf(w, "- Titles: `%s` -> `%s`\n", report.Old.Title, report.New.Title)
@@ -220,7 +220,7 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 		fmt.Fprintf(w, "- Old: `%s`\n", firstNonEmpty(page.Report.Old.URL, page.Report.Old.SessionID))
 		fmt.Fprintf(w, "- New: `%s`\n", firstNonEmpty(page.Report.New.URL, page.Report.New.SessionID))
 		if page.Report.Scope != nil {
-			fmt.Fprintf(w, "- Scope: `%s`\n", page.Report.Scope.Selector)
+			fmt.Fprintf(w, "- Scope: `%s`\n", compareScopeLabel(page.Report.Scope))
 		}
 		fmt.Fprintf(w, "- Findings: %d\n", page.Report.Summary.TotalFindings)
 		fmt.Fprintf(w, "- Critical: %d\n", page.Report.Summary.Critical)
@@ -253,6 +253,21 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 			}
 		}
 	}
+}
+
+func compareScopeLabel(scope *compareScope) string {
+	if scope == nil {
+		return ""
+	}
+	if strings.TrimSpace(scope.Selector) != "" {
+		return strings.TrimSpace(scope.Selector)
+	}
+	oldSelector := strings.TrimSpace(scope.Old.Selector)
+	newSelector := strings.TrimSpace(scope.New.Selector)
+	if oldSelector == "" && newSelector == "" {
+		return ""
+	}
+	return "old=" + oldSelector + " new=" + newSelector
 }
 
 func compareFindingPlainLocatorSuffix(finding compareFinding) string {
