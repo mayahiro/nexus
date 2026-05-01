@@ -211,6 +211,41 @@ func TestGet(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "attributes", "--refs", "@e1,@e2", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get attributes refs exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e1"`) || !strings.Contains(stdout.String(), `"ref": "@e2"`) {
+		t.Fatalf("unexpected get attributes refs output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"href": "/docs"`) {
+		t.Fatalf("unexpected get attributes refs output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "text", "--refs", "@e1,@e2", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get text refs exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"value": "Docs"`) {
+		t.Fatalf("unexpected get text refs output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "value", "--refs", "@e1,@e2", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get value refs exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"value": "hello"`) {
+		t.Fatalf("unexpected get value refs output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "bbox", "--refs", "@e1,@e2", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get bbox refs exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e1"`) || !strings.Contains(stdout.String(), `"width": 120`) {
+		t.Fatalf("unexpected get bbox refs output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"get", "bbox", "--selector", "#hero", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected get bbox selector exit code: %d\n%s", code, stdout.String())
 	}

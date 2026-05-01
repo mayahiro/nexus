@@ -64,11 +64,27 @@ func TestClick(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"click", "--refs", "@e1,@e2"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected click refs exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e1\nclicked @e2" {
+		t.Fatalf("unexpected click refs output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"click", "3", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected click --json exit code: %d\n%s", code, stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `"message": "clicked 3"`) {
 		t.Fatalf("unexpected click --json output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"click", "--refs", "@e1,@e2", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected click refs --json exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"ref": "@e1"`) || !strings.Contains(stdout.String(), `"ref": "@e2"`) {
+		t.Fatalf("unexpected click refs --json output: %s", stdout.String())
 	}
 
 	cancel()

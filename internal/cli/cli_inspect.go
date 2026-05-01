@@ -99,6 +99,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
 	selector := fs.String("selector", "", "selector for html or bbox")
+	refs := fs.String("refs", "", "comma-separated node refs")
 	target := ""
 	arg := ""
 
@@ -131,11 +132,16 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 
 	target = positionals[0]
 	selectorValue := strings.TrimSpace(*selector)
+	refsValue := strings.TrimSpace(*refs)
 	action := api.Action{
 		Kind: "get",
 		Args: map[string]string{
 			"target": target,
 		},
+	}
+
+	if refsValue != "" {
+		return runGetRefs(ctx, *sessionID, target, selectorValue, positionals, refsValue, *asJSON, stdout, stderr)
 	}
 
 	switch target {
@@ -235,6 +241,106 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	}
 
 	return 0
+}
+
+type refValueResult struct {
+	Ref   string      `json:"ref"`
+	Value interface{} `json:"value"`
+}
+
+func runGetRefs(ctx context.Context, sessionID string, target string, selectorValue string, positionals []string, refsValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {
+	switch target {
+	case "text", "value", "attributes", "bbox":
+	default:
+		fmt.Fprintln(stderr, "get --refs supports text, value, attributes, or bbox")
+		return 1
+	}
+	if len(positionals) != 1 {
+		fmt.Fprintf(stderr, "get %s --refs does not accept an index\n", target)
+		return 1
+	}
+	if selectorValue != "" {
+		fmt.Fprintf(stderr, "get %s --refs does not support --selector\n", target)
+		return 1
+	}
+
+	nodes, err := parseNodeSelectorList(refsValue)
+	if err != nil {
+		fmt.Fprintln(stderr, "get --refs requires comma-separated positive integer indexes or @eN refs")
+		return 1
+	}
+
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	results := make([]refValueResult, 0, len(nodes))
+	for _, node := range nodes {
+		nodeID := node.ID
+		res, err := client.ActSession(ctx, api.ActSessionRequest{
+			SessionID: sessionID,
+			Action: api.Action{
+				Kind:   "get",
+				NodeID: &nodeID,
+				Args: map[string]string{
+					"target": target,
+				},
+			},
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if !res.Result.OK {
+			if res.Result.Message != "" {
+				fmt.Fprintln(stderr, res.Result.Message)
+			}
+			return 1
+		}
+		results = append(results, refValueResult{
+			Ref:   node.Ref,
+			Value: res.Result.Value,
+		})
+	}
+
+	if asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(results); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	for _, result := range results {
+		if err := printRefValue(stdout, result.Ref, result.Value); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	return 0
+}
+
+func printRefValue(w io.Writer, ref string, value interface{}) error {
+	switch value := value.(type) {
+	case nil:
+		_, err := fmt.Fprintf(w, "%s\tnull\n", ref)
+		return err
+	case string:
+		_, err := fmt.Fprintf(w, "%s\t%s\n", ref, value)
+		return err
+	default:
+		data, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(w, "%s\t%s\n", ref, data)
+		return err
+	}
 }
 
 func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {

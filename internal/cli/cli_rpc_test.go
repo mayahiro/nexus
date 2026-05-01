@@ -267,10 +267,17 @@ func (getRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (a
 	switch req.Action.Args["target"] {
 	case "title":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: "Example Title"}}, nil
+	case "text":
+		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: "Docs"}}, nil
+	case "value":
+		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: "hello"}}, nil
 	case "attributes":
 		return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: map[string]interface{}{"href": "/docs"}}}, nil
 	case "bbox":
 		if req.Action.Args["selector"] == "#hero" && req.Action.NodeID == nil {
+			return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: map[string]interface{}{"x": 10, "y": 20, "width": 120, "height": 40}}}, nil
+		}
+		if req.Action.NodeID != nil {
 			return api.ActSessionResponse{Result: api.ActionResult{OK: true, Value: map[string]interface{}{"x": 10, "y": 20, "width": 120, "height": 40}}}, nil
 		}
 		return api.ActSessionResponse{}, nil

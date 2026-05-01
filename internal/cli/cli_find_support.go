@@ -313,6 +313,35 @@ func parseNodeSelector(value string) (int, string, error) {
 	return nodeID, "", nil
 }
 
+type nodeSelector struct {
+	ID  int
+	Ref string
+}
+
+func parseNodeSelectorList(value string) ([]nodeSelector, error) {
+	parts := strings.Split(value, ",")
+	nodes := make([]nodeSelector, 0, len(parts))
+	seen := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		nodeID, nodeRef, err := parseNodeSelector(part)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[nodeID]; ok {
+			return nil, errors.New("duplicate node ref")
+		}
+		seen[nodeID] = struct{}{}
+		if nodeRef == "" {
+			nodeRef = formatNodeRef(nodeID)
+		}
+		nodes = append(nodes, nodeSelector{ID: nodeID, Ref: nodeRef})
+	}
+	if len(nodes) == 0 {
+		return nil, errors.New("node refs are required")
+	}
+	return nodes, nil
+}
+
 func formatNodeRef(id int) string {
 	return fmt.Sprintf("@e%d", id)
 }

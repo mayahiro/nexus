@@ -84,6 +84,7 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
+	refs := fs.String("refs", "", "comma-separated node refs")
 	positionals := make([]string, 0, 2)
 	for len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		positionals = append(positionals, args[0])
@@ -95,6 +96,19 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	positionals = append(positionals, fs.Args()...)
+	refsValue := strings.TrimSpace(*refs)
+	if refsValue != "" {
+		if len(positionals) != 0 {
+			fmt.Fprintln(stderr, "click --refs does not accept positional arguments")
+			return 1
+		}
+		nodes, err := parseNodeSelectorList(refsValue)
+		if err != nil {
+			fmt.Fprintln(stderr, "click --refs requires comma-separated positive integer indexes or @eN refs")
+			return 1
+		}
+		return runClickRefs(ctx, *sessionID, nodes, *asJSON, stdout, stderr)
+	}
 	if len(positionals) != 1 && len(positionals) != 2 {
 		fmt.Fprintln(stderr, "click requires an index or x y coordinates")
 		printCommandHint(stderr, "click", "nxctl click @e3 --json")
@@ -173,6 +187,70 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	fmt.Fprintln(stdout, fallbackMessage)
+	return 0
+}
+
+type refActionResult struct {
+	Ref     string            `json:"ref"`
+	OK      bool              `json:"ok"`
+	Message string            `json:"message,omitempty"`
+	Changed bool              `json:"changed"`
+	Value   interface{}       `json:"value"`
+	Meta    map[string]string `json:"meta,omitempty"`
+}
+
+func runClickRefs(ctx context.Context, sessionID string, nodes []nodeSelector, asJSON bool, stdout io.Writer, stderr io.Writer) int {
+	client, err := connectClient(ctx)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer client.Close()
+
+	results := make([]refActionResult, 0, len(nodes))
+	for _, node := range nodes {
+		nodeID := node.ID
+		res, err := client.ActSession(ctx, api.ActSessionRequest{
+			SessionID: sessionID,
+			Action: api.Action{
+				Kind:   "invoke",
+				NodeID: &nodeID,
+			},
+		})
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		result := refActionResult{
+			Ref:     node.Ref,
+			OK:      res.Result.OK,
+			Message: res.Result.Message,
+			Changed: res.Result.Changed,
+			Value:   res.Result.Value,
+			Meta:    res.Result.Meta,
+		}
+		results = append(results, result)
+		if !res.Result.OK {
+			if res.Result.Message != "" {
+				fmt.Fprintln(stderr, res.Result.Message)
+			}
+			return 1
+		}
+	}
+
+	if asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(results); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		return 0
+	}
+
+	for _, result := range results {
+		fmt.Fprintf(stdout, "clicked %s\n", result.Ref)
+	}
 	return 0
 }
 

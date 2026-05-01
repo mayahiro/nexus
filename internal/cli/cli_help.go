@@ -155,6 +155,7 @@ func printBrowserHelp(w io.Writer) {
 
 func printClickHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl click <index|@eN> [--session <id>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl click --refs <@eN,@eN,...> [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl click <x> <y> [--session <id>] [--json]")
 }
 
@@ -202,6 +203,7 @@ func printGetHelp(w io.Writer) {
 	fmt.Fprintln(w, "   or: nxctl get html [--selector <css>] [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl get bbox --selector <css> [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl get text|value|attributes|bbox <index|@eN> [--session <id>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl get text|value|attributes|bbox --refs <@eN,@eN,...> [--session <id>] [--json]")
 }
 
 func printInputHelp(w io.Writer) {

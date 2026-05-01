@@ -50,6 +50,8 @@ nxctl help flow
 - Use `type` when you want keystroke-style input
 - Use `screenshot --locator` when you need a PNG for one specific element instead of the whole viewport
 - Use `get bbox --selector <css>` when you need viewport-relative bounds for an arbitrary CSS-selected element
+- Use `get text|value|attributes|bbox --refs <@eN,@eN,...> --json` when you need values for several recent refs
+- Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional, because page changes can stale later refs
 - Add `wait` after actions that trigger async UI updates
 - Move to `inspect` when whole-page compare is too broad
 

@@ -104,6 +104,7 @@ nxctl navigate https://example.com/docs
 nxctl state
 nxctl state --role button --limit 20
 nxctl click @e3
+nxctl click --refs @e1,@e2,@e3
 nxctl find role button click --name "Submit"
 nxctl find role button click --nth 2
 nxctl find role link get attributes --name "Docs"
@@ -137,7 +138,9 @@ nxctl inspect --selector "aside.filters" --old-session old --new-session new --c
 nxctl inspect --old-scope-selector "#legacy-filters" --new-scope-selector "aside.filters" --old-session old --new-session new --css-property width
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 nxctl get attributes @e3
+nxctl get attributes --refs @e1,@e2,@e3 --json
 nxctl get bbox --selector ".hero"
+nxctl get bbox --refs @e1,@e2,@e3 --json
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
 nxctl screenshot email.png --locator label=Email
@@ -189,6 +192,8 @@ When `inspect` has no semantic locator, side-specific scope selectors identify t
 Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 Use `get bbox --selector <css>` when you need the viewport-relative bounds for any CSS-selected element without running ad hoc JavaScript.
+Use `get text|value|attributes|bbox --refs <@eN,@eN,...>` when you need read-only values for several recent refs in one command.
+Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional; Nexus stops at the first failed click.
 
 `flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
