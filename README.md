@@ -172,6 +172,7 @@ Examples: `nxctl open --session work https://example.com`, `nxctl navigate --ses
 Use `--wait-function`, `--wait-network-idle`, or `--wait-selector` when the page keeps updating after load and you need stronger readiness.
 Use `--scope-selector` when you want to restrict compare to one CSS-selected subtree such as `aside.filters` or `main section.hero`.
 `--scope-selector` accepts a raw CSS selector, requires exactly one match on each side, and may use positional selectors such as `:nth-child()` or `:nth-of-type()`, though stable ids, classes, or attributes are preferred.
+When a scope selector matches multiple elements, Nexus fails with short hints for up to five matched candidates so you can refine the selector without dumping the full HTML.
 Use `--old-scope-selector` and `--new-scope-selector` when old and new pages need different subtree selectors.
 If one side-specific scope selector is set without the other, `--scope-selector` must provide the missing side's fallback.
 Use `--compare-css` to compare a default computed-style allowlist on matching fingerprints.
@@ -182,6 +183,7 @@ Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` be
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 Use `inspect --selector` when you need the computed styles for one CSS-selected container rather than a semantic locator.
 `inspect --selector` accepts a raw CSS selector, requires exactly one match on each side, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
+When an inspect selector or inspect scope selector matches multiple elements, Nexus reports up to five matched candidates as hints.
 Use `inspect --scope-selector` to resolve a semantic locator inside one CSS-selected subtree, or `--old-scope-selector` and `--new-scope-selector` when the old and new subtree selectors differ.
 When `inspect` has no semantic locator, side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior for different DOM structures.
 Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.

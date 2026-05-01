@@ -34,6 +34,95 @@ const pageTargetTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
+func selectorHintSupportExpression() string {
+	return `
+  const selectorHintNormalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+
+  const selectorHintEscape = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  };
+
+  const selectorHintQuote = (value) => '"' + selectorHintNormalize(value).replace(/"/g, '\\"') + '"';
+
+  const selectorHintSelector = (el) => {
+    const tag = el.tagName ? el.tagName.toLowerCase() : 'element';
+    if (el.id) return tag + '#' + selectorHintEscape(el.id);
+    const testIDName = el.getAttribute('data-testid') ? 'data-testid' : 'data-test';
+    const testID = el.getAttribute(testIDName);
+    if (testID) return tag + '[' + testIDName + '="' + testID.replace(/"/g, '\\"') + '"]';
+    const classes = Array.from(el.classList || []).filter(Boolean).slice(0, 3);
+    if (classes.length > 0) return tag + classes.map((value) => '.' + selectorHintEscape(value)).join('');
+    return tag;
+  };
+
+  const selectorHintRole = (el) => {
+    const ariaRole = (el.getAttribute('role') || '').trim();
+    if (ariaRole) return ariaRole;
+    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    if (tag === 'a') return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'summary') return 'button';
+    if (tag === 'input') {
+      const type = (el.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
+      return 'textbox';
+    }
+    if (el.isContentEditable) return 'textbox';
+    return tag;
+  };
+
+  const selectorHintName = (el) => {
+    const label = (el.getAttribute('aria-label') || '').trim();
+    if (label) return label;
+    const labelledby = (el.getAttribute('aria-labelledby') || '').trim();
+    if (labelledby) {
+      const text = labelledby
+        .split(/\s+/)
+        .map((id) => document.getElementById(id))
+        .filter(Boolean)
+        .map((node) => (node.innerText || node.textContent || '').trim())
+        .join(' ')
+        .trim();
+      if (text) return text;
+    }
+    if (el.labels && el.labels.length) {
+      const text = Array.from(el.labels)
+        .map((label) => (label.innerText || label.textContent || '').trim())
+        .join(' ')
+        .trim();
+      if (text) return text;
+    }
+    return '';
+  };
+
+  const selectorHintFor = (el, index) => {
+    const parts = ['#' + (index + 1), selectorHintSelector(el)];
+    const role = selectorHintRole(el);
+    const name = selectorHintName(el);
+    const testID = (el.getAttribute('data-testid') || el.getAttribute('data-test') || '').trim();
+    const text = selectorHintNormalize(el.innerText || el.textContent || '');
+    const rect = el.getBoundingClientRect();
+    if (role) parts.push('role=' + selectorHintQuote(role));
+    if (name) parts.push('name=' + selectorHintQuote(name));
+    if (testID) parts.push('testid=' + selectorHintQuote(testID));
+    if (text && text !== selectorHintNormalize(name)) parts.push('text=' + selectorHintQuote(text));
+    parts.push('bbox=' + Math.round(rect.x) + ',' + Math.round(rect.y) + ' ' + Math.round(rect.width) + 'x' + Math.round(rect.height));
+    return parts.join(' ');
+  };
+
+  const selectorHintSuffix = (matches) => {
+    const hints = matches.slice(0, 5).map(selectorHintFor).join('; ');
+    if (!hints) return '';
+    return '. candidates: ' + hints + (matches.length > 5 ? '; ...' : '');
+  };
+`
+}
+
 func observeTreeExpression(cssProperties []string, scopeSelector string, layoutProperties []string) string {
 	properties := make([]string, 0, len(cssProperties))
 	for _, value := range cssProperties {
@@ -53,6 +142,10 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 	}
 
 	scope := strconv.Quote(strings.TrimSpace(scopeSelector))
+	selectorHints := ""
+	if strings.TrimSpace(scopeSelector) != "" {
+		selectorHints = selectorHintSupportExpression()
+	}
 
 	return `(function () {
 	  const scopeSelector = ` + scope + `;
@@ -286,6 +379,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
     ];
     return parts.join('|');
   };
+` + selectorHints + `
 
 	  let scopeRoot = null;
 	  if (scopeSelector) {
@@ -299,7 +393,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 	      throw new Error('scope selector matched 0 nodes: ' + scopeSelector);
 	    }
 	    if (scopeMatches.length !== 1) {
-	      throw new Error('scope selector matched ' + scopeMatches.length + ' nodes: ' + scopeSelector);
+	      throw new Error('scope selector matched ' + scopeMatches.length + ' nodes: ' + scopeSelector + selectorHintSuffix(scopeMatches));
 	    }
 	    scopeRoot = scopeMatches[0];
 	  }
@@ -365,6 +459,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 func scopeTextExpression(scopeSelector string) string {
 	return `(function () {
   const selector = ` + strconv.Quote(strings.TrimSpace(scopeSelector)) + `;
+` + selectorHintSupportExpression() + `
   let matches;
   try {
     matches = Array.from(document.querySelectorAll(selector));
@@ -375,7 +470,7 @@ func scopeTextExpression(scopeSelector string) string {
     throw new Error('scope selector matched 0 nodes: ' + selector);
   }
   if (matches.length !== 1) {
-    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector);
+    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector + selectorHintSuffix(matches));
   }
   const root = matches[0];
   return (root.innerText || root.textContent || '').trim();
@@ -385,6 +480,7 @@ func scopeTextExpression(scopeSelector string) string {
 func scopeMetaExpression(scopeSelector string) string {
 	return `(function () {
   const selector = ` + strconv.Quote(strings.TrimSpace(scopeSelector)) + `;
+` + selectorHintSupportExpression() + `
   let matches;
   try {
     matches = Array.from(document.querySelectorAll(selector));
@@ -395,7 +491,7 @@ func scopeMetaExpression(scopeSelector string) string {
     throw new Error('scope selector matched 0 nodes: ' + selector);
   }
   if (matches.length !== 1) {
-    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector);
+    throw new Error('scope selector matched ' + matches.length + ' nodes: ' + selector + selectorHintSuffix(matches));
   }
   const root = matches[0];
   return {

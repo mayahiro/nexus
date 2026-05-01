@@ -674,7 +674,7 @@ func TestCompareScopeSelectorError(t *testing.T) {
 			},
 		},
 		scopeErrors: map[string]string{
-			"aside.filters": "scope selector matched 0 nodes: aside.filters",
+			"aside.filters": `scope selector matched 3 nodes: aside.filters. candidates: #1 aside.filters role="region" text="Filters" bbox=0,0 300x600; #2 aside.filters.compact role="region" text="More filters" bbox=0,610 300x40`,
 		},
 	}
 
@@ -694,7 +694,10 @@ func TestCompareScopeSelectorError(t *testing.T) {
 	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected compare scope error\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "old side scope selector matched 0 nodes: aside.filters") {
+	if !strings.Contains(stdout.String(), "old side scope selector matched 3 nodes: aside.filters") {
+		t.Fatalf("unexpected compare scope error: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `candidates: #1 aside.filters role="region" text="Filters"`) {
 		t.Fatalf("unexpected compare scope error: %s", stdout.String())
 	}
 

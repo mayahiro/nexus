@@ -214,6 +214,7 @@ func printInspectHelp(w io.Writer) {
 	fmt.Fprintln(w, `   or: nxctl inspect --old-scope-selector <css> --new-scope-selector <css> --old-session <id> --new-session <id> [--css-property <name>]... [--layout-context] [--json]`)
 	fmt.Fprintln(w, `locator: @eN, role <role> [--name <text>], text <text>, label <text>, testid <value>, or href <value>`)
 	fmt.Fprintln(w, `scope: --scope-selector limits locator inspection to one CSS subtree; old/new variants override it per side`)
+	fmt.Fprintln(w, `selector multi-match errors include up to five matched candidate hints`)
 	fmt.Fprintln(w, `examples: nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 	fmt.Fprintln(w, `          nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color`)
 	fmt.Fprintln(w, `          nxctl inspect 'role button --name "Save"' --old-session old --new-session new --old-scope-selector '#legacy-main' --new-scope-selector 'main'`)

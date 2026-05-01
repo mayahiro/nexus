@@ -298,6 +298,29 @@ func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
 	}
 }
 
+func TestScopeSelectorExpressionsIncludeCandidateHints(t *testing.T) {
+	scripts := map[string]string{
+		"observe": observeTreeExpression(nil, "aside.filters", nil),
+		"text":    scopeTextExpression("aside.filters"),
+		"meta":    scopeMetaExpression("aside.filters"),
+	}
+
+	for name, script := range scripts {
+		if !strings.Contains(script, "selectorHintSuffix") {
+			t.Fatalf("expected selector hint suffix in %s script: %s", name, script)
+		}
+		if !strings.Contains(script, "matches.slice(0, 5)") {
+			t.Fatalf("expected selector hints to be capped in %s script: %s", name, script)
+		}
+		if !strings.Contains(script, "candidates: ") {
+			t.Fatalf("expected selector candidate label in %s script: %s", name, script)
+		}
+		if !strings.Contains(script, "bbox=") {
+			t.Fatalf("expected selector candidate bounds in %s script: %s", name, script)
+		}
+	}
+}
+
 func TestClickExpression(t *testing.T) {
 	script := clickExpression(7)
 

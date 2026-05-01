@@ -110,6 +110,7 @@ If the new page looks incomplete:
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - prefer stable ids, classes, or attributes before positional selectors
 - if the selector matches 0 or multiple elements on either side, compare fails early
+- if the selector matches multiple elements, the error includes up to five candidate hints to help refine the selector
 
 ## Inspect Selector Rules
 
@@ -120,5 +121,6 @@ If the new page looks incomplete:
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - do not combine `--selector` with a positional inspect locator
 - do not combine `--selector` with `--nth`
+- if an inspect selector or inspect scope selector matches multiple elements, the error includes up to five candidate hints
 - use `inspect --layout-context` when ancestor layout CSS may explain the target element's size, position, wrapping, or overflow
 - `--layout-context` is capability-based; Chromium returns DOM ancestor layout CSS, and unsupported backends fail explicitly
