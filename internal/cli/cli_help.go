@@ -208,12 +208,12 @@ func printInputHelp(w io.Writer) {
 }
 
 func printInspectHelp(w io.Writer) {
-	fmt.Fprintln(w, `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id> [--nth <n>] [--css-property <name>]... [--json]`)
-	fmt.Fprintln(w, `   or: nxctl inspect --selector <css> --old-session <id> --new-session <id> [--css-property <name>]... [--json]`)
+	fmt.Fprintln(w, `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id> [--nth <n>] [--css-property <name>]... [--layout-context] [--json]`)
+	fmt.Fprintln(w, `   or: nxctl inspect --selector <css> --old-session <id> --new-session <id> [--css-property <name>]... [--layout-context] [--json]`)
 	fmt.Fprintln(w, `locator: @eN, role <role> [--name <text>], text <text>, label <text>, testid <value>, or href <value>`)
 	fmt.Fprintln(w, `examples: nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
 	fmt.Fprintln(w, `          nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color`)
-	fmt.Fprintln(w, `          nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width`)
+	fmt.Fprintln(w, `          nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width --layout-context`)
 }
 
 func printFillHelp(w io.Writer) {

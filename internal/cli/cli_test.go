@@ -138,6 +138,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `--nth <n>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `--layout-context`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), `nxctl inspect --selector <css> --old-session <id> --new-session <id>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}

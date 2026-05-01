@@ -72,6 +72,7 @@ Targeted inspection:
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width
+nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 ```
 
 Style-focused compare:
@@ -102,3 +103,5 @@ If the new page looks incomplete:
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - do not combine `--selector` with a positional inspect locator
 - do not combine `--selector` with `--nth`
+- use `inspect --layout-context` when ancestor layout CSS may explain the target element's size, position, wrapping, or overflow
+- `--layout-context` is capability-based; Chromium returns DOM ancestor layout CSS, and unsupported backends fail explicitly

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
@@ -402,12 +403,53 @@ type inspectPropertyReport struct {
 }
 
 type inspectReport struct {
-	Locator       inspectLocator          `json:"locator"`
-	CSSProperties []string                `json:"css_properties"`
-	Old           inspectMatch            `json:"old"`
-	New           inspectMatch            `json:"new"`
-	Properties    []inspectPropertyReport `json:"properties"`
-	Same          bool                    `json:"same"`
+	Locator          inspectLocator          `json:"locator"`
+	CSSProperties    []string                `json:"css_properties"`
+	LayoutProperties []string                `json:"layout_properties,omitempty"`
+	Old              inspectMatch            `json:"old"`
+	New              inspectMatch            `json:"new"`
+	Properties       []inspectPropertyReport `json:"properties"`
+	Same             bool                    `json:"same"`
+}
+
+var inspectDefaultLayoutProperties = []string{
+	"display",
+	"position",
+	"top",
+	"right",
+	"bottom",
+	"left",
+	"box-sizing",
+	"width",
+	"height",
+	"min-width",
+	"max-width",
+	"min-height",
+	"max-height",
+	"margin-top",
+	"margin-right",
+	"margin-bottom",
+	"margin-left",
+	"padding-top",
+	"padding-right",
+	"padding-bottom",
+	"padding-left",
+	"overflow-x",
+	"overflow-y",
+	"flex-direction",
+	"flex-wrap",
+	"justify-content",
+	"align-items",
+	"align-content",
+	"gap",
+	"row-gap",
+	"column-gap",
+	"grid-template-columns",
+	"grid-template-rows",
+	"grid-auto-flow",
+	"contain",
+	"container-type",
+	"transform",
 }
 
 func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -422,6 +464,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	newSession := fs.String("new-session", "", "new session id")
 	selector := fs.String("selector", "", "raw css selector to inspect")
 	asJSON := fs.Bool("json", false, "print as json")
+	withLayoutContext := fs.Bool("layout-context", false, "include ancestor layout context")
 	nth := fs.Int("nth", 0, "choose the nth matching node")
 	var cssProperty inspectStringValues
 	fs.Var(&cssProperty, "css-property", "computed css property to compare")
@@ -484,16 +527,17 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	defer client.Close()
 
 	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
+	layoutProperties := inspectResolveLayoutProperties(*withLayoutContext)
 	scopeSelector := ""
 	if locator.Kind == "selector" {
 		scopeSelector = locator.Value
 	}
-	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, scopeSelector)
+	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, scopeSelector, *withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, scopeSelector)
+	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, scopeSelector, *withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -511,7 +555,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	report := buildInspectReport(locator, cssProperties, inspectMatch{
+	report := buildInspectReport(locator, cssProperties, layoutProperties, inspectMatch{
 		SessionID: *oldSession,
 		URL:       oldObservation.URLOrScreen,
 		Title:     oldObservation.Title,
@@ -537,19 +581,28 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	return 0
 }
 
-func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string, scopeSelector string) (api.Observation, error) {
+func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string, scopeSelector string, withLayoutContext bool, layoutProperties []string) (api.Observation, error) {
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithTree:      true,
-			CSSProperties: append([]string(nil), cssProperties...),
-			ScopeSelector: strings.TrimSpace(scopeSelector),
+			WithTree:          true,
+			WithLayoutContext: withLayoutContext,
+			CSSProperties:     append([]string(nil), cssProperties...),
+			LayoutProperties:  append([]string(nil), layoutProperties...),
+			ScopeSelector:     strings.TrimSpace(scopeSelector),
 		},
 	})
 	if err != nil {
 		return api.Observation{}, err
 	}
 	return res.Observation, nil
+}
+
+func inspectResolveLayoutProperties(enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	return append([]string(nil), inspectDefaultLayoutProperties...)
 }
 
 type clientObserver interface {
@@ -670,7 +723,7 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection node
 	}
 }
 
-func buildInspectReport(locator inspectLocator, cssProperties []string, oldMatch inspectMatch, newMatch inspectMatch) inspectReport {
+func buildInspectReport(locator inspectLocator, cssProperties []string, layoutProperties []string, oldMatch inspectMatch, newMatch inspectMatch) inspectReport {
 	properties := make([]inspectPropertyReport, 0, len(cssProperties))
 	same := true
 	for _, property := range cssProperties {
@@ -688,12 +741,13 @@ func buildInspectReport(locator inspectLocator, cssProperties []string, oldMatch
 		properties = append(properties, entry)
 	}
 	return inspectReport{
-		Locator:       locator,
-		CSSProperties: append([]string(nil), cssProperties...),
-		Old:           oldMatch,
-		New:           newMatch,
-		Properties:    properties,
-		Same:          same,
+		Locator:          locator,
+		CSSProperties:    append([]string(nil), cssProperties...),
+		LayoutProperties: append([]string(nil), layoutProperties...),
+		Old:              oldMatch,
+		New:              newMatch,
+		Properties:       properties,
+		Same:             same,
 	}
 }
 
@@ -702,21 +756,107 @@ func printInspectReport(w io.Writer, report inspectReport) {
 	fmt.Fprintf(w, "old: %s %s\n", report.Old.SessionID, inspectNodeSummary(report.Old.Node))
 	fmt.Fprintf(w, "new: %s %s\n", report.New.SessionID, inspectNodeSummary(report.New.Node))
 	fmt.Fprintf(w, "same: %t\n", report.Same)
-	if len(report.Properties) == 0 {
-		return
+	if len(report.Properties) > 0 {
+		fmt.Fprintln(w, "")
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "property\told\tnew\tstatus")
+		for _, property := range report.Properties {
+			status := "same"
+			if !property.Same {
+				status = "changed"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", property.Name, property.Old, property.New, status)
+		}
+		tw.Flush()
 	}
 
-	fmt.Fprintln(w, "")
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "property\told\tnew\tstatus")
-	for _, property := range report.Properties {
-		status := "same"
-		if !property.Same {
-			status = "changed"
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", property.Name, property.Old, property.New, status)
+	if len(report.LayoutProperties) > 0 {
+		fmt.Fprintln(w, "")
+		printInspectLayoutContext(w, "old layout context", report.Old.Node.LayoutContext)
+		printInspectLayoutContext(w, "new layout context", report.New.Node.LayoutContext)
 	}
-	tw.Flush()
+}
+
+func printInspectLayoutContext(w io.Writer, title string, nodes []api.LayoutContextNode) {
+	fmt.Fprintf(w, "%s:\n", title)
+	if len(nodes) == 0 {
+		fmt.Fprintln(w, "  unavailable")
+		return
+	}
+	for index, node := range nodes {
+		label := inspectLayoutContextLabel(node)
+		styles := inspectFormatLayoutStyles(node.Styles)
+		if styles == "" {
+			fmt.Fprintf(w, "  %d. %s\n", index+1, label)
+			continue
+		}
+		fmt.Fprintf(w, "  %d. %s %s\n", index+1, label, styles)
+	}
+}
+
+func inspectLayoutContextLabel(node api.LayoutContextNode) string {
+	if strings.TrimSpace(node.Selector) != "" {
+		return strings.TrimSpace(node.Selector)
+	}
+	if node.Attrs != nil && strings.TrimSpace(node.Attrs["tag"]) != "" {
+		return strings.TrimSpace(node.Attrs["tag"])
+	}
+	if strings.TrimSpace(node.Role) != "" {
+		return strings.TrimSpace(node.Role)
+	}
+	return "ancestor"
+}
+
+func inspectFormatLayoutStyles(styles map[string]string) string {
+	if len(styles) == 0 {
+		return ""
+	}
+
+	values := make([]string, 0, len(inspectDefaultLayoutProperties))
+	for _, property := range inspectDefaultLayoutProperties {
+		value := strings.TrimSpace(styles[property])
+		if !inspectShouldPrintLayoutStyle(property, value, styles) {
+			continue
+		}
+		values = append(values, property+"="+strconv.Quote(value))
+	}
+	return strings.Join(values, " ")
+}
+
+func inspectShouldPrintLayoutStyle(property string, value string, styles map[string]string) bool {
+	if value == "" {
+		return false
+	}
+	switch property {
+	case "display", "position", "width", "height":
+		return true
+	case "top", "right", "bottom", "left":
+		return value != "auto"
+	case "box-sizing":
+		return value != "content-box"
+	case "min-width", "min-height":
+		return value != "0px"
+	case "max-width", "max-height":
+		return value != "none"
+	case "margin-top", "margin-right", "margin-bottom", "margin-left", "padding-top", "padding-right", "padding-bottom", "padding-left":
+		return value != "0px"
+	case "overflow-x", "overflow-y":
+		return value != "visible"
+	case "flex-direction", "flex-wrap", "justify-content", "align-items", "align-content":
+		return strings.Contains(styles["display"], "flex")
+	case "gap", "row-gap", "column-gap":
+		return value != "normal" && value != "0px"
+	case "grid-template-columns", "grid-template-rows", "grid-auto-flow":
+		return strings.Contains(styles["display"], "grid")
+	case "contain":
+		return value != "none"
+	case "container-type":
+		return value != "normal"
+	case "transform":
+		return value != "none"
+	default:
+		return true
+	}
 }
 
 func inspectNodeSummary(node api.Node) string {

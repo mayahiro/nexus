@@ -19,7 +19,7 @@ func TestCapabilities(t *testing.T) {
 	if !capabilities.Observe {
 		t.Fatal("expected observe capability")
 	}
-	if capabilities.Act || capabilities.Screenshot || capabilities.Logs {
+	if capabilities.Act || capabilities.Screenshot || capabilities.Logs || capabilities.LayoutContext {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
 	}
 }

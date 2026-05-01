@@ -36,6 +36,9 @@ func (a *Adapter) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Ob
 	if opts.WithScreenshot && !capabilities.Screenshot {
 		return nil, fmt.Errorf("%w: screenshot", spec.ErrUnsupported)
 	}
+	if opts.WithLayoutContext && !capabilities.LayoutContext {
+		return nil, fmt.Errorf("%w: layout-context", spec.ErrUnsupported)
+	}
 
 	obs, err := a.backend.Observe(ctx, opts)
 	if err != nil {

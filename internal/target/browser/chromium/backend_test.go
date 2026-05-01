@@ -69,6 +69,13 @@ func TestAttachAndDetach(t *testing.T) {
 	}
 }
 
+func TestCapabilities(t *testing.T) {
+	capabilities := New().Capabilities()
+	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.Logs || !capabilities.LayoutContext {
+		t.Fatalf("unexpected capabilities: %+v", capabilities)
+	}
+}
+
 func TestAttachRespectsViewportOption(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix shell script required")
@@ -170,6 +177,17 @@ func TestParseTreeJSON(t *testing.T) {
 			"text": " Submit ",
 			"value": "",
 			"styles": {"color": "rgb(0, 0, 0)"},
+			"layout_context": [
+				{
+					"selector": "form.actions",
+					"role": "form",
+					"name": " Actions ",
+					"styles": {"display": "flex", "gap": "8px"},
+					"bounds": {"x": 0, "y": 0, "w": 100, "h": 50},
+					"scrollable": false,
+					"attrs": {"tag": "form", "class": "actions"}
+				}
+			],
 			"bounds": {"x": 10, "y": 20, "w": 30, "h": 40},
 			"visible": true,
 			"enabled": true,
@@ -235,6 +253,9 @@ func TestParseTreeJSON(t *testing.T) {
 	if tree[0].Styles["color"] != "rgb(0, 0, 0)" || tree[1].Styles["pointer-events"] != "auto" {
 		t.Fatalf("unexpected node styles: %+v", tree)
 	}
+	if len(tree[0].LayoutContext) != 1 || tree[0].LayoutContext[0].Selector != "form.actions" || tree[0].LayoutContext[0].Styles["display"] != "flex" {
+		t.Fatalf("unexpected layout context: %+v", tree[0].LayoutContext)
+	}
 }
 
 func TestEvalExpression(t *testing.T) {
@@ -250,7 +271,7 @@ func TestEvalExpression(t *testing.T) {
 }
 
 func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
-	script := observeTreeExpression([]string{"color", "fill", "pointer-events"}, "")
+	script := observeTreeExpression([]string{"color", "fill", "pointer-events"}, "", nil)
 
 	if !strings.Contains(script, "normalizeStyleValue(property, style.getPropertyValue(property).trim())") {
 		t.Fatalf("expected color normalization in script: %s", script)
@@ -260,6 +281,20 @@ func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
 	}
 	if !strings.Contains(script, "new Set(['fill', 'stroke'])") {
 		t.Fatalf("expected non-suffix color properties in script: %s", script)
+	}
+}
+
+func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
+	script := observeTreeExpression(nil, "", []string{"display", "grid-template-columns"})
+
+	if !strings.Contains(script, "layout_context: layoutContextFor(el)") {
+		t.Fatalf("expected layout context in script: %s", script)
+	}
+	if !strings.Contains(script, "grid-template-columns") {
+		t.Fatalf("expected layout properties in script: %s", script)
+	}
+	if !strings.Contains(script, "parentElement") {
+		t.Fatalf("expected ancestor traversal in script: %s", script)
 	}
 }
 

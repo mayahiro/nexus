@@ -17,10 +17,11 @@ const (
 var ErrUnsupported = errors.New("unsupported operation")
 
 type Capabilities struct {
-	Observe    bool
-	Act        bool
-	Screenshot bool
-	Logs       bool
+	Observe       bool
+	Act           bool
+	Screenshot    bool
+	Logs          bool
+	LayoutContext bool
 }
 
 type SessionConfig struct {
@@ -53,6 +54,9 @@ func CapabilityList(c Capabilities) []string {
 	}
 	if c.Logs {
 		out = append(out, "logs")
+	}
+	if c.LayoutContext {
+		out = append(out, "layout-context")
 	}
 	return out
 }

@@ -69,12 +69,14 @@ type ActSessionResponse struct {
 }
 
 type ObserveOptions struct {
-	WithText       bool     `json:"with_text"`
-	WithTree       bool     `json:"with_tree"`
-	WithScreenshot bool     `json:"with_screenshot"`
-	FullScreenshot bool     `json:"full_screenshot"`
-	CSSProperties  []string `json:"css_properties,omitempty"`
-	ScopeSelector  string   `json:"scope_selector,omitempty"`
+	WithText          bool     `json:"with_text"`
+	WithTree          bool     `json:"with_tree"`
+	WithScreenshot    bool     `json:"with_screenshot"`
+	FullScreenshot    bool     `json:"full_screenshot"`
+	WithLayoutContext bool     `json:"with_layout_context,omitempty"`
+	CSSProperties     []string `json:"css_properties,omitempty"`
+	LayoutProperties  []string `json:"layout_properties,omitempty"`
+	ScopeSelector     string   `json:"scope_selector,omitempty"`
 }
 
 type LogOptions struct {
@@ -95,25 +97,36 @@ type Observation struct {
 }
 
 type Node struct {
-	ID           int               `json:"id"`
-	Ref          string            `json:"ref,omitempty"`
-	Fingerprint  string            `json:"fingerprint,omitempty"`
-	LocatorHints []LocatorHint     `json:"locator_hints,omitempty"`
-	Role         string            `json:"role"`
-	Name         string            `json:"name,omitempty"`
-	Text         string            `json:"text,omitempty"`
-	Value        string            `json:"value,omitempty"`
-	Styles       map[string]string `json:"styles,omitempty"`
-	Bounds       Rect              `json:"bounds,omitempty"`
-	Visible      bool              `json:"visible"`
-	Enabled      bool              `json:"enabled"`
-	Focused      bool              `json:"focused"`
-	Editable     bool              `json:"editable"`
-	Selectable   bool              `json:"selectable"`
-	Invokable    bool              `json:"invokable"`
-	Scrollable   bool              `json:"scrollable"`
-	Children     []int             `json:"children,omitempty"`
-	Attrs        map[string]string `json:"attrs,omitempty"`
+	ID            int                 `json:"id"`
+	Ref           string              `json:"ref,omitempty"`
+	Fingerprint   string              `json:"fingerprint,omitempty"`
+	LocatorHints  []LocatorHint       `json:"locator_hints,omitempty"`
+	Role          string              `json:"role"`
+	Name          string              `json:"name,omitempty"`
+	Text          string              `json:"text,omitempty"`
+	Value         string              `json:"value,omitempty"`
+	Styles        map[string]string   `json:"styles,omitempty"`
+	LayoutContext []LayoutContextNode `json:"layout_context,omitempty"`
+	Bounds        Rect                `json:"bounds,omitempty"`
+	Visible       bool                `json:"visible"`
+	Enabled       bool                `json:"enabled"`
+	Focused       bool                `json:"focused"`
+	Editable      bool                `json:"editable"`
+	Selectable    bool                `json:"selectable"`
+	Invokable     bool                `json:"invokable"`
+	Scrollable    bool                `json:"scrollable"`
+	Children      []int               `json:"children,omitempty"`
+	Attrs         map[string]string   `json:"attrs,omitempty"`
+}
+
+type LayoutContextNode struct {
+	Selector   string            `json:"selector,omitempty"`
+	Role       string            `json:"role,omitempty"`
+	Name       string            `json:"name,omitempty"`
+	Styles     map[string]string `json:"styles,omitempty"`
+	Bounds     Rect              `json:"bounds,omitempty"`
+	Scrollable bool              `json:"scrollable,omitempty"`
+	Attrs      map[string]string `json:"attrs,omitempty"`
 }
 
 type LocatorHint struct {

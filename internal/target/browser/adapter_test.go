@@ -101,3 +101,17 @@ func TestObserveReturnsUnsupportedForScreenshotOnObserveOnlyBackend(t *testing.T
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestObserveReturnsUnsupportedForLayoutContextOnObserveOnlyBackend(t *testing.T) {
+	adapter := NewAdapter(testBackend{
+		name: spec.BackendLightpanda,
+		capabilities: spec.Capabilities{
+			Observe: true,
+		},
+	})
+
+	_, err := adapter.Observe(context.Background(), api.ObserveOptions{WithLayoutContext: true})
+	if !errors.Is(err, spec.ErrUnsupported) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

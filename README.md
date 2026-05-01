@@ -132,6 +132,7 @@ nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
 nxctl inspect --selector "aside.filters" --old-session old --new-session new --css-property width
+nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 nxctl get attributes @e3
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
@@ -174,6 +175,7 @@ Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` be
 Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
 Use `inspect --selector` when you need the computed styles for one CSS-selected container rather than a semantic locator.
 `inspect --selector` accepts a raw CSS selector, requires exactly one match on each side, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
+Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 
 `flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.

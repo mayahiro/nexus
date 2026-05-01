@@ -34,7 +34,7 @@ const pageTargetTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
-func observeTreeExpression(cssProperties []string, scopeSelector string) string {
+func observeTreeExpression(cssProperties []string, scopeSelector string, layoutProperties []string) string {
 	properties := make([]string, 0, len(cssProperties))
 	for _, value := range cssProperties {
 		trimmed := strings.TrimSpace(value)
@@ -42,6 +42,14 @@ func observeTreeExpression(cssProperties []string, scopeSelector string) string 
 			continue
 		}
 		properties = append(properties, strconv.Quote(trimmed))
+	}
+	layout := make([]string, 0, len(layoutProperties))
+	for _, value := range layoutProperties {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		layout = append(layout, strconv.Quote(trimmed))
 	}
 
 	scope := strconv.Quote(strings.TrimSpace(scopeSelector))
@@ -149,6 +157,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string) string 
   const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
 
 	  const cssProperties = [` + strings.Join(properties, ",") + `];
+	  const layoutProperties = [` + strings.Join(layout, ",") + `];
   const colorPropertyPattern = /(^|-)color$/;
   const colorPropertyNames = new Set(['fill', 'stroke']);
   const colorProbe = document.createElement('span');
@@ -207,14 +216,59 @@ func observeTreeExpression(cssProperties []string, scopeSelector string) string 
     return normalizeColorValue(value);
   };
 
-  const stylesFor = (el) => {
-    if (cssProperties.length === 0) return {};
+  const stylesFor = (el, properties) => {
+    if (properties.length === 0) return {};
     const style = window.getComputedStyle(el);
     const values = {};
-    for (const property of cssProperties) {
+    for (const property of properties) {
       values[property] = normalizeStyleValue(property, style.getPropertyValue(property).trim());
     }
     return values;
+  };
+
+  const escapeSelectorPart = (value) => {
+    if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(value);
+    return value.replace(/[^a-zA-Z0-9_-]/g, '\\$&');
+  };
+
+  const selectorFor = (el) => {
+    const tag = el.tagName.toLowerCase();
+    if (el.id) return tag + '#' + escapeSelectorPart(el.id);
+    const testIDName = el.getAttribute('data-testid') ? 'data-testid' : 'data-test';
+    const testID = el.getAttribute(testIDName);
+    if (testID) return tag + '[' + testIDName + '="' + testID.replace(/"/g, '\\"') + '"]';
+    const classes = Array.from(el.classList || []).filter(Boolean).slice(0, 3);
+    if (classes.length > 0) return tag + classes.map((value) => '.' + escapeSelectorPart(value)).join('');
+    return tag;
+  };
+
+  const layoutAttrsFor = (el) => {
+    const attrs = attrsFor(el);
+    if (el.className && typeof el.className === 'string') attrs.class = normalize(el.className);
+    return attrs;
+  };
+
+  const layoutContextFor = (el) => {
+    if (layoutProperties.length === 0) return [];
+    const context = [];
+    for (let ancestor = el.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const rect = ancestor.getBoundingClientRect();
+      context.push({
+        selector: selectorFor(ancestor),
+        role: roleFor(ancestor),
+        name: normalize(nameFor(ancestor)),
+        styles: stylesFor(ancestor, layoutProperties),
+        bounds: {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height)
+        },
+        scrollable: ancestor.scrollHeight > ancestor.clientHeight || ancestor.scrollWidth > ancestor.clientWidth,
+        attrs: layoutAttrsFor(ancestor)
+      });
+    }
+    return context;
   };
 
   const fingerprintFor = (el, role, name, attrs) => {
@@ -274,7 +328,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string) string 
     const role = roleFor(el);
     const name = nameFor(el);
     const attrs = attrsFor(el);
-    const styles = stylesFor(el);
+    const styles = stylesFor(el, cssProperties);
 
     return {
       id: index + 1,
@@ -284,6 +338,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string) string 
       text: textFor(el),
       value: valueFor(el),
       styles: styles,
+      layout_context: layoutContextFor(el),
       bounds: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -831,10 +886,11 @@ func (*Backend) Name() spec.BackendName {
 
 func (*Backend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{
-		Observe:    true,
-		Act:        true,
-		Screenshot: true,
-		Logs:       true,
+		Observe:       true,
+		Act:           true,
+		Screenshot:    true,
+		Logs:          true,
+		LayoutContext: true,
 	}
 }
 
@@ -1222,6 +1278,10 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 		var treeJSON string
 		var scopeMeta map[string]string
 		var screenshot []byte
+		var layoutProperties []string
+		if opts.WithLayoutContext {
+			layoutProperties = opts.LayoutProperties
+		}
 		actions := []chromedp.Action{
 			chromedp.Location(&currentURL),
 			chromedp.Title(&title),
@@ -1234,7 +1294,7 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 			}
 		}
 		if opts.WithTree {
-			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector), &treeJSON))
+			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector, layoutProperties), &treeJSON))
 			if strings.TrimSpace(opts.ScopeSelector) != "" {
 				actions = append(actions, chromedp.Evaluate(scopeMetaExpression(opts.ScopeSelector), &scopeMeta))
 			}
@@ -2193,24 +2253,25 @@ func debugHTTPBaseURL(devtoolsURL string) (string, error) {
 }
 
 type rawNode struct {
-	ID          int               `json:"id"`
-	Fingerprint string            `json:"fingerprint"`
-	Role        string            `json:"role"`
-	Name        string            `json:"name"`
-	Text        string            `json:"text"`
-	Value       string            `json:"value"`
-	Styles      map[string]string `json:"styles"`
-	Bounds      api.Rect          `json:"bounds"`
-	Visible     bool              `json:"visible"`
-	Enabled     bool              `json:"enabled"`
-	Focused     bool              `json:"focused"`
-	Editable    bool              `json:"editable"`
-	Selectable  bool              `json:"selectable"`
-	Invokable   bool              `json:"invokable"`
-	Scrollable  bool              `json:"scrollable"`
-	Children    []int             `json:"children"`
-	Attrs       map[string]string `json:"attrs"`
-	ParentID    *int              `json:"parent_id"`
+	ID            int                     `json:"id"`
+	Fingerprint   string                  `json:"fingerprint"`
+	Role          string                  `json:"role"`
+	Name          string                  `json:"name"`
+	Text          string                  `json:"text"`
+	Value         string                  `json:"value"`
+	Styles        map[string]string       `json:"styles"`
+	LayoutContext []api.LayoutContextNode `json:"layout_context"`
+	Bounds        api.Rect                `json:"bounds"`
+	Visible       bool                    `json:"visible"`
+	Enabled       bool                    `json:"enabled"`
+	Focused       bool                    `json:"focused"`
+	Editable      bool                    `json:"editable"`
+	Selectable    bool                    `json:"selectable"`
+	Invokable     bool                    `json:"invokable"`
+	Scrollable    bool                    `json:"scrollable"`
+	Children      []int                   `json:"children"`
+	Attrs         map[string]string       `json:"attrs"`
+	ParentID      *int                    `json:"parent_id"`
 }
 
 func parseTreeJSON(treeJSON string) ([]api.Node, error) {
@@ -2226,30 +2287,70 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 	nodes := make([]api.Node, 0, len(raw))
 	for _, node := range raw {
 		parsed := api.Node{
-			ID:          node.ID,
-			Ref:         formatNodeRef(node.ID),
-			Fingerprint: strings.TrimSpace(node.Fingerprint),
-			Role:        node.Role,
-			Name:        strings.TrimSpace(node.Name),
-			Text:        strings.TrimSpace(node.Text),
-			Value:       strings.TrimSpace(node.Value),
-			Styles:      node.Styles,
-			Bounds:      node.Bounds,
-			Visible:     node.Visible,
-			Enabled:     node.Enabled,
-			Focused:     node.Focused,
-			Editable:    node.Editable,
-			Selectable:  node.Selectable,
-			Invokable:   node.Invokable,
-			Scrollable:  node.Scrollable,
-			Children:    node.Children,
-			Attrs:       node.Attrs,
+			ID:            node.ID,
+			Ref:           formatNodeRef(node.ID),
+			Fingerprint:   strings.TrimSpace(node.Fingerprint),
+			Role:          node.Role,
+			Name:          strings.TrimSpace(node.Name),
+			Text:          strings.TrimSpace(node.Text),
+			Value:         strings.TrimSpace(node.Value),
+			Styles:        node.Styles,
+			LayoutContext: normalizeLayoutContext(node.LayoutContext),
+			Bounds:        node.Bounds,
+			Visible:       node.Visible,
+			Enabled:       node.Enabled,
+			Focused:       node.Focused,
+			Editable:      node.Editable,
+			Selectable:    node.Selectable,
+			Invokable:     node.Invokable,
+			Scrollable:    node.Scrollable,
+			Children:      node.Children,
+			Attrs:         node.Attrs,
 		}
 		parsed.LocatorHints = buildLocatorHints(parsed)
 		nodes = append(nodes, parsed)
 	}
 
 	return nodes, nil
+}
+
+func normalizeLayoutContext(nodes []api.LayoutContextNode) []api.LayoutContextNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	out := make([]api.LayoutContextNode, 0, len(nodes))
+	for _, node := range nodes {
+		out = append(out, api.LayoutContextNode{
+			Selector:   strings.TrimSpace(node.Selector),
+			Role:       strings.TrimSpace(node.Role),
+			Name:       strings.TrimSpace(node.Name),
+			Styles:     normalizeStringMap(node.Styles),
+			Bounds:     node.Bounds,
+			Scrollable: node.Scrollable,
+			Attrs:      normalizeStringMap(node.Attrs),
+		})
+	}
+	return out
+}
+
+func normalizeStringMap(values map[string]string) map[string]string {
+	if len(values) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(values))
+	for key, value := range values {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		out[trimmedKey] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func formatNodeRef(id int) string {

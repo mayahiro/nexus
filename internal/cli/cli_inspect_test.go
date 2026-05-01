@@ -298,6 +298,29 @@ func TestInspect(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button --name "Submit"`, "--old-session", "old", "--new-session", "new", "--layout-context"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect layout context exit code: %d\n%s", code, stdout.String())
+	}
+	output = stdout.String()
+	if !strings.Contains(output, "old layout context:") || !strings.Contains(output, "new layout context:") {
+		t.Fatalf("unexpected inspect layout context output: %s", output)
+	}
+	if !strings.Contains(output, `main.layout`) || !strings.Contains(output, `display="grid"`) || !strings.Contains(output, `gap="16px"`) {
+		t.Fatalf("unexpected inspect layout context output: %s", output)
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"inspect", `role button --name "Submit"`, "--old-session", "old", "--new-session", "new", "--layout-context", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected inspect layout context json exit code: %d\n%s", code, stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected inspect layout context json: %v\n%s", err, stdout.String())
+	}
+	if len(report.LayoutProperties) == 0 || len(report.Old.Node.LayoutContext) != 1 || report.Old.Node.LayoutContext[0].Selector != "main.layout" {
+		t.Fatalf("unexpected inspect layout context json: %+v", report)
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"inspect", "--selector", "aside.filters", "--old-session", "old", "--new-session", "new", "--css-property", "color", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected inspect selector exit code: %d\n%s", code, stdout.String())
 	}

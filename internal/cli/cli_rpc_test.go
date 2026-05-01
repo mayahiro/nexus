@@ -365,6 +365,38 @@ func (inspectRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 				}
 			}
 		}
+		if req.Options.WithLayoutContext {
+			styles := map[string]string{}
+			for _, property := range req.Options.LayoutProperties {
+				switch property {
+				case "display":
+					styles[property] = "grid"
+				case "grid-template-columns":
+					if req.SessionID == "new" {
+						styles[property] = "200px 1fr"
+					} else {
+						styles[property] = "180px 1fr"
+					}
+				case "gap":
+					styles[property] = "16px"
+				case "width":
+					styles[property] = "1024px"
+				case "height":
+					styles[property] = "768px"
+				default:
+					styles[property] = ""
+				}
+			}
+			nodes[i].LayoutContext = []api.LayoutContextNode{
+				{
+					Selector: "main.layout",
+					Role:     "main",
+					Styles:   styles,
+					Bounds:   api.Rect{X: 0, Y: 0, W: 1024, H: 768},
+					Attrs:    map[string]string{"tag": "main", "class": "layout"},
+				},
+			}
+		}
 	}
 	return api.ObserveSessionResponse{
 		Observation: api.Observation{
