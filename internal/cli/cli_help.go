@@ -200,6 +200,7 @@ func printFindHelp(w io.Writer) {
 func printGetHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl get title [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl get html [--selector <css>] [--session <id>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl get bbox --selector <css> [--session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl get text|value|attributes|bbox <index|@eN> [--session <id>] [--json]")
 }
 

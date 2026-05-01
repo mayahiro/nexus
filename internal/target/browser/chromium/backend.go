@@ -1701,12 +1701,26 @@ func (b *Backend) getViaCDP(ctx context.Context, devtoolsURL string, action api.
 				}
 			}
 			value = html
-		case "text", "value", "attributes", "bbox":
+		case "text", "value", "attributes":
 			if action.NodeID == nil || *action.NodeID <= 0 {
 				return nil, fmt.Errorf("get %s requires a positive index", targetKind)
 			}
 			if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
 				return nil, err
+			}
+		case "bbox":
+			selector := strings.TrimSpace(action.Args["selector"])
+			if selector != "" {
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getBBoxExpression(selector), &value, chromedp.EvalAsValue)); err != nil {
+					return nil, err
+				}
+			} else {
+				if action.NodeID == nil || *action.NodeID <= 0 {
+					return nil, fmt.Errorf("get %s requires a positive index or selector", targetKind)
+				}
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
+					return nil, err
+				}
 			}
 		default:
 			return nil, fmt.Errorf("unsupported get target: %s", targetKind)
@@ -2017,6 +2031,22 @@ func getHTMLExpression(selector string) string {
     throw new Error('selector not found');
   }
   return el.outerHTML;
+})()`
+}
+
+func getBBoxExpression(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) {
+    throw new Error('selector not found');
+  }
+  const rect = el.getBoundingClientRect();
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height)
+  };
 })()`
 }
 

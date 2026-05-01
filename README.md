@@ -137,6 +137,7 @@ nxctl inspect --selector "aside.filters" --old-session old --new-session new --c
 nxctl inspect --old-scope-selector "#legacy-filters" --new-scope-selector "aside.filters" --old-session old --new-session new --css-property width
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 nxctl get attributes @e3
+nxctl get bbox --selector ".hero"
 nxctl screenshot
 nxctl screenshot annotated.png --annotate
 nxctl screenshot email.png --locator label=Email
@@ -185,6 +186,7 @@ Use `inspect --scope-selector` to resolve a semantic locator inside one CSS-sele
 When `inspect` has no semantic locator, side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior for different DOM structures.
 Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
+Use `get bbox --selector <css>` when you need the viewport-relative bounds for any CSS-selected element without running ad hoc JavaScript.
 
 `flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.

@@ -482,6 +482,11 @@ func TestGetExpressions(t *testing.T) {
 	if !strings.Contains(script, `"bbox"`) || !strings.Contains(script, "3") {
 		t.Fatalf("unexpected node script: %s", script)
 	}
+
+	script = getBBoxExpression(".hero")
+	if !strings.Contains(script, "querySelector") || !strings.Contains(script, ".hero") || !strings.Contains(script, "getBoundingClientRect") {
+		t.Fatalf("unexpected bbox script: %s", script)
+	}
 }
 
 func TestViewportOptions(t *testing.T) {

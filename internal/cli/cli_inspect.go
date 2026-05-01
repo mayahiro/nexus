@@ -98,7 +98,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 
 	sessionID := fs.String("session", "default", "session id")
 	asJSON := fs.Bool("json", false, "print as json")
-	selector := fs.String("selector", "", "selector for html")
+	selector := fs.String("selector", "", "selector for html or bbox")
 	target := ""
 	arg := ""
 
@@ -130,6 +130,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	}
 
 	target = positionals[0]
+	selectorValue := strings.TrimSpace(*selector)
 	action := api.Action{
 		Kind: "get",
 		Args: map[string]string{
@@ -143,7 +144,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 			fmt.Fprintln(stderr, "get title does not accept an index")
 			return 1
 		}
-		if *selector != "" {
+		if selectorValue != "" {
 			fmt.Fprintln(stderr, "get title does not support --selector")
 			return 1
 		}
@@ -152,16 +153,16 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 			fmt.Fprintln(stderr, "get html does not accept an index")
 			return 1
 		}
-		if *selector != "" {
-			action.Args["selector"] = *selector
+		if selectorValue != "" {
+			action.Args["selector"] = selectorValue
 		}
-	case "text", "value", "attributes", "bbox":
+	case "text", "value", "attributes":
 		if len(positionals) != 2 {
 			fmt.Fprintf(stderr, "get %s requires an index\n", target)
 			printCommandHint(stderr, "get", "nxctl get attributes @e3")
 			return 1
 		}
-		if *selector != "" {
+		if selectorValue != "" {
 			fmt.Fprintf(stderr, "get %s does not support --selector\n", target)
 			return 1
 		}
@@ -171,6 +172,26 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 			return 1
 		}
 		action.NodeID = &nodeID
+	case "bbox":
+		if selectorValue != "" {
+			if len(positionals) != 1 {
+				fmt.Fprintln(stderr, "get bbox with --selector does not accept an index")
+				return 1
+			}
+			action.Args["selector"] = selectorValue
+		} else {
+			if len(positionals) != 2 {
+				fmt.Fprintln(stderr, "get bbox requires an index or --selector")
+				printCommandHint(stderr, "get", `nxctl get bbox --selector ".hero"`)
+				return 1
+			}
+			nodeID, _, err := parseNodeSelector(positionals[1])
+			if err != nil {
+				fmt.Fprintln(stderr, "get bbox requires a positive integer index or @eN ref")
+				return 1
+			}
+			action.NodeID = &nodeID
+		}
 	default:
 		fmt.Fprintln(stderr, "get target must be title, html, text, value, attributes, or bbox")
 		return 1

@@ -126,6 +126,14 @@ func TestHelp(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "get"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help get exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `nxctl get bbox --selector <css>`) {
+		t.Fatalf("unexpected help get output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "inspect"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help inspect exit code: %d\n%s", code, stdout.String())
 	}

@@ -210,6 +210,22 @@ func TestGet(t *testing.T) {
 		t.Fatalf("unexpected get attributes output: %s", stdout.String())
 	}
 
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "bbox", "--selector", "#hero", "--json"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected get bbox selector exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"width": 120`) {
+		t.Fatalf("unexpected get bbox selector output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"get", "bbox", "@e3", "--selector", "#hero"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected get bbox selector with index validation to fail\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "get bbox with --selector does not accept an index") {
+		t.Fatalf("unexpected get bbox selector validation output: %s", stdout.String())
+	}
+
 	cancel()
 
 	select {

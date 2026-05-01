@@ -49,6 +49,7 @@ nxctl help flow
 - Use `fill` when you want replacement semantics
 - Use `type` when you want keystroke-style input
 - Use `screenshot --locator` when you need a PNG for one specific element instead of the whole viewport
+- Use `get bbox --selector <css>` when you need viewport-relative bounds for an arbitrary CSS-selected element
 - Add `wait` after actions that trigger async UI updates
 - Move to `inspect` when whole-page compare is too broad
 
