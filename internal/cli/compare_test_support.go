@@ -50,6 +50,7 @@ type compareSummaryJSON struct {
 	ExactMatches            int  `json:"exact_matches"`
 	StableMatches           int  `json:"stable_matches"`
 	HeuristicMatches        int  `json:"heuristic_matches"`
+	HistogramMatches        int  `json:"histogram_matches"`
 	AmbiguousMatchesSkipped int  `json:"ambiguous_matches_skipped"`
 	Critical                int  `json:"critical"`
 	Warning                 int  `json:"warning"`

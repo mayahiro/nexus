@@ -126,6 +126,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --sc
 nxctl compare https://old.example.com/orders https://new.example.com/orders --old-scope-selector "#legacy-filters" --new-scope-selector "aside.filters"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode stable
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
@@ -180,7 +181,7 @@ Use `--scope-selector` when you want to restrict compare to one CSS-selected sub
 When a scope selector matches multiple elements, Nexus fails with short hints for up to five matched candidates so you can refine the selector without dumping the full HTML.
 Use `--old-scope-selector` and `--new-scope-selector` when old and new pages need different subtree selectors.
 If one side-specific scope selector is set without the other, `--scope-selector` must provide the missing side's fallback.
-Use `--match-mode exact|stable|heuristic` to control node pairing. `exact` is the default and preserves fingerprint matching, `stable` uses unique identity keys such as `data-testid`, `id`, `href`, and labels before falling back to fingerprints, and `heuristic` adds conservative score-based matching for migration diffs.
+Use `--match-mode exact|stable|heuristic|histogram` to control node pairing. `exact` is the default and preserves fingerprint matching, `stable` uses unique identity keys such as `data-testid`, `id`, `href`, and labels before falling back to fingerprints, `heuristic` adds conservative score-based matching for migration diffs, and experimental `histogram` uses low-occurrence semantic anchors before local matching.
 Use `--node-scope current|actionable|semantic` to control observed compare candidates. `current` is the default and preserves existing candidates, `actionable` focuses on controls, and `semantic` includes named or content-bearing semantic nodes such as headings, landmarks, status, and testid-tagged elements.
 Use `--compare-css` to compare a default computed-style allowlist on matching nodes.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.

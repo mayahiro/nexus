@@ -38,7 +38,7 @@ Recommended passes:
 - actionable controls such as buttons, links, and form fields
 - container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
 - migration-scoped passes using `--old-scope-selector` and `--new-scope-selector` when old and new DOM structures differ
-- migration-friendly matching with `--match-mode stable` or `--match-mode heuristic`
+- migration-friendly matching with `--match-mode stable`, `--match-mode heuristic`, or experimental `--match-mode histogram`
 - broader semantic candidate collection with `--node-scope semantic`
 - important styles such as `color`, `background-color`, and `pointer-events`
 - significant visual placement changes using `--compare-layout`
@@ -71,6 +71,7 @@ Migration-friendly matching:
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode stable
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode heuristic --scope-selector 'main'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable --scope-selector 'main'
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram
 ```
 
 Session-to-session compare:
@@ -108,20 +109,22 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - `exact` is the default and preserves strict fingerprint-based matching
 - `stable` matches unique identity keys such as `data-testid`, `id`, `href`, form labels, role/name, attributes, placeholders, and then fingerprints
 - `heuristic` runs stable matching first, then only accepts mutual best score-based matches above the confidence threshold
+- `histogram` is experimental; it anchors low-occurrence semantic identity keys, then applies exact and heuristic matching inside each anchored region
 - use `stable` for migrations that preserve durable attributes but change text or implementation details
 - use `heuristic` when stable keys are incomplete and the scope is already narrow
+- use `histogram` with `--node-scope semantic` for early page-wide experiments where durable anchors exist across the page
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
-JSON findings produced from stable or heuristic node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+JSON findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
 
 ## Node Scopes
 
 - `current` is the default and preserves the existing compare candidate set
 - `actionable` keeps control-oriented nodes such as buttons, links, inputs, tabs, options, and other interactive widgets
 - `semantic` keeps actionable nodes plus named or content-bearing semantic nodes such as headings, landmarks, status, tables, images, and `data-testid` nodes
-- use `semantic` with `--scope-selector` and `--match-mode stable` first; move to `heuristic` only when stable keys are incomplete
+- use `semantic` with `--scope-selector` and `--match-mode stable` first; move to `heuristic` or experimental `histogram` only when stable keys are incomplete
 
-JSON summaries include `matched_nodes`, `exact_matches`, `stable_matches`, `heuristic_matches`, and `ambiguous_matches_skipped` when applicable.
+JSON summaries include `matched_nodes`, `exact_matches`, `stable_matches`, `heuristic_matches`, `histogram_matches`, and `ambiguous_matches_skipped` when applicable.
 
 ## Failure Triage
 

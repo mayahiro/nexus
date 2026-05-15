@@ -100,7 +100,7 @@ func printCompareReport(w io.Writer, report compareReport) {
 		fmt.Fprintf(w, "layout_changed: %d\n", report.Summary.LayoutChanged)
 	}
 	if report.Summary.MatchedNodes > 0 {
-		fmt.Fprintf(w, "matched_nodes: %d (exact: %d, stable: %d, heuristic: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches)
+		fmt.Fprintf(w, "matched_nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches)
 	}
 	if report.Summary.AmbiguousMatchesSkipped > 0 {
 		fmt.Fprintf(w, "ambiguous_matches_skipped: %d\n", report.Summary.AmbiguousMatchesSkipped)
@@ -173,7 +173,7 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintf(w, "- Warning: %d\n", report.Summary.Warning)
 	fmt.Fprintf(w, "- Info: %d\n", report.Summary.Info)
 	if report.Summary.MatchedNodes > 0 {
-		fmt.Fprintf(w, "- Matched nodes: %d (exact: %d, stable: %d, heuristic: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches)
+		fmt.Fprintf(w, "- Matched nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches)
 	}
 	if report.Summary.AmbiguousMatchesSkipped > 0 {
 		fmt.Fprintf(w, "- Ambiguous matches skipped: %d\n", report.Summary.AmbiguousMatchesSkipped)

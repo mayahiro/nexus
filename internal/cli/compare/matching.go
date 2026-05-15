@@ -10,9 +10,11 @@ const (
 	compareMatchModeExact     = defaultCompareMatchMode
 	compareMatchModeStable    = "stable"
 	compareMatchModeHeuristic = "heuristic"
+	compareMatchModeHistogram = "histogram"
 
 	compareHeuristicMinimumScore  = 75
 	compareHeuristicMinimumMargin = 10
+	compareHistogramMaxOccurrence = 3
 )
 
 const (
@@ -61,16 +63,27 @@ type compareBestCandidate struct {
 	Reasons []string
 }
 
+type compareHistogramAnchorCandidate struct {
+	OldIndex int
+	NewIndex int
+	Key      compareStableIdentityKey
+}
+
+type compareHistogramRegion struct {
+	OldIndices []int
+	NewIndices []int
+}
+
 func normalizeCompareMatchMode(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	if normalized == "" {
 		return defaultCompareMatchMode, nil
 	}
 	switch normalized {
-	case compareMatchModeExact, compareMatchModeStable, compareMatchModeHeuristic:
+	case compareMatchModeExact, compareMatchModeStable, compareMatchModeHeuristic, compareMatchModeHistogram:
 		return normalized, nil
 	default:
-		return "", errors.New("match-mode must be exact, stable, or heuristic")
+		return "", errors.New("match-mode must be exact, stable, heuristic, or histogram")
 	}
 }
 
@@ -88,9 +101,243 @@ func compareMatchNodes(oldNodes []compareSnapshotNode, newNodes []compareSnapsho
 	case compareMatchModeHeuristic:
 		stable := compareStableNodeMatches(oldNodes, newNodes)
 		return compareHeuristicNodeMatches(oldNodes, newNodes, stable)
+	case compareMatchModeHistogram:
+		return compareHistogramNodeMatches(oldNodes, newNodes)
 	default:
 		return compareExactNodeMatches(oldNodes, newNodes, oldIndices, newIndices, "", nil)
 	}
+}
+
+func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) compareNodeMatchResult {
+	anchors, ambiguous := compareHistogramAnchors(oldNodes, newNodes)
+	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
+	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+	matches := make([]compareNodeMatch, 0, len(anchors))
+
+	for _, anchor := range anchors {
+		if _, ok := unmatchedOld[anchor.OldIndex]; !ok {
+			continue
+		}
+		if _, ok := unmatchedNew[anchor.NewIndex]; !ok {
+			continue
+		}
+		delete(unmatchedOld, anchor.OldIndex)
+		delete(unmatchedNew, anchor.NewIndex)
+		matches = append(matches, compareNodeMatch{
+			OldIndex:  anchor.OldIndex,
+			NewIndex:  anchor.NewIndex,
+			MatchedBy: "histogram:" + anchor.Key.Kind,
+			Reasons:   []string{anchor.Key.Kind, "low-occurrence-anchor"},
+		})
+	}
+
+	for _, region := range compareHistogramRegions(oldNodes, newNodes, anchors, unmatchedOld, unmatchedNew) {
+		exact := compareExactNodeMatches(oldNodes, newNodes, region.OldIndices, region.NewIndices, "histogram:fingerprint", []string{"fingerprint", "anchor-region"})
+		compareHistogramApplyMatches(exact.Matches, unmatchedOld, unmatchedNew)
+		matches = append(matches, exact.Matches...)
+		ambiguous += exact.AmbiguousSkipped
+
+		heuristic := compareHeuristicUnmatchedNodes(oldNodes, newNodes, exact.UnmatchedOld, exact.UnmatchedNew)
+		for i := range heuristic.Matches {
+			heuristic.Matches[i].MatchedBy = "histogram:heuristic"
+			heuristic.Matches[i].Reasons = append(append([]string{"anchor-region"}, heuristic.Matches[i].Reasons...), "mutual-best")
+		}
+		compareHistogramApplyMatches(heuristic.Matches, unmatchedOld, unmatchedNew)
+		matches = append(matches, heuristic.Matches...)
+		ambiguous += heuristic.AmbiguousSkipped
+	}
+
+	return compareNodeMatchResult{
+		Matches:          matches,
+		UnmatchedOld:     compareSortedNodeIndexSet(unmatchedOld),
+		UnmatchedNew:     compareSortedNodeIndexSet(unmatchedNew),
+		AmbiguousSkipped: ambiguous,
+	}
+}
+
+func compareHistogramAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareHistogramAnchorCandidate, int) {
+	candidates, ambiguous := compareHistogramAnchorCandidates(oldNodes, newNodes)
+	anchors := compareHistogramLongestIncreasingAnchors(oldNodes, newNodes, candidates)
+	compareSortHistogramAnchors(oldNodes, newNodes, anchors)
+	return anchors, ambiguous
+}
+
+func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareHistogramAnchorCandidate, int) {
+	oldSet := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
+	newSet := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+	pairKeys := map[[2]int]compareStableIdentityKey{}
+	ambiguous := 0
+
+	for priority := compareStablePriorityTestID; priority <= compareStablePriorityFingerprint; priority++ {
+		oldByKey := compareStableKeyIndex(oldNodes, oldSet, priority)
+		newByKey := compareStableKeyIndex(newNodes, newSet, priority)
+		keys := compareSharedStableKeys(oldByKey, newByKey)
+		for _, key := range keys {
+			oldIndexes := append([]int(nil), oldByKey[key]...)
+			newIndexes := append([]int(nil), newByKey[key]...)
+			compareSortNodeIndicesBySequence(oldNodes, oldIndexes)
+			compareSortNodeIndicesBySequence(newNodes, newIndexes)
+			if len(oldIndexes) != len(newIndexes) || len(oldIndexes) > compareHistogramMaxOccurrence {
+				ambiguous++
+				continue
+			}
+			for i := range oldIndexes {
+				pair := [2]int{oldIndexes[i], newIndexes[i]}
+				current, ok := pairKeys[pair]
+				if ok && current.Priority <= key.Priority {
+					continue
+				}
+				pairKeys[pair] = key
+			}
+		}
+	}
+
+	candidates := make([]compareHistogramAnchorCandidate, 0, len(pairKeys))
+	for pair, key := range pairKeys {
+		candidates = append(candidates, compareHistogramAnchorCandidate{
+			OldIndex: pair[0],
+			NewIndex: pair[1],
+			Key:      key,
+		})
+	}
+	slices.SortFunc(candidates, func(a compareHistogramAnchorCandidate, b compareHistogramAnchorCandidate) int {
+		switch {
+		case a.Key.Priority < b.Key.Priority:
+			return -1
+		case a.Key.Priority > b.Key.Priority:
+			return 1
+		case compareNodeSequenceBefore(oldNodes, a.OldIndex, b.OldIndex):
+			return -1
+		case compareNodeSequenceBefore(oldNodes, b.OldIndex, a.OldIndex):
+			return 1
+		case compareNodeSequenceBefore(newNodes, a.NewIndex, b.NewIndex):
+			return -1
+		case compareNodeSequenceBefore(newNodes, b.NewIndex, a.NewIndex):
+			return 1
+		default:
+			return 0
+		}
+	})
+
+	usedOld := map[int]struct{}{}
+	usedNew := map[int]struct{}{}
+	selected := make([]compareHistogramAnchorCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		if _, ok := usedOld[candidate.OldIndex]; ok {
+			continue
+		}
+		if _, ok := usedNew[candidate.NewIndex]; ok {
+			continue
+		}
+		usedOld[candidate.OldIndex] = struct{}{}
+		usedNew[candidate.NewIndex] = struct{}{}
+		selected = append(selected, candidate)
+	}
+	return selected, ambiguous
+}
+
+func compareHistogramLongestIncreasingAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, candidates []compareHistogramAnchorCandidate) []compareHistogramAnchorCandidate {
+	if len(candidates) <= 1 {
+		return append([]compareHistogramAnchorCandidate(nil), candidates...)
+	}
+	ordered := append([]compareHistogramAnchorCandidate(nil), candidates...)
+	compareSortHistogramAnchors(oldNodes, newNodes, ordered)
+
+	lengths := make([]int, len(ordered))
+	prev := make([]int, len(ordered))
+	best := 0
+	for i := range ordered {
+		lengths[i] = 1
+		prev[i] = -1
+		for j := 0; j < i; j++ {
+			if !compareNodeSequenceBefore(newNodes, ordered[j].NewIndex, ordered[i].NewIndex) {
+				continue
+			}
+			if lengths[j]+1 <= lengths[i] {
+				continue
+			}
+			lengths[i] = lengths[j] + 1
+			prev[i] = j
+		}
+		if lengths[i] > lengths[best] {
+			best = i
+		}
+	}
+
+	anchors := make([]compareHistogramAnchorCandidate, 0, lengths[best])
+	for index := best; index >= 0; index = prev[index] {
+		anchors = append(anchors, ordered[index])
+		if prev[index] < 0 {
+			break
+		}
+	}
+	slices.Reverse(anchors)
+	return anchors
+}
+
+func compareHistogramRegions(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, anchors []compareHistogramAnchorCandidate, unmatchedOld map[int]struct{}, unmatchedNew map[int]struct{}) []compareHistogramRegion {
+	regions := make([]compareHistogramRegion, 0, len(anchors)+1)
+	startOld := -1
+	startNew := -1
+	for _, anchor := range anchors {
+		regions = appendHistogramRegion(regions, compareHistogramRegion{
+			OldIndices: compareHistogramUnmatchedBetween(oldNodes, unmatchedOld, startOld, anchor.OldIndex),
+			NewIndices: compareHistogramUnmatchedBetween(newNodes, unmatchedNew, startNew, anchor.NewIndex),
+		})
+		startOld = anchor.OldIndex
+		startNew = anchor.NewIndex
+	}
+	regions = appendHistogramRegion(regions, compareHistogramRegion{
+		OldIndices: compareHistogramUnmatchedBetween(oldNodes, unmatchedOld, startOld, -1),
+		NewIndices: compareHistogramUnmatchedBetween(newNodes, unmatchedNew, startNew, -1),
+	})
+	return regions
+}
+
+func appendHistogramRegion(regions []compareHistogramRegion, region compareHistogramRegion) []compareHistogramRegion {
+	if len(region.OldIndices) == 0 && len(region.NewIndices) == 0 {
+		return regions
+	}
+	return append(regions, region)
+}
+
+func compareHistogramUnmatchedBetween(nodes []compareSnapshotNode, unmatched map[int]struct{}, start int, end int) []int {
+	indices := make([]int, 0)
+	for index := range unmatched {
+		if start >= 0 && !compareNodeSequenceBefore(nodes, start, index) {
+			continue
+		}
+		if end >= 0 && !compareNodeSequenceBefore(nodes, index, end) {
+			continue
+		}
+		indices = append(indices, index)
+	}
+	compareSortNodeIndicesBySequence(nodes, indices)
+	return indices
+}
+
+func compareHistogramApplyMatches(matches []compareNodeMatch, unmatchedOld map[int]struct{}, unmatchedNew map[int]struct{}) {
+	for _, match := range matches {
+		delete(unmatchedOld, match.OldIndex)
+		delete(unmatchedNew, match.NewIndex)
+	}
+}
+
+func compareSortHistogramAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, anchors []compareHistogramAnchorCandidate) {
+	slices.SortFunc(anchors, func(a compareHistogramAnchorCandidate, b compareHistogramAnchorCandidate) int {
+		switch {
+		case compareNodeSequenceBefore(oldNodes, a.OldIndex, b.OldIndex):
+			return -1
+		case compareNodeSequenceBefore(oldNodes, b.OldIndex, a.OldIndex):
+			return 1
+		case compareNodeSequenceBefore(newNodes, a.NewIndex, b.NewIndex):
+			return -1
+		case compareNodeSequenceBefore(newNodes, b.NewIndex, a.NewIndex):
+			return 1
+		default:
+			return 0
+		}
+	})
 }
 
 func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) compareNodeMatchResult {
@@ -620,4 +867,29 @@ func compareUnmatchedNodeIndices(indices []int, matched map[int]struct{}) []int 
 	}
 	slices.Sort(unmatched)
 	return unmatched
+}
+
+func compareSortNodeIndicesBySequence(nodes []compareSnapshotNode, indices []int) {
+	slices.SortFunc(indices, func(a int, b int) int {
+		switch {
+		case compareNodeSequenceBefore(nodes, a, b):
+			return -1
+		case compareNodeSequenceBefore(nodes, b, a):
+			return 1
+		default:
+			return 0
+		}
+	})
+}
+
+func compareNodeSequenceBefore(nodes []compareSnapshotNode, left int, right int) bool {
+	if left == right {
+		return false
+	}
+	leftOriginal := nodes[left].OriginalIndex
+	rightOriginal := nodes[right].OriginalIndex
+	if leftOriginal != rightOriginal {
+		return leftOriginal < rightOriginal
+	}
+	return left < right
 }

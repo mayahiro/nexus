@@ -35,7 +35,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	backend := fs.String("backend", "chromium", "browser backend")
 	targetRef := fs.String("target-ref", "", "target ref")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
-	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, or heuristic")
+	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, heuristic, or histogram")
 	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")

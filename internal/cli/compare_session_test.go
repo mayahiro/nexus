@@ -198,7 +198,7 @@ func TestCompareMatchModeFlagValidation(t *testing.T) {
 	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected invalid match mode to fail")
 	}
-	if !strings.Contains(stdout.String(), "match-mode must be exact, stable, or heuristic") {
+	if !strings.Contains(stdout.String(), "match-mode must be exact, stable, heuristic, or histogram") {
 		t.Fatalf("expected match-mode validation error, got %s", stdout.String())
 	}
 }

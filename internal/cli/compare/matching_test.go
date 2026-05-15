@@ -163,13 +163,50 @@ func TestCompareHeuristicModeAvoidsCrossRoleMatch(t *testing.T) {
 	}
 }
 
+func TestCompareHistogramModeMatchesWithinAnchoredRegions(t *testing.T) {
+	report := buildCompareReport(
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "heading|Billing", Role: "heading", Label: "Billing", Name: "Billing", Text: "Billing", Visible: true, Enabled: true, OriginalIndex: 0, Tag: "h2"},
+				{Fingerprint: "button|Save", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 1, Tag: "button"},
+				{Fingerprint: "heading|Profile", Role: "heading", Label: "Profile", Name: "Profile", Text: "Profile", Visible: true, Enabled: true, OriginalIndex: 2, Tag: "h2"},
+				{Fingerprint: "button|Save", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 3, Tag: "button"},
+			},
+		},
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "heading|Billing", Role: "heading", Label: "Billing", Name: "Billing", Text: "Billing", Visible: true, Enabled: true, OriginalIndex: 0, Tag: "h2"},
+				{Fingerprint: "button|Save changes", Role: "button", Label: "Save changes", Name: "Save changes", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 1, Tag: "button"},
+				{Fingerprint: "heading|Profile", Role: "heading", Label: "Profile", Name: "Profile", Text: "Profile", Visible: true, Enabled: true, OriginalIndex: 2, Tag: "h2"},
+				{Fingerprint: "button|Save", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 3, Tag: "button"},
+			},
+		},
+		nil,
+		compareMatchModeHistogram,
+	)
+
+	if report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 || report.Summary.TextChanged != 1 {
+		t.Fatalf("histogram mode should match the renamed node inside anchors: %+v", report.Summary)
+	}
+	if report.Summary.HistogramMatches == 0 || report.Summary.HeuristicMatches != 0 {
+		t.Fatalf("expected histogram match summary: %+v", report.Summary)
+	}
+	finding := report.Findings[0]
+	if finding.MatchedBy != "histogram:heuristic" || finding.MatchScore < compareHeuristicMinimumScore {
+		t.Fatalf("expected histogram heuristic metadata: %+v", finding)
+	}
+	if !slices.Contains(finding.MatchReasons, "anchor-region") {
+		t.Fatalf("expected anchor-region reason: %+v", finding)
+	}
+}
+
 func TestNormalizeCompareMatchMode(t *testing.T) {
-	for _, value := range []string{"", "exact", "stable", "heuristic", " STABLE "} {
+	for _, value := range []string{"", "exact", "stable", "heuristic", "histogram", " STABLE "} {
 		if _, err := normalizeCompareMatchMode(value); err != nil {
 			t.Fatalf("expected %q to be accepted: %v", value, err)
 		}
 	}
-	if _, err := normalizeCompareMatchMode("unknown"); err == nil || !strings.Contains(err.Error(), "exact, stable, or heuristic") {
+	if _, err := normalizeCompareMatchMode("unknown"); err == nil || !strings.Contains(err.Error(), "exact, stable, heuristic, or histogram") {
 		t.Fatalf("expected helpful validation error, got %v", err)
 	}
 }

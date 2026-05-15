@@ -208,6 +208,8 @@ func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {
 		summary.StableMatches++
 	case match.MatchedBy == "heuristic":
 		summary.HeuristicMatches++
+	case strings.HasPrefix(match.MatchedBy, "histogram:"):
+		summary.HistogramMatches++
 	default:
 		summary.ExactMatches++
 	}
