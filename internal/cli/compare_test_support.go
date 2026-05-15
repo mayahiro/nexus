@@ -36,19 +36,24 @@ type compareSnapshotJSON struct {
 }
 
 type compareSummaryJSON struct {
-	Same            bool `json:"same"`
-	TotalFindings   int  `json:"total_findings"`
-	TitleChanged    int  `json:"title_changed"`
-	TextChanged     int  `json:"text_changed"`
-	MissingNodes    int  `json:"missing_nodes"`
-	NewNodes        int  `json:"new_nodes"`
-	StateChanged    int  `json:"state_changed"`
-	CSSChanged      int  `json:"css_changed"`
-	LayoutChanged   int  `json:"layout_changed"`
-	PageTextChanged int  `json:"page_text_changed"`
-	Critical        int  `json:"critical"`
-	Warning         int  `json:"warning"`
-	Info            int  `json:"info"`
+	Same                    bool `json:"same"`
+	TotalFindings           int  `json:"total_findings"`
+	TitleChanged            int  `json:"title_changed"`
+	TextChanged             int  `json:"text_changed"`
+	MissingNodes            int  `json:"missing_nodes"`
+	NewNodes                int  `json:"new_nodes"`
+	StateChanged            int  `json:"state_changed"`
+	CSSChanged              int  `json:"css_changed"`
+	LayoutChanged           int  `json:"layout_changed"`
+	PageTextChanged         int  `json:"page_text_changed"`
+	MatchedNodes            int  `json:"matched_nodes"`
+	ExactMatches            int  `json:"exact_matches"`
+	StableMatches           int  `json:"stable_matches"`
+	HeuristicMatches        int  `json:"heuristic_matches"`
+	AmbiguousMatchesSkipped int  `json:"ambiguous_matches_skipped"`
+	Critical                int  `json:"critical"`
+	Warning                 int  `json:"warning"`
+	Info                    int  `json:"info"`
 }
 
 type compareFindingJSON struct {

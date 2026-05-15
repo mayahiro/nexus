@@ -39,6 +39,7 @@ Recommended passes:
 - container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
 - migration-scoped passes using `--old-scope-selector` and `--new-scope-selector` when old and new DOM structures differ
 - migration-friendly matching with `--match-mode stable` or `--match-mode heuristic`
+- broader semantic candidate collection with `--node-scope semantic`
 - important styles such as `color`, `background-color`, and `pointer-events`
 - significant visual placement changes using `--compare-layout`
 
@@ -69,6 +70,7 @@ Migration-friendly matching:
 ```text
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode stable
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode heuristic --scope-selector 'main'
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable --scope-selector 'main'
 ```
 
 Session-to-session compare:
@@ -111,6 +113,15 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
 JSON findings produced from stable or heuristic node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+
+## Node Scopes
+
+- `current` is the default and preserves the existing compare candidate set
+- `actionable` keeps control-oriented nodes such as buttons, links, inputs, tabs, options, and other interactive widgets
+- `semantic` keeps actionable nodes plus named or content-bearing semantic nodes such as headings, landmarks, status, tables, images, and `data-testid` nodes
+- use `semantic` with `--scope-selector` and `--match-mode stable` first; move to `heuristic` only when stable keys are incomplete
+
+JSON summaries include `matched_nodes`, `exact_matches`, `stable_matches`, `heuristic_matches`, and `ambiguous_matches_skipped` when applicable.
 
 ## Failure Triage
 

@@ -61,6 +61,9 @@ func TestCompareStableModeMatchesSameTestID(t *testing.T) {
 	if finding.MatchedBy != "stable:testid" || !slices.Contains(finding.MatchReasons, "testid") {
 		t.Fatalf("expected stable testid metadata: %+v", finding)
 	}
+	if report.Summary.StableMatches != 1 || report.Summary.ExactMatches != 0 || report.Summary.HeuristicMatches != 0 {
+		t.Fatalf("expected stable match summary: %+v", report.Summary)
+	}
 }
 
 func TestCompareStableModeDoesNotMatchAmbiguousRepeatedKeys(t *testing.T) {
@@ -80,6 +83,9 @@ func TestCompareStableModeDoesNotMatchAmbiguousRepeatedKeys(t *testing.T) {
 	}
 	if len(result.UnmatchedOld) != 2 || len(result.UnmatchedNew) != 2 {
 		t.Fatalf("expected all nodes to remain unmatched: %+v", result)
+	}
+	if result.AmbiguousSkipped == 0 {
+		t.Fatalf("expected ambiguous stable keys to be counted: %+v", result)
 	}
 }
 
@@ -131,6 +137,9 @@ func TestCompareHeuristicModeMatchesHighConfidenceNode(t *testing.T) {
 	if !slices.Contains(finding.MatchReasons, "similar-name") {
 		t.Fatalf("expected similar-name reason: %+v", finding)
 	}
+	if report.Summary.HeuristicMatches != 1 || report.Summary.StableMatches != 0 {
+		t.Fatalf("expected heuristic match summary: %+v", report.Summary)
+	}
 }
 
 func TestCompareHeuristicModeAvoidsCrossRoleMatch(t *testing.T) {
@@ -165,16 +174,60 @@ func TestNormalizeCompareMatchMode(t *testing.T) {
 	}
 }
 
-func TestCompareManifestMatchModeMerge(t *testing.T) {
-	base := compareRun{MatchMode: compareMatchModeExact}
+func TestCompareNodeScopeFiltersSnapshot(t *testing.T) {
+	observation := api.Observation{
+		Tree: []api.Node{
+			{ID: 1, Fingerprint: "button", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+			{ID: 2, Fingerprint: "status", Role: "status", Text: "Ready", Visible: true, Enabled: true},
+			{ID: 3, Fingerprint: "generic", Role: "generic", Text: "Decorative", Visible: true, Enabled: true},
+		},
+	}
+
+	current := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeCurrent})
+	if len(current.Nodes) != 3 {
+		t.Fatalf("current node scope should preserve all observed nodes: %+v", current.Nodes)
+	}
+
+	actionable := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeActionable})
+	if len(actionable.Nodes) != 1 || actionable.Nodes[0].Role != "button" {
+		t.Fatalf("actionable node scope should keep only controls: %+v", actionable.Nodes)
+	}
+
+	semantic := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeSemantic})
+	roles := []string{}
+	for _, node := range semantic.Nodes {
+		roles = append(roles, node.Role)
+	}
+	if !slices.Contains(roles, "button") || !slices.Contains(roles, "status") || slices.Contains(roles, "generic") {
+		t.Fatalf("semantic node scope should keep semantic nodes without generic text: %+v", semantic.Nodes)
+	}
+}
+
+func TestNormalizeCompareNodeScope(t *testing.T) {
+	for _, value := range []string{"", "current", "actionable", "semantic", " SEMANTIC "} {
+		if _, err := normalizeCompareNodeScope(value); err != nil {
+			t.Fatalf("expected %q to be accepted: %v", value, err)
+		}
+	}
+	if _, err := normalizeCompareNodeScope("unknown"); err == nil || !strings.Contains(err.Error(), "current, actionable, or semantic") {
+		t.Fatalf("expected helpful validation error, got %v", err)
+	}
+}
+
+func TestCompareManifestMatchModeAndNodeScopeMerge(t *testing.T) {
+	base := compareRun{MatchMode: compareMatchModeExact, NodeScope: compareNodeScopeCurrent}
 	run := mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable}, compareManifestPage{})
 	if run.MatchMode != compareMatchModeStable {
 		t.Fatalf("expected defaults match_mode, got %q", run.MatchMode)
 	}
 
 	heuristic := compareMatchModeHeuristic
-	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable}, compareManifestPage{MatchMode: &heuristic})
+	semantic := compareNodeScopeSemantic
+	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable, NodeScope: compareNodeScopeActionable}, compareManifestPage{MatchMode: &heuristic, NodeScope: &semantic})
 	if run.MatchMode != compareMatchModeHeuristic {
 		t.Fatalf("expected page match_mode override, got %q", run.MatchMode)
+	}
+	if run.NodeScope != compareNodeScopeSemantic {
+		t.Fatalf("expected page node_scope override, got %q", run.NodeScope)
 	}
 }

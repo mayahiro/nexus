@@ -77,6 +77,7 @@ type ObserveOptions struct {
 	CSSProperties     []string `json:"css_properties,omitempty"`
 	LayoutProperties  []string `json:"layout_properties,omitempty"`
 	ScopeSelector     string   `json:"scope_selector,omitempty"`
+	NodeScope         string   `json:"node_scope,omitempty"`
 }
 
 type LogOptions struct {

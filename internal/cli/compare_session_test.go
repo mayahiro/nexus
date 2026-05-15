@@ -171,6 +171,9 @@ func TestCompareMatchModeStable(t *testing.T) {
 	if report.Findings[0].MatchedBy != "stable:testid" {
 		t.Fatalf("expected stable match metadata: %+v", report.Findings[0])
 	}
+	if report.Summary.StableMatches != 1 || report.Summary.MatchedNodes != 1 {
+		t.Fatalf("expected stable match summary: %+v", report.Summary)
+	}
 
 	cancel()
 
@@ -197,6 +200,22 @@ func TestCompareMatchModeFlagValidation(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "match-mode must be exact, stable, or heuristic") {
 		t.Fatalf("expected match-mode validation error, got %s", stdout.String())
+	}
+}
+
+func TestCompareNodeScopeFlagValidation(t *testing.T) {
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--node-scope", "unknown",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected invalid node scope to fail")
+	}
+	if !strings.Contains(stdout.String(), "node-scope must be current, actionable, or semantic") {
+		t.Fatalf("expected node-scope validation error, got %s", stdout.String())
 	}
 }
 

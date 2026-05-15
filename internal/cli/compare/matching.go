@@ -35,9 +35,10 @@ type compareNodeMatch struct {
 }
 
 type compareNodeMatchResult struct {
-	Matches      []compareNodeMatch
-	UnmatchedOld []int
-	UnmatchedNew []int
+	Matches          []compareNodeMatch
+	UnmatchedOld     []int
+	UnmatchedNew     []int
+	AmbiguousSkipped int
 }
 
 type compareStableIdentityKey struct {
@@ -96,6 +97,7 @@ func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compare
 	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
 	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
 	matches := make([]compareNodeMatch, 0)
+	ambiguous := 0
 
 	for priority := compareStablePriorityTestID; priority <= compareStablePriorityFingerprint; priority++ {
 		oldByKey := compareStableKeyIndex(oldNodes, unmatchedOld, priority)
@@ -105,6 +107,7 @@ func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compare
 			oldIndexes := oldByKey[key]
 			newIndexes := newByKey[key]
 			if len(oldIndexes) != 1 || len(newIndexes) != 1 {
+				ambiguous++
 				continue
 			}
 			oldIndex := oldIndexes[0]
@@ -136,9 +139,10 @@ func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compare
 	)
 	matches = append(matches, exact.Matches...)
 	return compareNodeMatchResult{
-		Matches:      matches,
-		UnmatchedOld: exact.UnmatchedOld,
-		UnmatchedNew: exact.UnmatchedNew,
+		Matches:          matches,
+		UnmatchedOld:     exact.UnmatchedOld,
+		UnmatchedNew:     exact.UnmatchedNew,
+		AmbiguousSkipped: ambiguous + exact.AmbiguousSkipped,
 	}
 }
 
@@ -147,9 +151,10 @@ func compareHeuristicNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 	heuristic := compareHeuristicUnmatchedNodes(oldNodes, newNodes, base.UnmatchedOld, base.UnmatchedNew)
 	matches = append(matches, heuristic.Matches...)
 	return compareNodeMatchResult{
-		Matches:      matches,
-		UnmatchedOld: heuristic.UnmatchedOld,
-		UnmatchedNew: heuristic.UnmatchedNew,
+		Matches:          matches,
+		UnmatchedOld:     heuristic.UnmatchedOld,
+		UnmatchedNew:     heuristic.UnmatchedNew,
+		AmbiguousSkipped: base.AmbiguousSkipped + heuristic.AmbiguousSkipped,
 	}
 }
 
@@ -344,14 +349,19 @@ func compareHeuristicUnmatchedNodes(oldNodes []compareSnapshotNode, newNodes []c
 	matchedOld := map[int]struct{}{}
 	matchedNew := map[int]struct{}{}
 	matches := make([]compareNodeMatch, 0)
+	ambiguous := 0
 	for _, oldIndex := range oldIndices {
 		best, ok := oldBest[oldIndex]
 		if !ok || !compareBestCandidateMarginOK(best) {
+			if ok {
+				ambiguous++
+			}
 			continue
 		}
 		newIndex := best.Index
 		reverse, ok := newBest[newIndex]
 		if !ok || reverse.Index != oldIndex || !compareBestCandidateMarginOK(reverse) {
+			ambiguous++
 			continue
 		}
 		if _, ok := matchedOld[oldIndex]; ok {
@@ -373,9 +383,10 @@ func compareHeuristicUnmatchedNodes(oldNodes []compareSnapshotNode, newNodes []c
 	}
 
 	return compareNodeMatchResult{
-		Matches:      matches,
-		UnmatchedOld: compareUnmatchedNodeIndices(oldIndices, matchedOld),
-		UnmatchedNew: compareUnmatchedNodeIndices(newIndices, matchedNew),
+		Matches:          matches,
+		UnmatchedOld:     compareUnmatchedNodeIndices(oldIndices, matchedOld),
+		UnmatchedNew:     compareUnmatchedNodeIndices(newIndices, matchedNew),
+		AmbiguousSkipped: ambiguous,
 	}
 }
 

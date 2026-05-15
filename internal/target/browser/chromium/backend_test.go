@@ -271,7 +271,7 @@ func TestEvalExpression(t *testing.T) {
 }
 
 func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
-	script := observeTreeExpression([]string{"color", "fill", "pointer-events"}, "", nil)
+	script := observeTreeExpression([]string{"color", "fill", "pointer-events"}, "", nil, "")
 
 	if !strings.Contains(script, "normalizeStyleValue(property, style.getPropertyValue(property).trim())") {
 		t.Fatalf("expected color normalization in script: %s", script)
@@ -285,7 +285,7 @@ func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
 }
 
 func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
-	script := observeTreeExpression(nil, "", []string{"display", "grid-template-columns"})
+	script := observeTreeExpression(nil, "", []string{"display", "grid-template-columns"}, "")
 
 	if !strings.Contains(script, "layout_context: layoutContextFor(el)") {
 		t.Fatalf("expected layout context in script: %s", script)
@@ -298,9 +298,26 @@ func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
 	}
 }
 
+func TestObserveCandidateSelectorNodeScopes(t *testing.T) {
+	current := observeCandidateSelector("")
+	if !strings.Contains(current, "button") || strings.Contains(current, "h1") {
+		t.Fatalf("unexpected current selector: %s", current)
+	}
+
+	actionable := observeCandidateSelector("actionable")
+	if !strings.Contains(actionable, `[role="switch"]`) || strings.Contains(actionable, "main") {
+		t.Fatalf("unexpected actionable selector: %s", actionable)
+	}
+
+	semantic := observeCandidateSelector("semantic")
+	if !strings.Contains(semantic, "h1") || !strings.Contains(semantic, `[role="status"]`) || !strings.Contains(semantic, "[data-testid]") {
+		t.Fatalf("unexpected semantic selector: %s", semantic)
+	}
+}
+
 func TestScopeSelectorExpressionsIncludeCandidateHints(t *testing.T) {
 	scripts := map[string]string{
-		"observe": observeTreeExpression(nil, "aside.filters", nil),
+		"observe": observeTreeExpression(nil, "aside.filters", nil, ""),
 		"text":    scopeTextExpression("aside.filters"),
 		"meta":    scopeMetaExpression("aside.filters"),
 	}

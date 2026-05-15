@@ -36,6 +36,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	targetRef := fs.String("target-ref", "", "target ref")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, or heuristic")
+	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -96,6 +97,11 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	normalizedNodeScope, err := normalizeCompareNodeScope(*nodeScope)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -115,6 +121,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		TargetRef:        *targetRef,
 		Viewport:         *viewport,
 		MatchMode:        normalizedMatchMode,
+		NodeScope:        normalizedNodeScope,
 		WaitSelector:     *waitSelector,
 		ScopeSelector:    *scopeSelector,
 		OldScopeSelector: *oldScopeSelector,
@@ -222,6 +229,10 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
+	nodeScope, err := normalizeCompareNodeScope(run.NodeScope)
+	if err != nil {
+		return compareReport{}, err
+	}
 
 	ignorePatterns, err := compileCompareRegexps(run.IgnoreTextRegex)
 	if err != nil {
@@ -288,11 +299,11 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		}
 	}
 
-	oldObservation, err := observeScopedCompareSession(ctx, client, oldPrepared.SessionID, cssProperties, oldScopeSelector)
+	oldObservation, err := observeScopedCompareSession(ctx, client, oldPrepared.SessionID, cssProperties, oldScopeSelector, nodeScope)
 	if err != nil {
 		return compareReport{}, fmt.Errorf("old side %w", err)
 	}
-	newObservation, err := observeScopedCompareSession(ctx, client, newPrepared.SessionID, cssProperties, newScopeSelector)
+	newObservation, err := observeScopedCompareSession(ctx, client, newPrepared.SessionID, cssProperties, newScopeSelector, nodeScope)
 	if err != nil {
 		return compareReport{}, fmt.Errorf("new side %w", err)
 	}
@@ -304,6 +315,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 			MaskNode:      maskRules,
 			CSSProperties: cssProperties,
 			CompareLayout: run.CompareLayout,
+			NodeScope:     nodeScope,
 		}),
 		buildCompareSnapshot(newObservation, compareSnapshotOptions{
 			IgnoreText:    ignorePatterns,
@@ -311,6 +323,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 			MaskNode:      maskRules,
 			CSSProperties: cssProperties,
 			CompareLayout: run.CompareLayout,
+			NodeScope:     nodeScope,
 		}),
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
 		matchMode,

@@ -71,19 +71,24 @@ type compareSnapshotNode struct {
 }
 
 type compareSummary struct {
-	Same            bool `json:"same"`
-	TotalFindings   int  `json:"total_findings"`
-	TitleChanged    int  `json:"title_changed"`
-	TextChanged     int  `json:"text_changed"`
-	MissingNodes    int  `json:"missing_nodes"`
-	NewNodes        int  `json:"new_nodes"`
-	StateChanged    int  `json:"state_changed"`
-	CSSChanged      int  `json:"css_changed"`
-	LayoutChanged   int  `json:"layout_changed"`
-	PageTextChanged int  `json:"page_text_changed"`
-	Critical        int  `json:"critical"`
-	Warning         int  `json:"warning"`
-	Info            int  `json:"info"`
+	Same                    bool `json:"same"`
+	TotalFindings           int  `json:"total_findings"`
+	TitleChanged            int  `json:"title_changed"`
+	TextChanged             int  `json:"text_changed"`
+	MissingNodes            int  `json:"missing_nodes"`
+	NewNodes                int  `json:"new_nodes"`
+	StateChanged            int  `json:"state_changed"`
+	CSSChanged              int  `json:"css_changed"`
+	LayoutChanged           int  `json:"layout_changed"`
+	PageTextChanged         int  `json:"page_text_changed"`
+	MatchedNodes            int  `json:"matched_nodes,omitempty"`
+	ExactMatches            int  `json:"exact_matches,omitempty"`
+	StableMatches           int  `json:"stable_matches,omitempty"`
+	HeuristicMatches        int  `json:"heuristic_matches,omitempty"`
+	AmbiguousMatchesSkipped int  `json:"ambiguous_matches_skipped,omitempty"`
+	Critical                int  `json:"critical"`
+	Warning                 int  `json:"warning"`
+	Info                    int  `json:"info"`
 }
 
 type compareScopeSide struct {
@@ -131,6 +136,7 @@ type compareManifestDefaults struct {
 	Backend          string   `json:"backend,omitempty"`
 	Viewport         string   `json:"viewport,omitempty"`
 	MatchMode        string   `json:"match_mode,omitempty"`
+	NodeScope        string   `json:"node_scope,omitempty"`
 	WaitSelector     string   `json:"wait_selector,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
 	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
@@ -155,6 +161,7 @@ type compareManifestPage struct {
 	Backend          *string  `json:"backend,omitempty"`
 	Viewport         *string  `json:"viewport,omitempty"`
 	MatchMode        *string  `json:"match_mode,omitempty"`
+	NodeScope        *string  `json:"node_scope,omitempty"`
 	WaitSelector     *string  `json:"wait_selector,omitempty"`
 	ScopeSelector    *string  `json:"scope_selector,omitempty"`
 	OldScopeSelector *string  `json:"old_scope_selector,omitempty"`
@@ -201,6 +208,7 @@ type compareRun struct {
 	TargetRef        string
 	Viewport         string
 	MatchMode        string
+	NodeScope        string
 	WaitSelector     string
 	ScopeSelector    string
 	OldScopeSelector string
@@ -236,6 +244,7 @@ type compareSnapshotOptions struct {
 	MaskNode      []compareSelectorRule
 	CSSProperties []string
 	CompareLayout bool
+	NodeScope     string
 }
 
 const compareURLReadyTimeout = 10 * time.Second
@@ -243,6 +252,7 @@ const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 const defaultCompareMatchMode = "exact"
+const defaultCompareNodeScope = "current"
 const compareLayoutThreshold = 12
 const compareLayoutWarningThreshold = 48
 

@@ -123,7 +123,7 @@ func selectorHintSupportExpression() string {
 `
 }
 
-func observeTreeExpression(cssProperties []string, scopeSelector string, layoutProperties []string) string {
+func observeTreeExpression(cssProperties []string, scopeSelector string, layoutProperties []string, nodeScope string) string {
 	properties := make([]string, 0, len(cssProperties))
 	for _, value := range cssProperties {
 		trimmed := strings.TrimSpace(value)
@@ -142,6 +142,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 	}
 
 	scope := strconv.Quote(strings.TrimSpace(scopeSelector))
+	candidateSelector := strconv.Quote(observeCandidateSelector(nodeScope))
 	selectorHints := ""
 	if strings.TrimSpace(scopeSelector) != "" {
 		selectorHints = selectorHintSupportExpression()
@@ -149,22 +150,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 
 	return `(function () {
 	  const scopeSelector = ` + scope + `;
-	  const selector = [
-	    'button',
-	    'a[href]',
-    'input',
-    'textarea',
-    'select',
-    '[role="button"]',
-    '[role="link"]',
-    '[role="tab"]',
-    '[role="checkbox"]',
-    '[role="radio"]',
-    '[contenteditable="true"]',
-    '[contenteditable=""]',
-    '[onclick]',
-    '[tabindex]'
-  ].join(',');
+	  const selector = ` + candidateSelector + `;
 
   const roleFor = (el) => {
     const ariaRole = (el.getAttribute('role') || '').trim();
@@ -221,6 +207,8 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
         .trim();
       if (text) return text;
     }
+    const alt = (el.getAttribute('alt') || '').trim();
+    if (alt) return alt;
     const text = (el.innerText || el.textContent || '').trim();
     if (text) return text;
     const value = valueFor(el);
@@ -240,6 +228,7 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
     if (el.getAttribute('type')) attrs.type = el.getAttribute('type');
     if (el.getAttribute('href')) attrs.href = el.getAttribute('href');
     if (el.getAttribute('placeholder')) attrs.placeholder = el.getAttribute('placeholder');
+    if (el.getAttribute('alt')) attrs.alt = el.getAttribute('alt');
     if (el.getAttribute('aria-label')) attrs['aria-label'] = el.getAttribute('aria-label');
     if (el.getAttribute('aria-labelledby')) attrs['aria-labelledby'] = el.getAttribute('aria-labelledby');
     if (el.getAttribute('data-testid')) attrs['data-testid'] = el.getAttribute('data-testid');
@@ -454,6 +443,77 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 
   return JSON.stringify(nodes);
 })()`
+}
+
+func observeCandidateSelector(nodeScope string) string {
+	current := []string{
+		"button",
+		"a[href]",
+		"input",
+		"textarea",
+		"select",
+		`[role="button"]`,
+		`[role="link"]`,
+		`[role="tab"]`,
+		`[role="checkbox"]`,
+		`[role="radio"]`,
+		`[contenteditable="true"]`,
+		`[contenteditable=""]`,
+		"[onclick]",
+		"[tabindex]",
+	}
+	switch strings.ToLower(strings.TrimSpace(nodeScope)) {
+	case "actionable":
+		return strings.Join(append(current,
+			`[role="switch"]`,
+			`[role="menuitem"]`,
+			`[role="menuitemcheckbox"]`,
+			`[role="menuitemradio"]`,
+			`[role="option"]`,
+			`[role="slider"]`,
+			`[role="spinbutton"]`,
+			`[role="searchbox"]`,
+		), ",")
+	case "semantic":
+		return strings.Join(append(current,
+			"h1",
+			"h2",
+			"h3",
+			"h4",
+			"h5",
+			"h6",
+			"main",
+			"nav",
+			"header",
+			"footer",
+			"section[aria-label]",
+			"section[aria-labelledby]",
+			"article",
+			"table",
+			"img[alt]",
+			"[data-testid]",
+			"[data-test]",
+			`[role="alert"]`,
+			`[role="article"]`,
+			`[role="banner"]`,
+			`[role="complementary"]`,
+			`[role="contentinfo"]`,
+			`[role="dialog"]`,
+			`[role="figure"]`,
+			`[role="form"]`,
+			`[role="heading"]`,
+			`[role="img"]`,
+			`[role="main"]`,
+			`[role="navigation"]`,
+			`[role="region"]`,
+			`[role="search"]`,
+			`[role="status"]`,
+			`[role="table"]`,
+			`[role="toolbar"]`,
+		), ",")
+	default:
+		return strings.Join(current, ",")
+	}
 }
 
 func scopeTextExpression(scopeSelector string) string {
@@ -1392,7 +1452,7 @@ func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOpti
 			}
 		}
 		if opts.WithTree {
-			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector, layoutProperties), &treeJSON))
+			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector, layoutProperties, opts.NodeScope), &treeJSON))
 			if strings.TrimSpace(opts.ScopeSelector) != "" {
 				actions = append(actions, chromedp.Evaluate(scopeMetaExpression(opts.ScopeSelector), &scopeMeta))
 			}

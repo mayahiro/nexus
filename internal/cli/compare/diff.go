@@ -48,7 +48,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 		bounds := compareNodeBounds(node, options.CompareLayout)
 		matchBounds := compareNodeMatchingBounds(node)
 
-		nodes = append(nodes, compareSnapshotNode{
+		snapshotNode := compareSnapshotNode{
 			Fingerprint:   fingerprint,
 			Ref:           strings.TrimSpace(node.Ref),
 			Role:          strings.TrimSpace(node.Role),
@@ -73,7 +73,11 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Placeholder:   placeholder,
 			AriaLabel:     ariaLabel,
 			MatchBounds:   matchBounds,
-		})
+		}
+		if !compareNodeInScope(snapshotNode, options.NodeScope) {
+			continue
+		}
+		nodes = append(nodes, snapshotNode)
 	}
 
 	slices.SortFunc(nodes, func(a, b compareSnapshotNode) int {
@@ -165,7 +169,9 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 	}
 
 	matchResult := compareMatchNodes(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode)
+	report.Summary.AmbiguousMatchesSkipped = matchResult.AmbiguousSkipped
 	for _, match := range matchResult.Matches {
+		addCompareMatchSummary(&report.Summary, match)
 		oldNode := oldSnapshot.Nodes[match.OldIndex]
 		newNode := newSnapshot.Nodes[match.NewIndex]
 		addCompareMatchedNodeFindings(add, oldSnapshot, newSnapshot, oldNode, newNode, match)
@@ -193,6 +199,18 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 
 	report.Summary.Same = report.Summary.TotalFindings == 0
 	return report
+}
+
+func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {
+	summary.MatchedNodes++
+	switch {
+	case strings.HasPrefix(match.MatchedBy, "stable:"):
+		summary.StableMatches++
+	case match.MatchedBy == "heuristic":
+		summary.HeuristicMatches++
+	default:
+		summary.ExactMatches++
+	}
 }
 
 func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compareSnapshot, newSnapshot compareSnapshot, oldNode compareSnapshotNode, newNode compareSnapshotNode, match compareNodeMatch) {

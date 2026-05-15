@@ -125,6 +125,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --wa
 nxctl compare https://old.example.com/orders https://new.example.com/orders --scope-selector "aside.filters"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --old-scope-selector "#legacy-filters" --new-scope-selector "aside.filters"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode stable
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
@@ -150,7 +151,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `match_mode`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `compare_layout`, and `css_property` can be set in `defaults` and overridden per page.
+In compare manifests, `backend`, `viewport`, `match_mode`, `node_scope`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `compare_layout`, and `css_property` can be set in `defaults` and overridden per page.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -180,6 +181,7 @@ When a scope selector matches multiple elements, Nexus fails with short hints fo
 Use `--old-scope-selector` and `--new-scope-selector` when old and new pages need different subtree selectors.
 If one side-specific scope selector is set without the other, `--scope-selector` must provide the missing side's fallback.
 Use `--match-mode exact|stable|heuristic` to control node pairing. `exact` is the default and preserves fingerprint matching, `stable` uses unique identity keys such as `data-testid`, `id`, `href`, and labels before falling back to fingerprints, and `heuristic` adds conservative score-based matching for migration diffs.
+Use `--node-scope current|actionable|semantic` to control observed compare candidates. `current` is the default and preserves existing candidates, `actionable` focuses on controls, and `semantic` includes named or content-bearing semantic nodes such as headings, landmarks, status, and testid-tagged elements.
 Use `--compare-css` to compare a default computed-style allowlist on matching nodes.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
 Use `--compare-layout` when you want opt-in viewport-relative bounds findings for matching nodes, such as a button moving from center to left. Layout findings report observed placement changes; use `inspect --layout-context` when you need ancestor CSS context to investigate why the movement happened.
