@@ -38,6 +38,7 @@ Recommended passes:
 - actionable controls such as buttons, links, and form fields
 - container-scoped passes such as one filters sidebar or one hero section using `--scope-selector`
 - migration-scoped passes using `--old-scope-selector` and `--new-scope-selector` when old and new DOM structures differ
+- migration-friendly matching with `--match-mode stable` or `--match-mode heuristic`
 - important styles such as `color`, `background-color`, and `pointer-events`
 - significant visual placement changes using `--compare-layout`
 
@@ -61,6 +62,13 @@ Scoped compare:
 ```text
 nxctl compare https://old.example.com/products https://new.example.com/products --wait-selector '.ready' --scope-selector 'aside.filters' --compare-css --css-property width --css-property padding
 nxctl compare https://old.example.com/products https://new.example.com/products --old-scope-selector '#legacy-filters' --new-scope-selector 'aside.filters'
+```
+
+Migration-friendly matching:
+
+```text
+nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode stable
+nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode heuristic --scope-selector 'main'
 ```
 
 Session-to-session compare:
@@ -92,6 +100,17 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 ```
 
 `--compare-layout` reports significant viewport-relative bounds changes for matching nodes. It is useful for findings such as a control moving from center to left, but it does not infer the ancestor CSS change that caused the movement. Use `inspect --layout-context` for that follow-up.
+
+## Match Modes
+
+- `exact` is the default and preserves strict fingerprint-based matching
+- `stable` matches unique identity keys such as `data-testid`, `id`, `href`, form labels, role/name, attributes, placeholders, and then fingerprints
+- `heuristic` runs stable matching first, then only accepts mutual best score-based matches above the confidence threshold
+- use `stable` for migrations that preserve durable attributes but change text or implementation details
+- use `heuristic` when stable keys are incomplete and the scope is already narrow
+- if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
+
+JSON findings produced from stable or heuristic node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
 
 ## Failure Triage
 

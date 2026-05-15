@@ -11,7 +11,7 @@ import (
 
 func buildCompareSnapshot(observation api.Observation, options compareSnapshotOptions) compareSnapshot {
 	nodes := make([]compareSnapshotNode, 0, len(observation.Tree))
-	for _, node := range observation.Tree {
+	for originalIndex, node := range observation.Tree {
 		if matchesCompareSelectorRule(node, options.IgnoreNode) {
 			continue
 		}
@@ -31,31 +31,48 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 		value := normalizeCompareString(node.Value, options.IgnoreText)
 		href := normalizeCompareString(node.Attrs["href"], options.IgnoreText)
 		testID := normalizeCompareString(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), options.IgnoreText)
+		tag := normalizeCompareString(node.Attrs["tag"], options.IgnoreText)
+		idAttr := normalizeCompareString(node.Attrs["id"], options.IgnoreText)
+		nameAttr := normalizeCompareString(node.Attrs["name"], options.IgnoreText)
+		typeAttr := normalizeCompareString(node.Attrs["type"], options.IgnoreText)
+		placeholder := normalizeCompareString(node.Attrs["placeholder"], options.IgnoreText)
+		ariaLabel := normalizeCompareString(node.Attrs["aria-label"], options.IgnoreText)
 		if matchesCompareSelectorRule(node, options.MaskNode) {
 			name = ""
 			text = ""
 			value = ""
+			placeholder = ""
+			ariaLabel = ""
 		}
 		css := compareNodeCSS(node, options.CSSProperties)
 		bounds := compareNodeBounds(node, options.CompareLayout)
+		matchBounds := compareNodeMatchingBounds(node)
 
 		nodes = append(nodes, compareSnapshotNode{
-			Fingerprint: fingerprint,
-			Ref:         strings.TrimSpace(node.Ref),
-			Role:        strings.TrimSpace(node.Role),
-			Label:       compareNodeLabel(name, text, value, href, testID),
-			Name:        name,
-			Text:        text,
-			Value:       value,
-			Href:        href,
-			TestID:      testID,
-			CSS:         css,
-			Bounds:      bounds,
-			Visible:     node.Visible,
-			Enabled:     node.Enabled,
-			Editable:    node.Editable,
-			Selectable:  node.Selectable,
-			Invokable:   node.Invokable,
+			Fingerprint:   fingerprint,
+			Ref:           strings.TrimSpace(node.Ref),
+			Role:          strings.TrimSpace(node.Role),
+			Label:         compareNodeLabel(name, text, value, href, testID),
+			Name:          name,
+			Text:          text,
+			Value:         value,
+			Href:          href,
+			TestID:        testID,
+			CSS:           css,
+			Bounds:        bounds,
+			Visible:       node.Visible,
+			Enabled:       node.Enabled,
+			Editable:      node.Editable,
+			Selectable:    node.Selectable,
+			Invokable:     node.Invokable,
+			OriginalIndex: originalIndex,
+			Tag:           tag,
+			IDAttr:        idAttr,
+			NameAttr:      nameAttr,
+			TypeAttr:      typeAttr,
+			Placeholder:   placeholder,
+			AriaLabel:     ariaLabel,
+			MatchBounds:   matchBounds,
 		})
 	}
 
@@ -84,7 +101,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 	}
 }
 
-func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope) compareReport {
+func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string) compareReport {
 	report := compareReport{
 		Old:   oldSnapshot,
 		New:   newSnapshot,
@@ -147,147 +164,137 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 		})
 	}
 
-	oldGroups := groupCompareNodes(oldSnapshot.Nodes)
-	newGroups := groupCompareNodes(newSnapshot.Nodes)
-	keys := make([]string, 0, len(oldGroups)+len(newGroups))
-	seen := map[string]struct{}{}
-	for key := range oldGroups {
-		keys = append(keys, key)
-		seen[key] = struct{}{}
+	matchResult := compareMatchNodes(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode)
+	for _, match := range matchResult.Matches {
+		oldNode := oldSnapshot.Nodes[match.OldIndex]
+		newNode := newSnapshot.Nodes[match.NewIndex]
+		addCompareMatchedNodeFindings(add, oldSnapshot, newSnapshot, oldNode, newNode, match)
 	}
-	for key := range newGroups {
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		keys = append(keys, key)
+	for _, index := range matchResult.UnmatchedOld {
+		node := oldSnapshot.Nodes[index]
+		add(compareFinding{
+			Kind:        "missing_node",
+			Locator:     compareFindingLocator(&node, nil),
+			Fingerprint: node.Fingerprint,
+			Role:        node.Role,
+			Label:       node.Label,
+		})
 	}
-	slices.Sort(keys)
-
-	for _, key := range keys {
-		oldNodes := oldGroups[key]
-		newNodes := newGroups[key]
-		maxLen := len(oldNodes)
-		if len(newNodes) > maxLen {
-			maxLen = len(newNodes)
-		}
-		for i := 0; i < maxLen; i++ {
-			switch {
-			case i >= len(oldNodes):
-				node := newNodes[i]
-				add(compareFinding{
-					Kind:        "new_node",
-					Locator:     compareFindingLocator(nil, &node),
-					Fingerprint: node.Fingerprint,
-					Role:        node.Role,
-					Label:       node.Label,
-				})
-			case i >= len(newNodes):
-				node := oldNodes[i]
-				add(compareFinding{
-					Kind:        "missing_node",
-					Locator:     compareFindingLocator(&node, nil),
-					Fingerprint: node.Fingerprint,
-					Role:        node.Role,
-					Label:       node.Label,
-				})
-			default:
-				oldNode := oldNodes[i]
-				newNode := newNodes[i]
-				locator := compareFindingLocator(&oldNode, &newNode)
-				if oldNode.Name != newNode.Name {
-					add(compareFinding{
-						Kind:        "text_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       "name",
-						Old:         oldNode.Name,
-						New:         newNode.Name,
-					})
-				}
-				if oldNode.Text != newNode.Text {
-					add(compareFinding{
-						Kind:        "text_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       "text",
-						Old:         summarizeCompareValue(oldNode.Text),
-						New:         summarizeCompareValue(newNode.Text),
-					})
-				}
-				if oldNode.Value != newNode.Value {
-					add(compareFinding{
-						Kind:        "text_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       "value",
-						Old:         oldNode.Value,
-						New:         newNode.Value,
-					})
-				}
-				oldState := compareNodeState(oldNode)
-				newState := compareNodeState(newNode)
-				if oldState != newState {
-					add(compareFinding{
-						Kind:        "state_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       "state",
-						Old:         oldState,
-						New:         newState,
-					})
-				}
-				for _, property := range sortedCompareCSSPropertyKeys(oldNode.CSS, newNode.CSS) {
-					oldValue := strings.TrimSpace(oldNode.CSS[property])
-					newValue := strings.TrimSpace(newNode.CSS[property])
-					if oldValue == "" && newValue == "" {
-						continue
-					}
-					if oldValue == newValue {
-						continue
-					}
-					add(compareFinding{
-						Kind:        "css_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       property,
-						Old:         oldValue,
-						New:         newValue,
-					})
-				}
-				if compareNodeLayoutChanged(oldNode, newNode) {
-					severity := "info"
-					if compareNodeLayoutWarning(oldNode, newNode) {
-						severity = "warning"
-					}
-					add(compareFinding{
-						Kind:        "layout_changed",
-						Severity:    severity,
-						Impact:      "layout_changed",
-						Locator:     locator,
-						Fingerprint: oldNode.Fingerprint,
-						Role:        oldNode.Role,
-						Label:       firstNonEmpty(oldNode.Label, newNode.Label),
-						Field:       "bounds",
-						Old:         compareLayoutValue(oldNode, oldSnapshot.ReferenceBounds),
-						New:         compareLayoutValue(newNode, newSnapshot.ReferenceBounds),
-					})
-				}
-			}
-		}
+	for _, index := range matchResult.UnmatchedNew {
+		node := newSnapshot.Nodes[index]
+		add(compareFinding{
+			Kind:        "new_node",
+			Locator:     compareFindingLocator(nil, &node),
+			Fingerprint: node.Fingerprint,
+			Role:        node.Role,
+			Label:       node.Label,
+		})
 	}
 
 	report.Summary.Same = report.Summary.TotalFindings == 0
 	return report
+}
+
+func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compareSnapshot, newSnapshot compareSnapshot, oldNode compareSnapshotNode, newNode compareSnapshotNode, match compareNodeMatch) {
+	locator := compareFindingLocator(&oldNode, &newNode)
+	if oldNode.Name != newNode.Name {
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "text_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       "name",
+			Old:         oldNode.Name,
+			New:         newNode.Name,
+		}, match))
+	}
+	if oldNode.Text != newNode.Text {
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "text_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       "text",
+			Old:         summarizeCompareValue(oldNode.Text),
+			New:         summarizeCompareValue(newNode.Text),
+		}, match))
+	}
+	if oldNode.Value != newNode.Value {
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "text_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       "value",
+			Old:         oldNode.Value,
+			New:         newNode.Value,
+		}, match))
+	}
+	oldState := compareNodeState(oldNode)
+	newState := compareNodeState(newNode)
+	if oldState != newState {
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "state_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       "state",
+			Old:         oldState,
+			New:         newState,
+		}, match))
+	}
+	for _, property := range sortedCompareCSSPropertyKeys(oldNode.CSS, newNode.CSS) {
+		oldValue := strings.TrimSpace(oldNode.CSS[property])
+		newValue := strings.TrimSpace(newNode.CSS[property])
+		if oldValue == "" && newValue == "" {
+			continue
+		}
+		if oldValue == newValue {
+			continue
+		}
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "css_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       property,
+			Old:         oldValue,
+			New:         newValue,
+		}, match))
+	}
+	if compareNodeLayoutChanged(oldNode, newNode) {
+		severity := "info"
+		if compareNodeLayoutWarning(oldNode, newNode) {
+			severity = "warning"
+		}
+		add(compareFindingWithMatch(compareFinding{
+			Kind:        "layout_changed",
+			Severity:    severity,
+			Impact:      "layout_changed",
+			Locator:     locator,
+			Fingerprint: oldNode.Fingerprint,
+			Role:        oldNode.Role,
+			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
+			Field:       "bounds",
+			Old:         compareLayoutValue(oldNode, oldSnapshot.ReferenceBounds),
+			New:         compareLayoutValue(newNode, newSnapshot.ReferenceBounds),
+		}, match))
+	}
+}
+
+func compareFindingWithMatch(finding compareFinding, match compareNodeMatch) compareFinding {
+	if strings.TrimSpace(match.MatchedBy) == "" {
+		return finding
+	}
+	finding.MatchedBy = match.MatchedBy
+	finding.MatchScore = match.Score
+	finding.MatchReasons = append([]string(nil), match.Reasons...)
+	return finding
 }
 
 func groupCompareNodes(nodes []compareSnapshotNode) map[string][]compareSnapshotNode {
@@ -351,6 +358,14 @@ func compareNodeCSS(node api.Node, properties []string) map[string]string {
 
 func compareNodeBounds(node api.Node, enabled bool) *api.Rect {
 	if !enabled || !compareRectValid(node.Bounds) {
+		return nil
+	}
+	bounds := node.Bounds
+	return &bounds
+}
+
+func compareNodeMatchingBounds(node api.Node) *api.Rect {
+	if !compareRectValid(node.Bounds) {
 		return nil
 	}
 	bounds := node.Bounds

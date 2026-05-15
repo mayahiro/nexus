@@ -44,22 +44,30 @@ type compareSnapshot struct {
 }
 
 type compareSnapshotNode struct {
-	Fingerprint string            `json:"fingerprint"`
-	Ref         string            `json:"ref,omitempty"`
-	Role        string            `json:"role"`
-	Label       string            `json:"label,omitempty"`
-	Name        string            `json:"name,omitempty"`
-	Text        string            `json:"text,omitempty"`
-	Value       string            `json:"value,omitempty"`
-	Href        string            `json:"href,omitempty"`
-	TestID      string            `json:"testid,omitempty"`
-	CSS         map[string]string `json:"css,omitempty"`
-	Bounds      *api.Rect         `json:"bounds,omitempty"`
-	Visible     bool              `json:"visible"`
-	Enabled     bool              `json:"enabled"`
-	Editable    bool              `json:"editable"`
-	Selectable  bool              `json:"selectable"`
-	Invokable   bool              `json:"invokable"`
+	Fingerprint   string            `json:"fingerprint"`
+	Ref           string            `json:"ref,omitempty"`
+	Role          string            `json:"role"`
+	Label         string            `json:"label,omitempty"`
+	Name          string            `json:"name,omitempty"`
+	Text          string            `json:"text,omitempty"`
+	Value         string            `json:"value,omitempty"`
+	Href          string            `json:"href,omitempty"`
+	TestID        string            `json:"testid,omitempty"`
+	CSS           map[string]string `json:"css,omitempty"`
+	Bounds        *api.Rect         `json:"bounds,omitempty"`
+	Visible       bool              `json:"visible"`
+	Enabled       bool              `json:"enabled"`
+	Editable      bool              `json:"editable"`
+	Selectable    bool              `json:"selectable"`
+	Invokable     bool              `json:"invokable"`
+	OriginalIndex int               `json:"-"`
+	Tag           string            `json:"-"`
+	IDAttr        string            `json:"-"`
+	NameAttr      string            `json:"-"`
+	TypeAttr      string            `json:"-"`
+	Placeholder   string            `json:"-"`
+	AriaLabel     string            `json:"-"`
+	MatchBounds   *api.Rect         `json:"-"`
 }
 
 type compareSummary struct {
@@ -91,16 +99,19 @@ type compareScope struct {
 }
 
 type compareFinding struct {
-	Kind        string `json:"kind"`
-	Severity    string `json:"severity,omitempty"`
-	Impact      string `json:"impact,omitempty"`
-	Locator     string `json:"locator,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
-	Role        string `json:"role,omitempty"`
-	Label       string `json:"label,omitempty"`
-	Field       string `json:"field,omitempty"`
-	Old         string `json:"old,omitempty"`
-	New         string `json:"new,omitempty"`
+	Kind         string   `json:"kind"`
+	Severity     string   `json:"severity,omitempty"`
+	Impact       string   `json:"impact,omitempty"`
+	Locator      string   `json:"locator,omitempty"`
+	Fingerprint  string   `json:"fingerprint,omitempty"`
+	Role         string   `json:"role,omitempty"`
+	Label        string   `json:"label,omitempty"`
+	Field        string   `json:"field,omitempty"`
+	Old          string   `json:"old,omitempty"`
+	New          string   `json:"new,omitempty"`
+	MatchedBy    string   `json:"matched_by,omitempty"`
+	MatchScore   int      `json:"match_score,omitempty"`
+	MatchReasons []string `json:"match_reasons,omitempty"`
 }
 
 type compareReport struct {
@@ -119,6 +130,7 @@ type compareManifest struct {
 type compareManifestDefaults struct {
 	Backend          string   `json:"backend,omitempty"`
 	Viewport         string   `json:"viewport,omitempty"`
+	MatchMode        string   `json:"match_mode,omitempty"`
 	WaitSelector     string   `json:"wait_selector,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
 	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
@@ -142,6 +154,7 @@ type compareManifestPage struct {
 	NewSession       string   `json:"new_session,omitempty"`
 	Backend          *string  `json:"backend,omitempty"`
 	Viewport         *string  `json:"viewport,omitempty"`
+	MatchMode        *string  `json:"match_mode,omitempty"`
 	WaitSelector     *string  `json:"wait_selector,omitempty"`
 	ScopeSelector    *string  `json:"scope_selector,omitempty"`
 	OldScopeSelector *string  `json:"old_scope_selector,omitempty"`
@@ -187,6 +200,7 @@ type compareRun struct {
 	Backend          string
 	TargetRef        string
 	Viewport         string
+	MatchMode        string
 	WaitSelector     string
 	ScopeSelector    string
 	OldScopeSelector string
@@ -228,6 +242,7 @@ const compareURLReadyTimeout = 10 * time.Second
 const compareNetworkIdleWindow = 500 * time.Millisecond
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
+const defaultCompareMatchMode = "exact"
 const compareLayoutThreshold = 12
 const compareLayoutWarningThreshold = 48
 

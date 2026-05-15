@@ -101,6 +101,105 @@ func TestCompare(t *testing.T) {
 	}
 }
 
+func TestCompareMatchModeStable(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		sessionObservations: map[string]api.Observation{
+			"old": {
+				SessionID:   "old",
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "button|Save", Role: "button", Name: "Save", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"data-testid": "primary-action"}},
+				},
+			},
+			"new": {
+				SessionID:   "new",
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Orders",
+				Text:        "Orders",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "button|Submit", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true, Attrs: map[string]string{"data-testid": "primary-action"}},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--match-mode", "stable",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare stable exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report compareReportJSON
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected compare stable json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.TotalFindings != 1 || report.Summary.TextChanged != 1 || report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 {
+		t.Fatalf("unexpected stable summary: %+v", report.Summary)
+	}
+	if report.Findings[0].MatchedBy != "stable:testid" {
+		t.Fatalf("expected stable match metadata: %+v", report.Findings[0])
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestCompareMatchModeFlagValidation(t *testing.T) {
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--match-mode", "unknown",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected invalid match mode to fail")
+	}
+	if !strings.Contains(stdout.String(), "match-mode must be exact, stable, or heuristic") {
+		t.Fatalf("expected match-mode validation error, got %s", stdout.String())
+	}
+}
+
 func TestCompareSideSpecificScopeSelectors(t *testing.T) {
 	configureXDGTestEnv(t)
 

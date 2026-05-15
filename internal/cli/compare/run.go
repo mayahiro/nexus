@@ -35,6 +35,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	backend := fs.String("backend", "chromium", "browser backend")
 	targetRef := fs.String("target-ref", "", "target ref")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
+	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, or heuristic")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -90,6 +91,11 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		fmt.Fprintln(stderr, "limit must be a non-negative integer")
 		return 1
 	}
+	normalizedMatchMode, err := normalizeCompareMatchMode(*matchMode)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -108,6 +114,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		Backend:          *backend,
 		TargetRef:        *targetRef,
 		Viewport:         *viewport,
+		MatchMode:        normalizedMatchMode,
 		WaitSelector:     *waitSelector,
 		ScopeSelector:    *scopeSelector,
 		OldScopeSelector: *oldScopeSelector,
@@ -211,6 +218,10 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if run.WaitTimeout < 0 {
 		return compareReport{}, errors.New("wait-timeout must be a non-negative integer")
 	}
+	matchMode, err := normalizeCompareMatchMode(run.MatchMode)
+	if err != nil {
+		return compareReport{}, err
+	}
 
 	ignorePatterns, err := compileCompareRegexps(run.IgnoreTextRegex)
 	if err != nil {
@@ -302,6 +313,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 			CompareLayout: run.CompareLayout,
 		}),
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
+		matchMode,
 	), nil
 }
 

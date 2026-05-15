@@ -52,13 +52,16 @@ type compareSummaryJSON struct {
 }
 
 type compareFindingJSON struct {
-	Kind     string `json:"kind"`
-	Severity string `json:"severity"`
-	Impact   string `json:"impact"`
-	Locator  string `json:"locator"`
-	Field    string `json:"field"`
-	Old      string `json:"old"`
-	New      string `json:"new"`
+	Kind         string   `json:"kind"`
+	Severity     string   `json:"severity"`
+	Impact       string   `json:"impact"`
+	Locator      string   `json:"locator"`
+	Field        string   `json:"field"`
+	Old          string   `json:"old"`
+	New          string   `json:"new"`
+	MatchedBy    string   `json:"matched_by"`
+	MatchScore   int      `json:"match_score"`
+	MatchReasons []string `json:"match_reasons"`
 }
 
 type compareManifestReportJSON struct {
