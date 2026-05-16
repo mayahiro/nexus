@@ -10,11 +10,12 @@ import (
 )
 
 type compareReportJSON struct {
-	Old      compareSnapshotJSON  `json:"old"`
-	New      compareSnapshotJSON  `json:"new"`
-	Scope    *compareScopeJSON    `json:"scope"`
-	Summary  compareSummaryJSON   `json:"summary"`
-	Findings []compareFindingJSON `json:"findings"`
+	Old           compareSnapshotJSON       `json:"old"`
+	New           compareSnapshotJSON       `json:"new"`
+	Scope         *compareScopeJSON         `json:"scope"`
+	Summary       compareSummaryJSON        `json:"summary"`
+	Findings      []compareFindingJSON      `json:"findings"`
+	MatchingDebug *compareMatchingDebugJSON `json:"matching_debug"`
 }
 
 type compareScopeJSON struct {
@@ -68,6 +69,59 @@ type compareFindingJSON struct {
 	MatchedBy    string   `json:"matched_by"`
 	MatchScore   int      `json:"match_score"`
 	MatchReasons []string `json:"match_reasons"`
+}
+
+type compareMatchingDebugJSON struct {
+	Mode                    string                           `json:"mode"`
+	OldNodes                int                              `json:"old_nodes"`
+	NewNodes                int                              `json:"new_nodes"`
+	MatchedNodes            int                              `json:"matched_nodes"`
+	AmbiguousMatchesSkipped int                              `json:"ambiguous_matches_skipped"`
+	Matches                 []compareMatchingDebugMatchJSON  `json:"matches"`
+	Anchors                 []compareMatchingDebugAnchorJSON `json:"anchors"`
+	Regions                 []compareMatchingDebugRegionJSON `json:"regions"`
+	UnmatchedOld            []compareMatchingDebugNodeJSON   `json:"unmatched_old"`
+	UnmatchedNew            []compareMatchingDebugNodeJSON   `json:"unmatched_new"`
+}
+
+type compareMatchingDebugNodeJSON struct {
+	Index         int    `json:"index"`
+	OriginalIndex int    `json:"original_index"`
+	Ref           string `json:"ref"`
+	Locator       string `json:"locator"`
+	Role          string `json:"role"`
+	Label         string `json:"label"`
+	Fingerprint   string `json:"fingerprint"`
+}
+
+type compareMatchingDebugAnchorJSON struct {
+	Old       compareMatchingDebugNodeJSON `json:"old"`
+	New       compareMatchingDebugNodeJSON `json:"new"`
+	KeyKind   string                       `json:"key_kind"`
+	KeyValue  string                       `json:"key_value"`
+	MatchedBy string                       `json:"matched_by"`
+	Reasons   []string                     `json:"reasons"`
+}
+
+type compareMatchingDebugMatchJSON struct {
+	Old       compareMatchingDebugNodeJSON `json:"old"`
+	New       compareMatchingDebugNodeJSON `json:"new"`
+	MatchedBy string                       `json:"matched_by"`
+	Score     int                          `json:"score"`
+	Reasons   []string                     `json:"reasons"`
+}
+
+type compareMatchingDebugRegionJSON struct {
+	Index                 int `json:"index"`
+	OldStartOriginalIndex int `json:"old_start_original_index"`
+	OldEndOriginalIndex   int `json:"old_end_original_index"`
+	OldNodeCount          int `json:"old_node_count"`
+	NewStartOriginalIndex int `json:"new_start_original_index"`
+	NewEndOriginalIndex   int `json:"new_end_original_index"`
+	NewNodeCount          int `json:"new_node_count"`
+	ExactMatches          int `json:"exact_matches"`
+	HeuristicMatches      int `json:"heuristic_matches"`
+	AmbiguousSkipped      int `json:"ambiguous_skipped"`
 }
 
 type compareManifestReportJSON struct {

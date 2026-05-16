@@ -37,6 +37,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, heuristic, or histogram")
 	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
+	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -122,6 +123,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		Viewport:         *viewport,
 		MatchMode:        normalizedMatchMode,
 		NodeScope:        normalizedNodeScope,
+		MatchingDebug:    *matchingDebug,
 		WaitSelector:     *waitSelector,
 		ScopeSelector:    *scopeSelector,
 		OldScopeSelector: *oldScopeSelector,
@@ -308,7 +310,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		return compareReport{}, fmt.Errorf("new side %w", err)
 	}
 
-	return buildCompareReport(
+	return buildCompareReportWithDebug(
 		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
 			IgnoreText:    ignorePatterns,
 			IgnoreNode:    ignoreRules,
@@ -327,6 +329,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		}),
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
 		matchMode,
+		run.MatchingDebug,
 	), nil
 }
 

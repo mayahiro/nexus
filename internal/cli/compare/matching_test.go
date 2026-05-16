@@ -200,6 +200,57 @@ func TestCompareHistogramModeMatchesWithinAnchoredRegions(t *testing.T) {
 	}
 }
 
+func TestCompareMatchingDebugIncludesHistogramDetails(t *testing.T) {
+	report := buildCompareReportWithDebug(
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "heading|Billing", Role: "heading", Label: "Billing", Name: "Billing", Text: "Billing", Visible: true, Enabled: true, OriginalIndex: 0, Tag: "h2"},
+				{Fingerprint: "button|Save", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 1, Tag: "button"},
+				{Fingerprint: "heading|Profile", Role: "heading", Label: "Profile", Name: "Profile", Text: "Profile", Visible: true, Enabled: true, OriginalIndex: 2, Tag: "h2"},
+			},
+		},
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "heading|Billing", Role: "heading", Label: "Billing", Name: "Billing", Text: "Billing", Visible: true, Enabled: true, OriginalIndex: 0, Tag: "h2"},
+				{Fingerprint: "button|Save changes", Role: "button", Label: "Save changes", Name: "Save changes", Visible: true, Enabled: true, Invokable: true, OriginalIndex: 1, Tag: "button"},
+				{Fingerprint: "heading|Profile", Role: "heading", Label: "Profile", Name: "Profile", Text: "Profile", Visible: true, Enabled: true, OriginalIndex: 2, Tag: "h2"},
+			},
+		},
+		nil,
+		compareMatchModeHistogram,
+		true,
+	)
+
+	debug := report.MatchingDebug
+	if debug == nil {
+		t.Fatal("expected matching debug")
+	}
+	if debug.Mode != compareMatchModeHistogram || debug.OldNodes != 3 || debug.NewNodes != 3 || debug.MatchedNodes != 3 {
+		t.Fatalf("unexpected matching debug summary: %+v", debug)
+	}
+	hasHeuristicMatch := false
+	for _, match := range debug.Matches {
+		if match.MatchedBy == "histogram:heuristic" {
+			hasHeuristicMatch = true
+		}
+	}
+	if len(debug.Matches) != 3 || !hasHeuristicMatch {
+		t.Fatalf("expected matching debug pairs: %+v", debug.Matches)
+	}
+	if len(debug.Anchors) != 2 {
+		t.Fatalf("expected heading anchors: %+v", debug.Anchors)
+	}
+	if debug.Anchors[0].KeyKind != "role-name" || debug.Anchors[0].Old.Label != "Billing" {
+		t.Fatalf("unexpected first anchor: %+v", debug.Anchors[0])
+	}
+	if len(debug.Regions) != 1 || debug.Regions[0].HeuristicMatches != 1 {
+		t.Fatalf("expected one heuristic region: %+v", debug.Regions)
+	}
+	if len(debug.UnmatchedOld) != 0 || len(debug.UnmatchedNew) != 0 {
+		t.Fatalf("expected no unmatched nodes: %+v", debug)
+	}
+}
+
 func TestNormalizeCompareMatchMode(t *testing.T) {
 	for _, value := range []string{"", "exact", "stable", "heuristic", "histogram", " STABLE "} {
 		if _, err := normalizeCompareMatchMode(value); err != nil {
@@ -260,11 +311,15 @@ func TestCompareManifestMatchModeAndNodeScopeMerge(t *testing.T) {
 
 	heuristic := compareMatchModeHeuristic
 	semantic := compareNodeScopeSemantic
-	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable, NodeScope: compareNodeScopeActionable}, compareManifestPage{MatchMode: &heuristic, NodeScope: &semantic})
+	disabled := false
+	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable, NodeScope: compareNodeScopeActionable, MatchingDebug: true}, compareManifestPage{MatchMode: &heuristic, NodeScope: &semantic, MatchingDebug: &disabled})
 	if run.MatchMode != compareMatchModeHeuristic {
 		t.Fatalf("expected page match_mode override, got %q", run.MatchMode)
 	}
 	if run.NodeScope != compareNodeScopeSemantic {
 		t.Fatalf("expected page node_scope override, got %q", run.NodeScope)
+	}
+	if run.MatchingDebug {
+		t.Fatalf("expected page matching_debug override")
 	}
 }

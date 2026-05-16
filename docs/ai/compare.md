@@ -72,6 +72,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ma
 nxctl compare https://old.example.com/orders https://new.example.com/orders --match-mode heuristic --scope-selector 'main'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable --scope-selector 'main'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
 ```
 
 Session-to-session compare:
@@ -116,6 +117,19 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
 JSON findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+
+## Matching Debug
+
+Use `--matching-debug` when collecting false positive or false negative examples. It keeps plain terminal output unchanged and adds `matching_debug` to JSON and markdown reports.
+
+`matching_debug` includes:
+
+- `mode`
+- accepted `matches` with `matched_by`, score, and reasons
+- selected low-occurrence `anchors`
+- anchored `regions` with old/new original index ranges and match counts
+- `ambiguous_matches_skipped`
+- `unmatched_old` and `unmatched_new`
 
 ## Node Scopes
 

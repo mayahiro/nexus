@@ -106,6 +106,10 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 }
 
 func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string) compareReport {
+	return buildCompareReportWithDebug(oldSnapshot, newSnapshot, scope, matchMode, false)
+}
+
+func buildCompareReportWithDebug(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool) compareReport {
 	report := compareReport{
 		Old:   oldSnapshot,
 		New:   newSnapshot,
@@ -168,7 +172,10 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 		})
 	}
 
-	matchResult := compareMatchNodes(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode)
+	matchResult := compareMatchNodesWithDebug(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode, matchingDebug)
+	if matchingDebug {
+		report.MatchingDebug = matchResult.Debug
+	}
 	report.Summary.AmbiguousMatchesSkipped = matchResult.AmbiguousSkipped
 	for _, match := range matchResult.Matches {
 		addCompareMatchSummary(&report.Summary, match)

@@ -80,6 +80,7 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		Viewport:         base.Viewport,
 		MatchMode:        base.MatchMode,
 		NodeScope:        base.NodeScope,
+		MatchingDebug:    base.MatchingDebug,
 		WaitSelector:     base.WaitSelector,
 		ScopeSelector:    base.ScopeSelector,
 		OldScopeSelector: base.OldScopeSelector,
@@ -120,6 +121,9 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	}
 	if strings.TrimSpace(defaults.NodeScope) != "" {
 		run.NodeScope = strings.TrimSpace(defaults.NodeScope)
+	}
+	if defaults.MatchingDebug {
+		run.MatchingDebug = true
 	}
 	if defaults.WaitFunction != "" {
 		run.WaitFunction = defaults.WaitFunction
@@ -168,6 +172,9 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	}
 	if page.NodeScope != nil {
 		run.NodeScope = strings.TrimSpace(*page.NodeScope)
+	}
+	if page.MatchingDebug != nil {
+		run.MatchingDebug = *page.MatchingDebug
 	}
 	if page.WaitFunction != nil {
 		run.WaitFunction = strings.TrimSpace(*page.WaitFunction)

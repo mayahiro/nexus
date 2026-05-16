@@ -155,6 +155,7 @@ func TestCompareMatchModeStable(t *testing.T) {
 		"--old-session", "old",
 		"--new-session", "new",
 		"--match-mode", "stable",
+		"--matching-debug",
 		"--json",
 	}
 	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
@@ -173,6 +174,9 @@ func TestCompareMatchModeStable(t *testing.T) {
 	}
 	if report.Summary.StableMatches != 1 || report.Summary.MatchedNodes != 1 {
 		t.Fatalf("expected stable match summary: %+v", report.Summary)
+	}
+	if report.MatchingDebug == nil || report.MatchingDebug.Mode != "stable" || report.MatchingDebug.MatchedNodes != 1 {
+		t.Fatalf("expected matching debug: %+v", report.MatchingDebug)
 	}
 
 	cancel()

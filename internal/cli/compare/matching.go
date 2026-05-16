@@ -41,6 +41,7 @@ type compareNodeMatchResult struct {
 	UnmatchedOld     []int
 	UnmatchedNew     []int
 	AmbiguousSkipped int
+	Debug            *compareMatchingDebug
 }
 
 type compareStableIdentityKey struct {
@@ -88,6 +89,10 @@ func normalizeCompareMatchMode(value string) (string, error) {
 }
 
 func compareMatchNodes(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, mode string) compareNodeMatchResult {
+	return compareMatchNodesWithDebug(oldNodes, newNodes, mode, false)
+}
+
+func compareMatchNodesWithDebug(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, mode string, debug bool) compareNodeMatchResult {
 	normalized, err := normalizeCompareMatchMode(mode)
 	if err != nil {
 		normalized = defaultCompareMatchMode
@@ -95,24 +100,30 @@ func compareMatchNodes(oldNodes []compareSnapshotNode, newNodes []compareSnapsho
 
 	oldIndices := compareAllNodeIndices(oldNodes)
 	newIndices := compareAllNodeIndices(newNodes)
+	var result compareNodeMatchResult
 	switch normalized {
 	case compareMatchModeStable:
-		return compareStableNodeMatches(oldNodes, newNodes)
+		result = compareStableNodeMatches(oldNodes, newNodes)
 	case compareMatchModeHeuristic:
 		stable := compareStableNodeMatches(oldNodes, newNodes)
-		return compareHeuristicNodeMatches(oldNodes, newNodes, stable)
+		result = compareHeuristicNodeMatches(oldNodes, newNodes, stable)
 	case compareMatchModeHistogram:
-		return compareHistogramNodeMatches(oldNodes, newNodes)
+		result = compareHistogramNodeMatches(oldNodes, newNodes, debug)
 	default:
-		return compareExactNodeMatches(oldNodes, newNodes, oldIndices, newIndices, "", nil)
+		result = compareExactNodeMatches(oldNodes, newNodes, oldIndices, newIndices, "", nil)
 	}
+	if debug && result.Debug == nil {
+		result.Debug = buildCompareMatchingDebug(normalized, oldNodes, newNodes, result)
+	}
+	return result
 }
 
-func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) compareNodeMatchResult {
+func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, debug bool) compareNodeMatchResult {
 	anchors, ambiguous := compareHistogramAnchors(oldNodes, newNodes)
 	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
 	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
 	matches := make([]compareNodeMatch, 0, len(anchors))
+	regionsDebug := make([]compareMatchingDebugRegion, 0)
 
 	for _, anchor := range anchors {
 		if _, ok := unmatchedOld[anchor.OldIndex]; !ok {
@@ -131,7 +142,7 @@ func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 		})
 	}
 
-	for _, region := range compareHistogramRegions(oldNodes, newNodes, anchors, unmatchedOld, unmatchedNew) {
+	for regionIndex, region := range compareHistogramRegions(oldNodes, newNodes, anchors, unmatchedOld, unmatchedNew) {
 		exact := compareExactNodeMatches(oldNodes, newNodes, region.OldIndices, region.NewIndices, "histogram:fingerprint", []string{"fingerprint", "anchor-region"})
 		compareHistogramApplyMatches(exact.Matches, unmatchedOld, unmatchedNew)
 		matches = append(matches, exact.Matches...)
@@ -145,14 +156,23 @@ func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 		compareHistogramApplyMatches(heuristic.Matches, unmatchedOld, unmatchedNew)
 		matches = append(matches, heuristic.Matches...)
 		ambiguous += heuristic.AmbiguousSkipped
+		if debug {
+			regionsDebug = append(regionsDebug, buildCompareMatchingDebugRegion(regionIndex, oldNodes, newNodes, region, len(exact.Matches), len(heuristic.Matches), exact.AmbiguousSkipped+heuristic.AmbiguousSkipped))
+		}
 	}
 
-	return compareNodeMatchResult{
+	result := compareNodeMatchResult{
 		Matches:          matches,
 		UnmatchedOld:     compareSortedNodeIndexSet(unmatchedOld),
 		UnmatchedNew:     compareSortedNodeIndexSet(unmatchedNew),
 		AmbiguousSkipped: ambiguous,
 	}
+	if debug {
+		result.Debug = buildCompareMatchingDebug(compareMatchModeHistogram, oldNodes, newNodes, result)
+		result.Debug.Anchors = buildCompareMatchingDebugAnchors(oldNodes, newNodes, anchors)
+		result.Debug.Regions = regionsDebug
+	}
+	return result
 }
 
 func compareHistogramAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareHistogramAnchorCandidate, int) {

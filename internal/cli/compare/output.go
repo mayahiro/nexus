@@ -178,6 +178,7 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	if report.Summary.AmbiguousMatchesSkipped > 0 {
 		fmt.Fprintf(w, "- Ambiguous matches skipped: %d\n", report.Summary.AmbiguousMatchesSkipped)
 	}
+	printCompareMarkdownMatchingDebug(w, report.MatchingDebug, 2)
 	if report.Summary.Same {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "No significant differences.")
@@ -238,6 +239,7 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 		fmt.Fprintf(w, "- Critical: %d\n", page.Report.Summary.Critical)
 		fmt.Fprintf(w, "- Warning: %d\n", page.Report.Summary.Warning)
 		fmt.Fprintf(w, "- Info: %d\n", page.Report.Summary.Info)
+		printCompareMarkdownMatchingDebug(w, page.Report.MatchingDebug, 3)
 		if page.Report.Summary.Same {
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "No significant differences.")
@@ -263,6 +265,41 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 			case "layout_changed":
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
 			}
+		}
+	}
+}
+
+func printCompareMarkdownMatchingDebug(w io.Writer, debug *compareMatchingDebug, level int) {
+	if debug == nil {
+		return
+	}
+	heading := strings.Repeat("#", level)
+	childHeading := strings.Repeat("#", level+1)
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%s Matching Debug\n", heading)
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "- Mode: `%s`\n", debug.Mode)
+	fmt.Fprintf(w, "- Nodes: old %d / new %d\n", debug.OldNodes, debug.NewNodes)
+	fmt.Fprintf(w, "- Matched nodes: %d\n", debug.MatchedNodes)
+	fmt.Fprintf(w, "- Ambiguous skipped: %d\n", debug.AmbiguousMatchesSkipped)
+	fmt.Fprintf(w, "- Matches: %d\n", len(debug.Matches))
+	fmt.Fprintf(w, "- Anchors: %d\n", len(debug.Anchors))
+	fmt.Fprintf(w, "- Regions: %d\n", len(debug.Regions))
+	fmt.Fprintf(w, "- Unmatched: old %d / new %d\n", len(debug.UnmatchedOld), len(debug.UnmatchedNew))
+	if len(debug.Anchors) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s Anchors\n", childHeading)
+		fmt.Fprintln(w)
+		for _, anchor := range debug.Anchors {
+			fmt.Fprintf(w, "- `%s` `%s`: old `%s` -> new `%s`\n", anchor.KeyKind, anchor.KeyValue, anchor.Old.Label, anchor.New.Label)
+		}
+	}
+	if len(debug.Regions) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s Regions\n", childHeading)
+		fmt.Fprintln(w)
+		for _, region := range debug.Regions {
+			fmt.Fprintf(w, "- #%d old[%d..%d] nodes=%d new[%d..%d] nodes=%d exact=%d heuristic=%d ambiguous=%d\n", region.Index, region.OldStartOriginalIndex, region.OldEndOriginalIndex, region.OldNodeCount, region.NewStartOriginalIndex, region.NewEndOriginalIndex, region.NewNodeCount, region.ExactMatches, region.HeuristicMatches, region.AmbiguousSkipped)
 		}
 	}
 }
