@@ -165,6 +165,7 @@ type compareDecisionNormalizeSummary struct {
 	Errors            int    `json:"errors"`
 	Warnings          int    `json:"warnings"`
 	CompareJSONUsed   bool   `json:"compare_json_used"`
+	ReviewSummaryUsed bool   `json:"review_summary_used,omitempty"`
 }
 
 type compareDecisionNormalizeReport struct {

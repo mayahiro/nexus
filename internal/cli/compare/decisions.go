@@ -19,6 +19,7 @@ type compareDecision struct {
 	OldFingerprint string   `json:"old_fingerprint,omitempty"`
 	NewFingerprint string   `json:"new_fingerprint,omitempty"`
 	FindingID      string   `json:"finding_id,omitempty"`
+	ClusterKey     string   `json:"cluster_key,omitempty"`
 	Confidence     string   `json:"confidence,omitempty"`
 	MatchKind      string   `json:"match_kind,omitempty"`
 	Count          int      `json:"count,omitempty"`
@@ -118,6 +119,24 @@ func loadCompareReport(path string) (compareReport, error) {
 	return report, nil
 }
 
+func loadCompareFindingClusters(path string) ([]compareFindingCluster, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var summary struct {
+		FindingClusters []compareFindingCluster `json:"finding_clusters,omitempty"`
+	}
+	if err := json.Unmarshal(bytes, &summary); err != nil {
+		return nil, fmt.Errorf("invalid review summary %q: %w", path, err)
+	}
+	return summary.FindingClusters, nil
+}
+
 func writeCompareDecisionJSONL(path string, decisions []compareDecision) error {
 	file, err := os.Create(path)
 	if err != nil {
@@ -153,6 +172,78 @@ func normalizeCompareDecisions(decisions []compareDecision) ([]compareDecision, 
 		normalized = append(normalized, decision)
 	}
 	return normalized, duplicates
+}
+
+func normalizeCompareDecisionsWithClusters(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) ([]compareDecision, int) {
+	return normalizeCompareDecisions(materializeCompareClusterDecisions(decisions, compareReport, clusters))
+}
+
+func materializeCompareClusterDecisions(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) []compareDecision {
+	if len(decisions) == 0 {
+		return nil
+	}
+	materialized := make([]compareDecision, 0, len(decisions))
+	for _, decision := range decisions {
+		if !compareDecisionKindIsFindingCluster(decision.Kind) || !compareDecisionApplies(decision) {
+			materialized = append(materialized, decision)
+			continue
+		}
+		cluster, ok := compareFindDecisionFindingCluster(compareReport, clusters, decision.ClusterKey)
+		if !ok {
+			materialized = append(materialized, decision)
+			continue
+		}
+		for _, findingID := range cluster.FindingIDs {
+			next := decision
+			next.Kind = compareMaterializedFindingClusterKind(decision.Kind)
+			next.FindingID = findingID
+			next.ClusterKey = ""
+			next.Confidence = compareDecisionEffectiveConfidence(decision)
+			materialized = append(materialized, next)
+		}
+	}
+	return materialized
+}
+
+func compareDecisionKindIsFindingCluster(kind string) bool {
+	switch normalizeCompareDecisionToken(kind) {
+	case "accepted_finding_cluster", "regression_finding_cluster":
+		return true
+	default:
+		return false
+	}
+}
+
+func compareMaterializedFindingClusterKind(kind string) string {
+	switch normalizeCompareDecisionToken(kind) {
+	case "accepted_finding_cluster":
+		return "accepted_finding"
+	case "regression_finding_cluster":
+		return "regression_finding"
+	default:
+		return normalizeCompareDecisionToken(kind)
+	}
+}
+
+func compareFindDecisionFindingCluster(report *compareReport, clusters []compareFindingCluster, clusterKey string) (compareFindingCluster, bool) {
+	if report != nil {
+		if cluster, ok := compareFindFindingCluster(compareFindingClusters(report.Findings, ""), clusterKey); ok {
+			return cluster, true
+		}
+	}
+	return compareFindFindingCluster(clusters, clusterKey)
+}
+
+func compareFindFindingCluster(clusters []compareFindingCluster, clusterKey string) (compareFindingCluster, bool) {
+	if strings.TrimSpace(clusterKey) == "" {
+		return compareFindingCluster{}, false
+	}
+	for _, cluster := range clusters {
+		if cluster.Key == clusterKey || strings.TrimSpace(cluster.Key) == strings.TrimSpace(clusterKey) {
+			return cluster, true
+		}
+	}
+	return compareFindingCluster{}, false
 }
 
 func normalizeCompareDecision(decision compareDecision) compareDecision {
@@ -209,6 +300,8 @@ func compareDecisionDedupeKey(decision compareDecision) string {
 		return strings.Join([]string{decision.Kind, decision.New, decision.NewFingerprint, confidence}, "\x1f")
 	case "accepted_finding", "regression_finding":
 		return strings.Join([]string{decision.Kind, decision.FindingID, confidence}, "\x1f")
+	case "accepted_finding_cluster", "regression_finding_cluster":
+		return strings.Join([]string{decision.Kind, decision.ClusterKey, confidence}, "\x1f")
 	case "pattern":
 		return strings.Join(append([]string{decision.Kind, decision.Name}, decision.Matches...), "\x1f")
 	case "severity":
@@ -227,7 +320,7 @@ func compareDecisionEffectiveConfidence(decision compareDecision) string {
 		return decision.Confidence
 	}
 	switch decision.Kind {
-	case "accepted_removed", "regression_removed", "accepted_added", "unexpected_added", "accepted_finding", "regression_finding":
+	case "accepted_removed", "regression_removed", "accepted_added", "unexpected_added", "accepted_finding", "regression_finding", "accepted_finding_cluster", "regression_finding_cluster":
 		return "high"
 	default:
 		return ""
@@ -338,6 +431,11 @@ func compareAuditDecisionConflictTargets(decision compareDecision) []string {
 			return nil
 		}
 		return []string{"finding:" + strings.TrimSpace(decision.FindingID)}
+	case "accepted_finding_cluster", "regression_finding_cluster":
+		if strings.TrimSpace(decision.ClusterKey) == "" {
+			return nil
+		}
+		return []string{"finding_cluster:" + strings.TrimSpace(decision.ClusterKey)}
 	default:
 		return nil
 	}
@@ -359,7 +457,7 @@ func compareAuditDecisionCanApply(decision compareDecision) bool {
 	switch decision.Kind {
 	case "pair", "subtree_pair":
 		return decision.Confidence == "high"
-	case "accepted_removed", "regression_removed", "accepted_added", "unexpected_added", "accepted_finding", "regression_finding":
+	case "accepted_removed", "regression_removed", "accepted_added", "unexpected_added", "accepted_finding", "regression_finding", "accepted_finding_cluster", "regression_finding_cluster":
 		return compareDecisionApplies(decision)
 	default:
 		return false
@@ -681,6 +779,8 @@ func compareResolveFindingDecisionEffects(decisions []compareDecision) (compareF
 				return compareFindingDecisionEffects{}, fmt.Errorf("decision line %d: finding %q already has a decision effect", lineNumber, findingID)
 			}
 			effects.ByID[findingID] = compareDecisionEffectFor(decision.Kind)
+		case "accepted_finding_cluster", "regression_finding_cluster":
+			return compareFindingDecisionEffects{}, fmt.Errorf("decision line %d: finding cluster decisions must be materialized with compare normalize-decisions --compare-json before compare", lineNumber)
 		}
 	}
 	return effects, nil
@@ -771,7 +871,7 @@ func compareResolveDecisionNode(nodes []compareSnapshotNode, side string, ref st
 
 func compareDecisionKindSupported(kind string) bool {
 	switch kind {
-	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "accepted_finding", "regression_finding", "unknown", "pattern", "severity":
+	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "accepted_finding", "regression_finding", "accepted_finding_cluster", "regression_finding_cluster", "unknown", "pattern", "severity":
 		return true
 	default:
 		return false
@@ -788,6 +888,10 @@ func compareDecisionConfidenceSupported(confidence string) bool {
 }
 
 func validateCompareDecisions(decisions []compareDecision, compareReport *compareReport) compareDecisionValidationReport {
+	return validateCompareDecisionsWithClusters(decisions, compareReport, nil)
+}
+
+func validateCompareDecisionsWithClusters(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) compareDecisionValidationReport {
 	report := compareDecisionValidationReport{
 		Summary: compareDecisionValidationSummary{
 			TotalDecisions:  len(decisions),
@@ -841,6 +945,8 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 			validateCompareNewDecision(&report, addIssue, usedNewEffects, decision, index, compareReport)
 		case "accepted_finding", "regression_finding":
 			validateCompareFindingDecision(&report, addIssue, usedFindingEffects, decision, index, compareReport)
+		case "accepted_finding_cluster", "regression_finding_cluster":
+			validateCompareFindingClusterDecision(&report, addIssue, usedFindingEffects, decision, index, compareReport, clusters)
 		case "pattern":
 			if strings.TrimSpace(decision.Context) == "" && strings.TrimSpace(decision.Note) == "" && strings.TrimSpace(decision.Reason) == "" {
 				addIssue("warning", decision, index, "reason", "pattern decisions should include reason, note, or context")
@@ -1016,6 +1122,34 @@ func validateCompareFindingDecision(report *compareDecisionValidationReport, add
 		return
 	}
 	used[findingID] = compareDecisionLineNumber(decision, index)
+}
+
+func validateCompareFindingClusterDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), used map[string]int, decision compareDecision, index int, compareReport *compareReport, clusters []compareFindingCluster) {
+	if decision.Kind == "accepted_finding_cluster" {
+		report.Summary.AcceptedFindings++
+	}
+	if decision.Kind == "regression_finding_cluster" {
+		report.Summary.RegressionFindings++
+	}
+	if strings.TrimSpace(decision.ClusterKey) == "" {
+		addIssue("error", decision, index, "cluster_key", "finding cluster decisions require cluster_key")
+		return
+	}
+	if (compareReport == nil && len(clusters) == 0) || !compareDecisionApplies(decision) {
+		return
+	}
+	cluster, ok := compareFindDecisionFindingCluster(compareReport, clusters, decision.ClusterKey)
+	if !ok {
+		addIssue("error", decision, index, "cluster_key", "cluster_key was not found in compare report finding clusters")
+		return
+	}
+	for _, findingID := range cluster.FindingIDs {
+		if previousLine, ok := used[findingID]; ok {
+			addIssue("error", decision, index, "cluster_key", fmt.Sprintf("finding %q already has a decision effect from line %d", findingID, previousLine))
+			continue
+		}
+		used[findingID] = compareDecisionLineNumber(decision, index)
+	}
 }
 
 func compareReportHasFindingID(report *compareReport, findingID string) bool {

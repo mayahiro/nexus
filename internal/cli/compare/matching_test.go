@@ -3,6 +3,7 @@ package comparecmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -535,6 +536,94 @@ func TestRunCompareNormalizeDecisionsWritesOutput(t *testing.T) {
 	}
 	if first.SchemaVersion != 1 || first.Kind != "pair" || first.Old != "@e1" || first.Confidence != "high" || first.Reason != "first" {
 		t.Fatalf("unexpected normalized decision: %+v", first)
+	}
+}
+
+func TestRunCompareNormalizeDecisionsMaterializesFindingCluster(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	outputPath := filepath.Join(dir, "decisions.normalized.jsonl")
+	findings := []compareFinding{
+		{Kind: "layout_changed", FindingID: "layout_changed:a", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+		{Kind: "layout_changed", FindingID: "layout_changed:b", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+	}
+	clusterKey := compareFindingClusterKey(findings[0])
+	input := fmt.Sprintf(`{"kind":"accepted_finding_cluster","cluster_key":%q,"confidence":"high","reason":"ok"}`+"\n", clusterKey)
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{Findings: findings}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareNormalizeDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--output", outputPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected normalize to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionNormalizeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected normalize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.InputDecisions != 1 || report.Summary.OutputDecisions != 2 || report.Summary.Errors != 0 || !report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected normalize summary: %+v", report.Summary)
+	}
+	outputBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(outputBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two materialized decisions, got %q", string(outputBytes))
+	}
+	for i, line := range lines {
+		var decision compareDecision
+		if err := json.Unmarshal([]byte(line), &decision); err != nil {
+			t.Fatalf("expected materialized jsonl: %v\n%s", err, line)
+		}
+		if decision.Kind != "accepted_finding" || decision.FindingID != findings[i].FindingID || decision.ClusterKey != "" || decision.Confidence != "high" {
+			t.Fatalf("unexpected materialized decision: %+v", decision)
+		}
+	}
+}
+
+func TestRunCompareNormalizeDecisionsMaterializesFindingClusterFromReviewSummary(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	summaryPath := filepath.Join(dir, "review-summary.json")
+	outputPath := filepath.Join(dir, "decisions.normalized.jsonl")
+	findings := []compareFinding{
+		{Kind: "layout_changed", FindingID: "layout_changed:a", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+		{Kind: "layout_changed", FindingID: "layout_changed:b", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+	}
+	clusters := compareFindingClusters(findings, "dashboard")
+	input := fmt.Sprintf(`{"kind":"regression_finding_cluster","cluster_key":%q,"confidence":"high","reason":"regression"}`+"\n", clusters[0].Key)
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(summaryPath, compareReviewSummary{FindingClusters: clusters}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareNormalizeDecisions([]string{"--decisions-file", decisionsPath, "--review-summary", summaryPath, "--output", outputPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected normalize to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionNormalizeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected normalize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.OutputDecisions != 2 || !report.Summary.ReviewSummaryUsed || report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected normalize summary: %+v", report.Summary)
+	}
+	outputBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(outputBytes), `"kind":"regression_finding"`) || strings.Contains(string(outputBytes), "regression_finding_cluster") {
+		t.Fatalf("expected materialized regression finding decisions:\n%s", string(outputBytes))
 	}
 }
 

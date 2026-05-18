@@ -324,6 +324,7 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 
 	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to normalize")
 	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs, fingerprints, and finding ids")
+	reviewSummary := fs.String("review-summary", "", "review-summary.json used to materialize finding cluster decisions")
 	output := fs.String("output", "", "write normalized decisions JSONL to file")
 	asJSON := fs.Bool("json", false, "print normalization report as json")
 
@@ -345,7 +346,6 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	normalized, duplicates := normalizeCompareDecisions(decisions)
 
 	var loadedCompareReport *compareReport
 	if strings.TrimSpace(*compareJSON) != "" {
@@ -356,7 +356,13 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 		}
 		loadedCompareReport = &report
 	}
-	validation := validateCompareDecisions(normalized, loadedCompareReport)
+	reviewClusters, err := loadCompareFindingClusters(*reviewSummary)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	normalized, duplicates := normalizeCompareDecisionsWithClusters(decisions, loadedCompareReport, reviewClusters)
+	validation := validateCompareDecisionsWithClusters(normalized, loadedCompareReport, reviewClusters)
 	report := compareDecisionNormalizeReport{
 		Summary: compareDecisionNormalizeSummary{
 			InputDecisions:    len(decisions),
@@ -366,6 +372,7 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 			Errors:            validation.Summary.Errors,
 			Warnings:          validation.Summary.Warnings,
 			CompareJSONUsed:   validation.Summary.CompareJSONUsed,
+			ReviewSummaryUsed: len(reviewClusters) > 0,
 		},
 		Issues: validation.Issues,
 	}

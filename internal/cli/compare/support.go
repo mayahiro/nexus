@@ -46,8 +46,8 @@ func PrintValidateDecisionsHelp(w io.Writer) {
 }
 
 func PrintNormalizeDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--output <jsonl>] [--json]")
-	fmt.Fprintln(w, "normalizes compare decision JSONL tokens, removes duplicate decisions, and validates current refs/fingerprints/finding_ids when --compare-json is provided")
+	fmt.Fprintln(w, "usage: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "normalizes compare decision JSONL tokens, materializes finding-cluster decisions from --compare-json or --review-summary, removes duplicate decisions, and validates current refs/fingerprints/finding_ids")
 	fmt.Fprintln(w, "without --output, normalized JSONL is written to stdout unless --json is used")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)

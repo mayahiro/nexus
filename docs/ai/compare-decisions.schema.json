@@ -21,6 +21,8 @@
         "unexpected_added",
         "accepted_finding",
         "regression_finding",
+        "accepted_finding_cluster",
+        "regression_finding_cluster",
         "unknown",
         "pattern",
         "severity"
@@ -81,6 +83,9 @@
       "uniqueItems": true
     },
     "finding_id": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "cluster_key": {
       "$ref": "#/$defs/nonEmptyString"
     },
     "from": {
@@ -343,6 +348,19 @@
       "if": {
         "properties": {
           "kind": {
+            "enum": ["accepted_finding_cluster", "regression_finding_cluster"]
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["cluster_key"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
             "const": "pattern"
           }
         },
@@ -426,6 +444,13 @@
       "kind": "accepted_finding",
       "finding_id": "text_changed:3fa21c9d4b2a",
       "reason": "approved copy change"
+    },
+    {
+      "schema_version": 1,
+      "kind": "accepted_finding_cluster",
+      "cluster_key": "warning | layout_changed | layout_changed |  | bounds |  |  |  | ",
+      "confidence": "high",
+      "reason": "approved repeated layout shift"
     }
   ]
 }

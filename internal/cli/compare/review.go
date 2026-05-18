@@ -496,6 +496,7 @@ type compareManifestReviewHTMLCluster struct {
 type compareManifestReviewFindingDecision struct {
 	Kind       string `json:"kind"`
 	FindingID  string `json:"finding_id"`
+	ClusterKey string `json:"cluster_key,omitempty"`
 	Confidence string `json:"confidence"`
 	Reason     string `json:"reason"`
 }
@@ -653,8 +654,8 @@ func compareManifestReviewHTMLClusterFromSummary(rootDir string, directory compa
 		ExampleFindingID:   cluster.ExampleFindingID,
 		OldCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, cluster.ExampleFindingID, "old"),
 		NewCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, cluster.ExampleFindingID, "new"),
-		AcceptedDecision:   compareManifestReviewFindingDecisionJSONL("accepted_finding", cluster.ExampleFindingID),
-		RegressionDecision: compareManifestReviewFindingDecisionJSONL("regression_finding", cluster.ExampleFindingID),
+		AcceptedDecision:   compareManifestReviewClusterDecisionJSONL("accepted_finding_cluster", cluster.Key),
+		RegressionDecision: compareManifestReviewClusterDecisionJSONL("regression_finding_cluster", cluster.Key),
 	}
 }
 
@@ -900,6 +901,22 @@ func compareManifestReviewFindingDecisionJSONL(kind string, findingID string) st
 	bytes, err := json.Marshal(compareManifestReviewFindingDecision{
 		Kind:       kind,
 		FindingID:  findingID,
+		Confidence: "high",
+		Reason:     "",
+	})
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
+}
+
+func compareManifestReviewClusterDecisionJSONL(kind string, clusterKey string) string {
+	if strings.TrimSpace(clusterKey) == "" {
+		return ""
+	}
+	bytes, err := json.Marshal(compareManifestReviewFindingDecision{
+		Kind:       kind,
+		ClusterKey: clusterKey,
 		Confidence: "high",
 		Reason:     "",
 	})
