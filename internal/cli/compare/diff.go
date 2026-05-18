@@ -224,6 +224,7 @@ func applyCompareDecisionEffect(finding *compareFinding, effect compareDecisionE
 	if effect.Kind == "" {
 		return
 	}
+	finding.DecisionKind = effect.Kind
 	finding.MatchedBy = effect.MatchedBy
 	finding.MatchReasons = append([]string(nil), effect.Reasons...)
 	if effect.Severity != "" {

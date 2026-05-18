@@ -103,5 +103,5 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs human review"}
 ```
 
-Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` entries affect matching; other entries remain review notes.
+Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions are stamped back onto findings with `decision_kind`.
 Use `--output-decisions-template pair-decisions.todo.jsonl` to generate editable unknown pair stubs from ambiguous candidates. Validate the reviewed file with `nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json`; each line also matches `docs/ai/compare-decisions.schema.json`.

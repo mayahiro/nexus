@@ -137,8 +137,9 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. Non-high entries are accepted as review notes but are not used as anchors or matches.
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable `unknown` pair stubs from `matching_debug.ambiguous_candidates`.
-Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, duplicate high-confidence pairs, and current refs/fingerprints before rerunning compare.
-`accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `regression_removed` and `unexpected_added` keep the finding explicit with decision metadata.
+Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs, and current refs/fingerprints before rerunning compare.
+`accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `regression_removed` and `unexpected_added` keep the finding explicit with `decision_kind` metadata.
+Confidence is intentionally conservative in the current matcher: only `high` pair decisions become anchors, and finding decisions apply only when confidence is omitted or `high`. `tentative` and `unknown` stay in the JSONL as review evidence so later soft-match workflows can consume the same file format.
 
 ## Matching Debug
 

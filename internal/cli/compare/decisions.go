@@ -254,7 +254,7 @@ func compareResolveDecisionNode(nodes []compareSnapshotNode, side string, ref st
 
 func compareDecisionKindSupported(kind string) bool {
 	switch kind {
-	case "pair", "removed", "added", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "unknown", "pattern", "severity":
+	case "pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "unknown", "pattern", "severity":
 		return true
 	default:
 		return false
@@ -297,12 +297,26 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 	usedNewEffects := map[int]int{}
 
 	for index, decision := range decisions {
+		decision.Kind = normalizeCompareDecisionToken(decision.Kind)
+		decision.Confidence = normalizeCompareDecisionToken(decision.Confidence)
+		if decision.Kind == "" {
+			addIssue("error", decision, index, "kind", "decision kind is required")
+			continue
+		}
+		if !compareDecisionKindSupported(decision.Kind) {
+			addIssue("error", decision, index, "kind", fmt.Sprintf("unsupported decision kind %q", decision.Kind))
+			continue
+		}
+		if decision.Confidence != "" && !compareDecisionConfidenceSupported(decision.Confidence) {
+			addIssue("error", decision, index, "confidence", fmt.Sprintf("unsupported confidence %q", decision.Confidence))
+			continue
+		}
 		switch decision.Kind {
 		case "pair":
 			validateComparePairDecision(&report, addIssue, usedOldPairs, usedNewPairs, decision, index, compareReport)
-		case "accepted_removed", "regression_removed", "removed":
+		case "accepted_removed", "regression_removed":
 			validateCompareOldDecision(&report, addIssue, usedOldEffects, decision, index, compareReport)
-		case "accepted_added", "unexpected_added", "added":
+		case "accepted_added", "unexpected_added":
 			validateCompareNewDecision(&report, addIssue, usedNewEffects, decision, index, compareReport)
 		case "pattern":
 			if strings.TrimSpace(decision.Context) == "" && strings.TrimSpace(decision.Note) == "" && strings.TrimSpace(decision.Reason) == "" {

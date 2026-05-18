@@ -419,6 +419,37 @@ func TestRunCompareValidateDecisions(t *testing.T) {
 	}
 }
 
+func TestRunCompareValidateDecisionsRejectsUnknownKind(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "bad-decisions.jsonl")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"removed","old":"@e1","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected validation to reject unsupported kind:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `unsupported kind "removed"`) {
+		t.Fatalf("expected unsupported kind error, got:\n%s", stdout.String())
+	}
+}
+
+func TestValidateCompareDecisionsReportsUnknownKind(t *testing.T) {
+	validation := validateCompareDecisions([]compareDecision{
+		{Kind: "removed", Old: "@e1", Confidence: "high", Line: 1},
+		{Kind: "pair", Old: "@e1", New: "@e2", Confidence: "high", Line: 2},
+	}, nil)
+
+	if validation.Summary.Errors != 1 {
+		t.Fatalf("expected unknown kind error: %+v", validation)
+	}
+	if validation.Summary.HighPairs != 1 {
+		t.Fatalf("unsupported kind should not count as a high pair: %+v", validation.Summary)
+	}
+}
+
 func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	debug := &compareMatchingDebug{
 		AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
@@ -480,7 +511,7 @@ func TestAcceptedRemovedDecisionDowngradesMissingFinding(t *testing.T) {
 		t.Fatalf("expected one missing finding, got %+v", report.Findings)
 	}
 	finding := report.Findings[0]
-	if finding.MatchedBy != "decision:accepted_removed" || finding.Severity != "info" || finding.Impact != "accepted_removed" {
+	if finding.MatchedBy != "decision:accepted_removed" || finding.Severity != "info" || finding.Impact != "accepted_removed" || finding.DecisionKind != "accepted_removed" {
 		t.Fatalf("expected accepted removed metadata: %+v", finding)
 	}
 }

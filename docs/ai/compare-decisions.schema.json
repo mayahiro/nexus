@@ -14,8 +14,6 @@
       "type": "string",
       "enum": [
         "pair",
-        "removed",
-        "added",
         "accepted_removed",
         "accepted_added",
         "regression_removed",
@@ -179,7 +177,7 @@
       "if": {
         "properties": {
           "kind": {
-            "enum": ["removed", "accepted_removed", "regression_removed"]
+            "enum": ["accepted_removed", "regression_removed"]
           }
         },
         "required": ["kind"]
@@ -204,7 +202,7 @@
       "if": {
         "properties": {
           "kind": {
-            "enum": ["added", "accepted_added", "unexpected_added"]
+            "enum": ["accepted_added", "unexpected_added"]
           }
         },
         "required": ["kind"]

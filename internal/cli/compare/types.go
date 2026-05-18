@@ -109,6 +109,7 @@ type compareFinding struct {
 	Kind         string   `json:"kind"`
 	Severity     string   `json:"severity,omitempty"`
 	Impact       string   `json:"impact,omitempty"`
+	DecisionKind string   `json:"decision_kind,omitempty"`
 	Locator      string   `json:"locator,omitempty"`
 	Fingerprint  string   `json:"fingerprint,omitempty"`
 	Role         string   `json:"role,omitempty"`
