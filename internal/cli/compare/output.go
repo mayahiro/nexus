@@ -217,6 +217,38 @@ func printCompareDecisionNormalizeReport(w io.Writer, report compareDecisionNorm
 	}
 }
 
+func printCompareDecisionMaterializeReport(w io.Writer, report compareDecisionMaterializeReport) {
+	fmt.Fprintf(w, "input_decisions: %d\n", report.Summary.InputDecisions)
+	fmt.Fprintf(w, "output_decisions: %d\n", report.Summary.OutputDecisions)
+	fmt.Fprintf(w, "materialized_refs: %d\n", report.Summary.MaterializedRefs)
+	if report.Summary.Output != "" {
+		fmt.Fprintf(w, "output: %s\n", report.Summary.Output)
+	}
+	fmt.Fprintf(w, "compare_json_used: %t\n", report.Summary.CompareJSONUsed)
+	fmt.Fprintf(w, "errors: %d\n", report.Summary.Errors)
+	fmt.Fprintf(w, "warnings: %d\n", report.Summary.Warnings)
+	if len(report.Issues) == 0 {
+		fmt.Fprintln(w, "no decision issues")
+		return
+	}
+	fmt.Fprintln(w)
+	for _, issue := range report.Issues {
+		if issue.Line > 0 && issue.Field != "" {
+			fmt.Fprintf(w, "[%s] line %d %s: %s\n", issue.Severity, issue.Line, issue.Field, issue.Message)
+			continue
+		}
+		if issue.Line > 0 {
+			fmt.Fprintf(w, "[%s] line %d: %s\n", issue.Severity, issue.Line, issue.Message)
+			continue
+		}
+		if issue.Field != "" {
+			fmt.Fprintf(w, "[%s] %s: %s\n", issue.Severity, issue.Field, issue.Message)
+			continue
+		}
+		fmt.Fprintf(w, "[%s] %s\n", issue.Severity, issue.Message)
+	}
+}
+
 func printCompareDecisionAuditReport(w io.Writer, report compareDecisionAuditReport) {
 	fmt.Fprintf(w, "decisions: %d\n", report.Summary.TotalDecisions)
 	fmt.Fprintf(w, "applied: %d\n", report.Summary.Applied)

@@ -656,6 +656,107 @@ func TestRunCompareNormalizeDecisionsReportsStaleFindingID(t *testing.T) {
 	}
 }
 
+func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	outputPath := filepath.Join(dir, "decisions.materialized.jsonl")
+	input := strings.Join([]string{
+		`{"kind":"pair","old_locator":"role:button label:\"Save changes\"","new_locator":"href:/jobs","confidence":"high","reason":"same CTA"}`,
+		`{"kind":"accepted_removed","old_locator":"text \"Legacy only\"","reason":"intentional removal"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save changes", Name: "Save changes"},
+				{Fingerprint: "old-legacy", Ref: "@e3", Role: "link", Text: "Legacy only"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-jobs", Ref: "@e2", Role: "link", Label: "Jobs", Name: "Jobs", Href: "/jobs"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareMaterializeDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--output", outputPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected materialize to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionMaterializeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected materialize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.InputDecisions != 2 || report.Summary.OutputDecisions != 2 || report.Summary.MaterializedRefs != 3 || report.Summary.Errors != 0 || !report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected materialize summary: %+v", report.Summary)
+	}
+	outputBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(outputBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two materialized decisions, got %q", string(outputBytes))
+	}
+	var first compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("expected first materialized decision: %v\n%s", err, lines[0])
+	}
+	if first.Old != "@e1" || first.New != "@e2" || first.OldLocator == "" || first.NewLocator == "" {
+		t.Fatalf("unexpected first materialized decision: %+v", first)
+	}
+	var second compareDecision
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("expected second materialized decision: %v\n%s", err, lines[1])
+	}
+	if second.Kind != "accepted_removed" || second.Old != "@e3" || second.OldLocator == "" {
+		t.Fatalf("unexpected second materialized decision: %+v", second)
+	}
+}
+
+func TestRunCompareMaterializeDecisionsRejectsAmbiguousLocator(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"pair","old_locator":"role:button","new":"@e9","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-a", Ref: "@e1", Role: "button", Label: "Save", Name: "Save"},
+				{Fingerprint: "old-b", Ref: "@e2", Role: "button", Label: "Cancel", Name: "Cancel"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-save", Ref: "@e9", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareMaterializeDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected ambiguous locator to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionMaterializeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected materialize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 1 || report.Issues[0].Field != "old_locator" || !strings.Contains(report.Issues[0].Message, "matched 2 nodes") || !strings.Contains(report.Issues[0].Message, "@e1") {
+		t.Fatalf("expected ambiguous locator issue: %+v", report)
+	}
+}
+
 func TestRunCompareAuditDecisionsReportsAppliedPendingStaleAndConflicts(t *testing.T) {
 	dir := t.TempDir()
 	decisionsPath := filepath.Join(dir, "decisions.jsonl")

@@ -25,6 +25,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	if len(args) > 0 && args[0] == "normalize-decisions" {
 		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "materialize-decisions" {
+		return runCompareMaterializeDecisions(args[1:], stdout, stderr)
+	}
 	if len(args) > 0 && args[0] == "audit-decisions" {
 		return runCompareAuditDecisions(args[1:], stdout, stderr)
 	}
@@ -401,6 +404,103 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 		if len(report.Issues) > 0 {
 			fmt.Fprintln(stderr)
 			printCompareDecisionNormalizeReport(stderr, report)
+		}
+	}
+	if report.Summary.Errors > 0 {
+		return 1
+	}
+	return 0
+}
+
+func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		PrintMaterializeDecisionsHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("compare materialize-decisions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to materialize")
+	compareJSON := fs.String("compare-json", "", "compare report JSON used to resolve locators")
+	output := fs.String("output", "", "write materialized decisions JSONL to file")
+	asJSON := fs.Bool("json", false, "print materialization report as json")
+
+	if err := parseCommandFlags(fs, args, stderr, "compare materialize-decisions"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "compare materialize-decisions accepts only flags")
+		PrintMaterializeDecisionsHelp(stderr)
+		return 1
+	}
+	if strings.TrimSpace(*decisionsFile) == "" {
+		fmt.Fprintln(stderr, "compare materialize-decisions requires --decisions-file")
+		return 1
+	}
+	if strings.TrimSpace(*compareJSON) == "" {
+		fmt.Fprintln(stderr, "compare materialize-decisions requires --compare-json")
+		return 1
+	}
+
+	decisions, err := loadCompareDecisions(*decisionsFile)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	compareReport, err := loadCompareReport(*compareJSON)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	materialized, materializeIssues, materializedRefs := materializeCompareDecisionRefs(decisions, compareReport)
+	validation := compareDecisionValidationReport{}
+	if len(materializeIssues) == 0 {
+		validation = validateCompareDecisions(materialized, &compareReport)
+	}
+	issues := append([]compareDecisionValidationIssue{}, materializeIssues...)
+	issues = append(issues, validation.Issues...)
+	report := compareDecisionMaterializeReport{
+		Summary: compareDecisionMaterializeSummary{
+			InputDecisions:   len(decisions),
+			OutputDecisions:  len(materialized),
+			MaterializedRefs: materializedRefs,
+			Output:           strings.TrimSpace(*output),
+			CompareJSONUsed:  true,
+		},
+		Issues: issues,
+	}
+	for _, issue := range report.Issues {
+		if issue.Severity == "error" {
+			report.Summary.Errors++
+			continue
+		}
+		report.Summary.Warnings++
+	}
+
+	if report.Summary.Errors == 0 && report.Summary.Output != "" {
+		if err := writeCompareDecisionJSONL(report.Summary.Output, materialized); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else if report.Summary.Errors > 0 || report.Summary.Output != "" {
+		printCompareDecisionMaterializeReport(stdout, report)
+	} else {
+		if err := printCompareDecisionJSONL(stdout, materialized); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(report.Issues) > 0 {
+			fmt.Fprintln(stderr)
+			printCompareDecisionMaterializeReport(stderr, report)
 		}
 	}
 	if report.Summary.Errors > 0 {

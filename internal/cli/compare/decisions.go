@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
+	"unicode"
 )
 
 const compareDecisionMaxLineBytes = 1024 * 1024
@@ -16,6 +18,8 @@ type compareDecision struct {
 	Kind           string   `json:"kind,omitempty"`
 	Old            string   `json:"old,omitempty"`
 	New            string   `json:"new,omitempty"`
+	OldLocator     string   `json:"old_locator,omitempty"`
+	NewLocator     string   `json:"new_locator,omitempty"`
 	OldFingerprint string   `json:"old_fingerprint,omitempty"`
 	NewFingerprint string   `json:"new_fingerprint,omitempty"`
 	FindingID      string   `json:"finding_id,omitempty"`
@@ -178,6 +182,88 @@ func normalizeCompareDecisionsWithClusters(decisions []compareDecision, compareR
 	return normalizeCompareDecisions(materializeCompareClusterDecisions(decisions, compareReport, clusters))
 }
 
+func materializeCompareDecisionRefs(decisions []compareDecision, compareReport compareReport) ([]compareDecision, []compareDecisionValidationIssue, int) {
+	materialized := make([]compareDecision, 0, len(decisions))
+	issues := []compareDecisionValidationIssue{}
+	materializedRefs := 0
+
+	addIssue := func(decision compareDecision, index int, field string, message string) {
+		issues = append(issues, compareDecisionValidationIssue{
+			Severity: "error",
+			Line:     compareDecisionLineNumber(decision, index),
+			Field:    field,
+			Message:  message,
+		})
+	}
+
+	for index, decision := range decisions {
+		line := decision.Line
+		decision = normalizeCompareDecision(decision)
+		decision.Line = line
+
+		switch decision.Kind {
+		case "pair", "subtree_pair":
+			next, changed, err := materializeCompareDecisionSide(decision, compareReport.Old.Nodes, true)
+			if err != nil {
+				addIssue(decision, index, "old_locator", err.Error())
+			} else if changed {
+				decision = next
+				materializedRefs++
+			}
+			next, changed, err = materializeCompareDecisionSide(decision, compareReport.New.Nodes, false)
+			if err != nil {
+				addIssue(decision, index, "new_locator", err.Error())
+			} else if changed {
+				decision = next
+				materializedRefs++
+			}
+		case "accepted_removed", "regression_removed":
+			next, changed, err := materializeCompareDecisionSide(decision, compareReport.Old.Nodes, true)
+			if err != nil {
+				addIssue(decision, index, "old_locator", err.Error())
+			} else if changed {
+				decision = next
+				materializedRefs++
+			}
+		case "accepted_added", "unexpected_added":
+			next, changed, err := materializeCompareDecisionSide(decision, compareReport.New.Nodes, false)
+			if err != nil {
+				addIssue(decision, index, "new_locator", err.Error())
+			} else if changed {
+				decision = next
+				materializedRefs++
+			}
+		}
+		materialized = append(materialized, decision)
+	}
+
+	return materialized, issues, materializedRefs
+}
+
+func materializeCompareDecisionSide(decision compareDecision, nodes []compareSnapshotNode, oldSide bool) (compareDecision, bool, error) {
+	ref := decision.New
+	locator := decision.NewLocator
+	side := "new"
+	if oldSide {
+		ref = decision.Old
+		locator = decision.OldLocator
+		side = "old"
+	}
+	if !compareDecisionUnknownValue(ref) || strings.TrimSpace(locator) == "" {
+		return decision, false, nil
+	}
+	index, err := compareResolveDecisionLocator(nodes, side, locator)
+	if err != nil {
+		return decision, false, err
+	}
+	if oldSide {
+		decision.Old = strings.TrimSpace(nodes[index].Ref)
+	} else {
+		decision.New = strings.TrimSpace(nodes[index].Ref)
+	}
+	return decision, true, nil
+}
+
 func materializeCompareClusterDecisions(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) []compareDecision {
 	if len(decisions) == 0 {
 		return nil
@@ -253,6 +339,8 @@ func normalizeCompareDecision(decision compareDecision) compareDecision {
 	decision.Kind = normalizeCompareDecisionToken(decision.Kind)
 	decision.Old = strings.TrimSpace(decision.Old)
 	decision.New = strings.TrimSpace(decision.New)
+	decision.OldLocator = strings.TrimSpace(decision.OldLocator)
+	decision.NewLocator = strings.TrimSpace(decision.NewLocator)
 	decision.OldFingerprint = strings.TrimSpace(decision.OldFingerprint)
 	decision.NewFingerprint = strings.TrimSpace(decision.NewFingerprint)
 	decision.FindingID = strings.TrimSpace(decision.FindingID)
@@ -291,13 +379,13 @@ func compareDecisionDedupeKey(decision compareDecision) string {
 	confidence := compareDecisionEffectiveConfidence(decision)
 	switch decision.Kind {
 	case "pair":
-		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldFingerprint, decision.NewFingerprint, confidence}, "\x1f")
+		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldLocator, decision.NewLocator, decision.OldFingerprint, decision.NewFingerprint, confidence}, "\x1f")
 	case "subtree_pair":
-		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldFingerprint, decision.NewFingerprint, confidence, decision.MatchKind, fmt.Sprint(decision.Count)}, "\x1f")
+		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldLocator, decision.NewLocator, decision.OldFingerprint, decision.NewFingerprint, confidence, decision.MatchKind, fmt.Sprint(decision.Count)}, "\x1f")
 	case "accepted_removed", "regression_removed":
-		return strings.Join([]string{decision.Kind, decision.Old, decision.OldFingerprint, confidence}, "\x1f")
+		return strings.Join([]string{decision.Kind, decision.Old, decision.OldLocator, decision.OldFingerprint, confidence}, "\x1f")
 	case "accepted_added", "unexpected_added":
-		return strings.Join([]string{decision.Kind, decision.New, decision.NewFingerprint, confidence}, "\x1f")
+		return strings.Join([]string{decision.Kind, decision.New, decision.NewLocator, decision.NewFingerprint, confidence}, "\x1f")
 	case "accepted_finding", "regression_finding":
 		return strings.Join([]string{decision.Kind, decision.FindingID, confidence}, "\x1f")
 	case "accepted_finding_cluster", "regression_finding_cluster":
@@ -649,6 +737,12 @@ func compareResolvePairDecisionMatches(decisions []compareDecision, oldNodes []c
 }
 
 func compareBuildPairDecisionMatches(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
+	if err := compareRejectLocatorOnlyDecisionSide("old", decision.Old, decision.OldFingerprint, decision.OldLocator); err != nil {
+		return nil, err
+	}
+	if err := compareRejectLocatorOnlyDecisionSide("new", decision.New, decision.NewFingerprint, decision.NewLocator); err != nil {
+		return nil, err
+	}
 	oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
 	if err != nil {
 		return nil, err
@@ -669,6 +763,12 @@ func compareBuildPairDecisionMatches(decision compareDecision, oldNodes []compar
 func compareBuildSubtreePairDecisionMatches(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
 	if normalizeCompareDecisionMatchKind(decision.MatchKind) != "ordered_children" {
 		return nil, fmt.Errorf("subtree_pair decision requires match_kind ordered_children")
+	}
+	if err := compareRejectLocatorOnlyDecisionSide("old", decision.Old, decision.OldFingerprint, decision.OldLocator); err != nil {
+		return nil, err
+	}
+	if err := compareRejectLocatorOnlyDecisionSide("new", decision.New, decision.NewFingerprint, decision.NewLocator); err != nil {
+		return nil, err
 	}
 	oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
 	if err != nil {
@@ -738,6 +838,9 @@ func compareResolveDecisionEffects(decisions []compareDecision, oldNodes []compa
 		}
 		switch decision.Kind {
 		case "accepted_removed", "regression_removed":
+			if err := compareRejectLocatorOnlyDecisionSide("old", decision.Old, decision.OldFingerprint, decision.OldLocator); err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
 			oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
 			if err != nil {
 				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
@@ -747,6 +850,9 @@ func compareResolveDecisionEffects(decisions []compareDecision, oldNodes []compa
 			}
 			effects.Old[oldIndex] = compareDecisionEffectFor(decision.Kind)
 		case "accepted_added", "unexpected_added":
+			if err := compareRejectLocatorOnlyDecisionSide("new", decision.New, decision.NewFingerprint, decision.NewLocator); err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
 			newIndex, err := compareResolveDecisionNode(newNodes, "new", decision.New, decision.NewFingerprint)
 			if err != nil {
 				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
@@ -869,6 +975,309 @@ func compareResolveDecisionNode(nodes []compareSnapshotNode, side string, ref st
 	}
 }
 
+func compareResolveDecisionNodeOrLocator(nodes []compareSnapshotNode, side string, ref string, fingerprint string, locator string) (int, error) {
+	if !compareDecisionUnknownValue(ref) || strings.TrimSpace(fingerprint) != "" {
+		return compareResolveDecisionNode(nodes, side, ref, fingerprint)
+	}
+	if strings.TrimSpace(locator) != "" {
+		return compareResolveDecisionLocator(nodes, side, locator)
+	}
+	return compareResolveDecisionNode(nodes, side, ref, fingerprint)
+}
+
+type compareDecisionLocatorTerm struct {
+	Kind  string
+	Value string
+}
+
+func compareResolveDecisionLocator(nodes []compareSnapshotNode, side string, locator string) (int, error) {
+	terms, err := parseCompareDecisionLocator(locator)
+	if err != nil {
+		return -1, fmt.Errorf("%s locator %q is invalid: %w", side, strings.TrimSpace(locator), err)
+	}
+	matches := make([]int, 0, 1)
+	for index, node := range nodes {
+		if matchesCompareDecisionLocatorTerms(node, terms) {
+			matches = append(matches, index)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return -1, fmt.Errorf("%s locator %q matched no nodes", side, strings.TrimSpace(locator))
+	case 1:
+		if strings.TrimSpace(nodes[matches[0]].Ref) == "" {
+			return -1, fmt.Errorf("%s locator %q matched a node without ref", side, strings.TrimSpace(locator))
+		}
+		return matches[0], nil
+	default:
+		return -1, fmt.Errorf("%s locator %q matched %d nodes: %s", side, strings.TrimSpace(locator), len(matches), compareDecisionNodeHints(nodes, matches, 5))
+	}
+}
+
+func parseCompareDecisionLocator(locator string) ([]compareDecisionLocatorTerm, error) {
+	trimmed := strings.TrimSpace(locator)
+	if trimmed == "" {
+		return nil, fmt.Errorf("locator must not be empty")
+	}
+	if strings.HasPrefix(trimmed, "@e") && !strings.ContainsAny(trimmed, " \t\r\n:=&") {
+		return []compareDecisionLocatorTerm{{Kind: "ref", Value: trimmed}}, nil
+	}
+	if terms, ok, err := parseCompareDecisionHumanLocator(trimmed); ok || err != nil {
+		return terms, err
+	}
+
+	parts, err := splitCompareDecisionLocatorParts(trimmed)
+	if err != nil {
+		return nil, err
+	}
+	terms := make([]compareDecisionLocatorTerm, 0, len(parts))
+	for _, part := range parts {
+		term, err := parseCompareDecisionLocatorTerm(part)
+		if err != nil {
+			return nil, err
+		}
+		terms = append(terms, term)
+	}
+	if len(terms) == 0 {
+		return nil, fmt.Errorf("locator must include at least one term")
+	}
+	return terms, nil
+}
+
+func parseCompareDecisionHumanLocator(locator string) ([]compareDecisionLocatorTerm, bool, error) {
+	if strings.HasPrefix(locator, "role ") {
+		roleValue := strings.TrimSpace(strings.TrimPrefix(locator, "role "))
+		if roleValue == "" {
+			return nil, true, fmt.Errorf("role value must not be empty")
+		}
+		if role, rawName, ok := strings.Cut(roleValue, " --name "); ok {
+			name, err := unquoteCompareDecisionLocatorValue(rawName)
+			if err != nil {
+				return nil, true, err
+			}
+			return []compareDecisionLocatorTerm{
+				{Kind: "role", Value: strings.TrimSpace(role)},
+				{Kind: "name", Value: name},
+			}, true, nil
+		}
+		return []compareDecisionLocatorTerm{{Kind: "role", Value: roleValue}}, true, nil
+	}
+	for _, kind := range []string{"testid", "href", "label", "text"} {
+		prefix := kind + " "
+		if !strings.HasPrefix(locator, prefix) {
+			continue
+		}
+		value, err := unquoteCompareDecisionLocatorValue(strings.TrimSpace(strings.TrimPrefix(locator, prefix)))
+		if err != nil {
+			return nil, true, err
+		}
+		return []compareDecisionLocatorTerm{{Kind: kind, Value: value}}, true, nil
+	}
+	return nil, false, nil
+}
+
+func splitCompareDecisionLocatorParts(locator string) ([]string, error) {
+	if strings.Contains(locator, "&") {
+		rawParts := strings.Split(locator, "&")
+		parts := make([]string, 0, len(rawParts))
+		for _, part := range rawParts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				parts = append(parts, part)
+			}
+		}
+		return parts, nil
+	}
+	return splitCompareDecisionLocatorFields(locator)
+}
+
+func splitCompareDecisionLocatorFields(locator string) ([]string, error) {
+	parts := []string{}
+	var builder strings.Builder
+	inQuote := false
+	escaped := false
+	for _, char := range locator {
+		if escaped {
+			builder.WriteRune(char)
+			escaped = false
+			continue
+		}
+		if char == '\\' && inQuote {
+			builder.WriteRune(char)
+			escaped = true
+			continue
+		}
+		if char == '"' {
+			builder.WriteRune(char)
+			inQuote = !inQuote
+			continue
+		}
+		if unicode.IsSpace(char) && !inQuote {
+			part := strings.TrimSpace(builder.String())
+			if part != "" {
+				parts = append(parts, part)
+				builder.Reset()
+			}
+			continue
+		}
+		builder.WriteRune(char)
+	}
+	if inQuote {
+		return nil, fmt.Errorf("unterminated quoted value")
+	}
+	part := strings.TrimSpace(builder.String())
+	if part != "" {
+		parts = append(parts, part)
+	}
+	return parts, nil
+}
+
+func parseCompareDecisionLocatorTerm(value string) (compareDecisionLocatorTerm, error) {
+	raw := strings.TrimSpace(value)
+	separator := strings.IndexAny(raw, ":=")
+	if separator < 0 {
+		return compareDecisionLocatorTerm{}, fmt.Errorf("locator term %q must use key:value or key=value", raw)
+	}
+	kind := normalizeCompareDecisionLocatorKind(raw[:separator])
+	if kind == "" {
+		return compareDecisionLocatorTerm{}, fmt.Errorf("locator term %q has unsupported key", raw)
+	}
+	termValue, err := unquoteCompareDecisionLocatorValue(raw[separator+1:])
+	if err != nil {
+		return compareDecisionLocatorTerm{}, err
+	}
+	if termValue == "" {
+		return compareDecisionLocatorTerm{}, fmt.Errorf("locator term %q value must not be empty", raw)
+	}
+	return compareDecisionLocatorTerm{Kind: kind, Value: termValue}, nil
+}
+
+func normalizeCompareDecisionLocatorKind(kind string) string {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case "ref":
+		return "ref"
+	case "role":
+		return "role"
+	case "label":
+		return "label"
+	case "name":
+		return "name"
+	case "text":
+		return "text"
+	case "href":
+		return "href"
+	case "testid", "test_id", "data-testid", "data-test":
+		return "testid"
+	case "fingerprint":
+		return "fingerprint"
+	case "structure", "structure_key", "structure-key":
+		return "structure_key"
+	case "subtree", "subtree_signature", "subtree-signature":
+		return "subtree_signature"
+	case "locator":
+		return "locator"
+	default:
+		return ""
+	}
+}
+
+func unquoteCompareDecisionLocatorValue(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", nil
+	}
+	if len(trimmed) >= 2 && (trimmed[0] == '"' || trimmed[0] == '`') {
+		unquoted, err := strconv.Unquote(trimmed)
+		if err != nil {
+			return "", fmt.Errorf("invalid quoted value %q: %w", trimmed, err)
+		}
+		return strings.TrimSpace(unquoted), nil
+	}
+	return trimmed, nil
+}
+
+func matchesCompareDecisionLocatorTerms(node compareSnapshotNode, terms []compareDecisionLocatorTerm) bool {
+	for _, term := range terms {
+		if !matchesCompareDecisionLocatorTerm(node, term) {
+			return false
+		}
+	}
+	return true
+}
+
+func matchesCompareDecisionLocatorTerm(node compareSnapshotNode, term compareDecisionLocatorTerm) bool {
+	switch term.Kind {
+	case "ref":
+		return strings.TrimSpace(node.Ref) == term.Value
+	case "role":
+		return normalizeFindValue(node.Role) == normalizeFindValue(term.Value)
+	case "label":
+		return compareSelectorContains(node.Label, term.Value) || compareSelectorContains(node.Name, term.Value)
+	case "name":
+		return compareSelectorContains(node.Name, term.Value)
+	case "text":
+		return compareSelectorContains(node.Text, term.Value)
+	case "href":
+		return compareSelectorContains(node.Href, term.Value)
+	case "testid":
+		return compareSelectorContains(node.TestID, term.Value)
+	case "fingerprint":
+		return strings.TrimSpace(node.Fingerprint) == strings.TrimSpace(term.Value)
+	case "structure_key":
+		return strings.TrimSpace(node.StructureKey) == strings.TrimSpace(term.Value)
+	case "subtree_signature":
+		return strings.TrimSpace(node.SubtreeSignature) == strings.TrimSpace(term.Value)
+	case "locator":
+		return compareNodeLocator(node) == term.Value
+	default:
+		return false
+	}
+}
+
+func compareDecisionNodeHints(nodes []compareSnapshotNode, indices []int, limit int) string {
+	if limit <= 0 || limit > len(indices) {
+		limit = len(indices)
+	}
+	hints := make([]string, 0, limit)
+	for _, index := range indices[:limit] {
+		hints = append(hints, compareDecisionNodeHint(nodes[index]))
+	}
+	if len(indices) > limit {
+		hints = append(hints, fmt.Sprintf("+%d more", len(indices)-limit))
+	}
+	return strings.Join(hints, ", ")
+}
+
+func compareDecisionNodeHint(node compareSnapshotNode) string {
+	parts := []string{}
+	if strings.TrimSpace(node.Ref) != "" {
+		parts = append(parts, strings.TrimSpace(node.Ref))
+	}
+	if locator := compareNodeLocator(node); locator != "" {
+		parts = append(parts, locator)
+	} else if node.Role != "" {
+		parts = append(parts, "role="+node.Role)
+	}
+	if node.Label != "" && node.Label != node.Name {
+		parts = append(parts, "label="+compareShortDecisionHint(node.Label))
+	}
+	if node.Fingerprint != "" {
+		parts = append(parts, "fingerprint="+compareShortDecisionHint(node.Fingerprint))
+	}
+	if len(parts) == 0 {
+		return "<unlabeled>"
+	}
+	return strings.Join(parts, " ")
+}
+
+func compareShortDecisionHint(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if len(value) <= 80 {
+		return strconv.Quote(value)
+	}
+	return strconv.Quote(value[:77] + "...")
+}
+
 func compareDecisionKindSupported(kind string) bool {
 	switch kind {
 	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "accepted_finding", "regression_finding", "accepted_finding_cluster", "regression_finding_cluster", "unknown", "pattern", "severity":
@@ -971,22 +1380,25 @@ func validateComparePairDecision(report *compareDecisionValidationReport, addIss
 	default:
 		addIssue("error", decision, index, "confidence", "pair decisions require confidence high, tentative, or unknown")
 	}
-	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
-		addIssue("error", decision, index, "old", "pair decisions require old ref or old_fingerprint")
+	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" && strings.TrimSpace(decision.OldLocator) == "" {
+		addIssue("error", decision, index, "old", "pair decisions require old ref, old_fingerprint, or old_locator")
 	}
-	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && decision.Confidence != "unknown" {
-		addIssue("error", decision, index, "new", "pair decisions require new ref, new_fingerprint, or confidence unknown")
+	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && strings.TrimSpace(decision.NewLocator) == "" && decision.Confidence != "unknown" {
+		addIssue("error", decision, index, "new", "pair decisions require new ref, new_fingerprint, new_locator, or confidence unknown")
 	}
-	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" {
-		addIssue("error", decision, index, "new", "high-confidence pair decisions require a concrete new ref or new_fingerprint")
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && strings.TrimSpace(decision.NewLocator) == "" {
+		addIssue("error", decision, index, "new", "high-confidence pair decisions require a concrete new ref, new_fingerprint, or new_locator")
 	}
-	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
-		addIssue("error", decision, index, "old", "high-confidence pair decisions require a concrete old ref or old_fingerprint")
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" && strings.TrimSpace(decision.OldLocator) == "" {
+		addIssue("error", decision, index, "old", "high-confidence pair decisions require a concrete old ref, old_fingerprint, or old_locator")
 	}
 	if compareReport == nil || decision.Confidence != "high" {
+		if decision.Confidence == "high" {
+			validateCompareLocatorMaterializeHint(addIssue, decision, index)
+		}
 		return
 	}
-	oldIndex, err := compareResolveDecisionNode(compareReport.Old.Nodes, "old", decision.Old, decision.OldFingerprint)
+	oldIndex, err := compareResolveDecisionNodeOrLocator(compareReport.Old.Nodes, "old", decision.Old, decision.OldFingerprint, decision.OldLocator)
 	if err != nil {
 		addIssue("error", decision, index, "old", err.Error())
 	} else if previousLine, ok := usedOld[oldIndex]; ok {
@@ -994,7 +1406,7 @@ func validateComparePairDecision(report *compareDecisionValidationReport, addIss
 	} else {
 		usedOld[oldIndex] = compareDecisionLineNumber(decision, index)
 	}
-	newIndex, err := compareResolveDecisionNode(compareReport.New.Nodes, "new", decision.New, decision.NewFingerprint)
+	newIndex, err := compareResolveDecisionNodeOrLocator(compareReport.New.Nodes, "new", decision.New, decision.NewFingerprint, decision.NewLocator)
 	if err != nil {
 		addIssue("error", decision, index, "new", err.Error())
 	} else if previousLine, ok := usedNew[newIndex]; ok {
@@ -1002,6 +1414,7 @@ func validateComparePairDecision(report *compareDecisionValidationReport, addIss
 	} else {
 		usedNew[newIndex] = compareDecisionLineNumber(decision, index)
 	}
+	validateCompareLocatorMaterializeHint(addIssue, decision, index)
 }
 
 func validateCompareSubtreePairDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), usedOld map[int]int, usedNew map[int]int, decision compareDecision, index int, compareReport *compareReport) {
@@ -1017,22 +1430,30 @@ func validateCompareSubtreePairDecision(report *compareDecisionValidationReport,
 	if decision.Count < 0 {
 		addIssue("error", decision, index, "count", "subtree_pair count must be non-negative")
 	}
-	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
-		addIssue("error", decision, index, "old", "subtree_pair decisions require old ref or old_fingerprint")
+	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" && strings.TrimSpace(decision.OldLocator) == "" {
+		addIssue("error", decision, index, "old", "subtree_pair decisions require old ref, old_fingerprint, or old_locator")
 	}
-	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && decision.Confidence != "unknown" {
-		addIssue("error", decision, index, "new", "subtree_pair decisions require new ref, new_fingerprint, or confidence unknown")
+	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && strings.TrimSpace(decision.NewLocator) == "" && decision.Confidence != "unknown" {
+		addIssue("error", decision, index, "new", "subtree_pair decisions require new ref, new_fingerprint, new_locator, or confidence unknown")
 	}
-	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" {
-		addIssue("error", decision, index, "new", "high-confidence subtree_pair decisions require a concrete new ref or new_fingerprint")
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && strings.TrimSpace(decision.NewLocator) == "" {
+		addIssue("error", decision, index, "new", "high-confidence subtree_pair decisions require a concrete new ref, new_fingerprint, or new_locator")
 	}
-	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
-		addIssue("error", decision, index, "old", "high-confidence subtree_pair decisions require a concrete old ref or old_fingerprint")
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" && strings.TrimSpace(decision.OldLocator) == "" {
+		addIssue("error", decision, index, "old", "high-confidence subtree_pair decisions require a concrete old ref, old_fingerprint, or old_locator")
 	}
 	if compareReport == nil || decision.Confidence != "high" {
+		if decision.Confidence == "high" {
+			validateCompareLocatorMaterializeHint(addIssue, decision, index)
+		}
 		return
 	}
-	matches, err := compareBuildSubtreePairDecisionMatches(decision, compareReport.Old.Nodes, compareReport.New.Nodes)
+	resolvedDecision, err := compareDecisionWithResolvedLocators(decision, compareReport.Old.Nodes, compareReport.New.Nodes)
+	if err != nil {
+		addIssue("error", decision, index, "subtree_pair", err.Error())
+		return
+	}
+	matches, err := compareBuildSubtreePairDecisionMatches(resolvedDecision, compareReport.Old.Nodes, compareReport.New.Nodes)
 	if err != nil {
 		addIssue("error", decision, index, "subtree_pair", err.Error())
 		return
@@ -1050,20 +1471,24 @@ func validateCompareSubtreePairDecision(report *compareDecisionValidationReport,
 		usedOld[match.OldIndex] = lineNumber
 		usedNew[match.NewIndex] = lineNumber
 	}
+	validateCompareLocatorMaterializeHint(addIssue, decision, index)
 }
 
 func validateCompareOldDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), used map[int]int, decision compareDecision, index int, compareReport *compareReport) {
 	if decision.Kind == "accepted_removed" {
 		report.Summary.AcceptedRemoved++
 	}
-	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
-		addIssue("error", decision, index, "old", "removed decisions require old ref or old_fingerprint")
+	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" && strings.TrimSpace(decision.OldLocator) == "" {
+		addIssue("error", decision, index, "old", "removed decisions require old ref, old_fingerprint, or old_locator")
 		return
 	}
 	if compareReport == nil || !compareDecisionApplies(decision) {
+		if compareDecisionApplies(decision) {
+			validateCompareLocatorMaterializeHint(addIssue, decision, index)
+		}
 		return
 	}
-	oldIndex, err := compareResolveDecisionNode(compareReport.Old.Nodes, "old", decision.Old, decision.OldFingerprint)
+	oldIndex, err := compareResolveDecisionNodeOrLocator(compareReport.Old.Nodes, "old", decision.Old, decision.OldFingerprint, decision.OldLocator)
 	if err != nil {
 		addIssue("error", decision, index, "old", err.Error())
 		return
@@ -1073,20 +1498,24 @@ func validateCompareOldDecision(report *compareDecisionValidationReport, addIssu
 		return
 	}
 	used[oldIndex] = compareDecisionLineNumber(decision, index)
+	validateCompareLocatorMaterializeHint(addIssue, decision, index)
 }
 
 func validateCompareNewDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), used map[int]int, decision compareDecision, index int, compareReport *compareReport) {
 	if decision.Kind == "accepted_added" {
 		report.Summary.AcceptedAdded++
 	}
-	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" {
-		addIssue("error", decision, index, "new", "added decisions require new ref or new_fingerprint")
+	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && strings.TrimSpace(decision.NewLocator) == "" {
+		addIssue("error", decision, index, "new", "added decisions require new ref, new_fingerprint, or new_locator")
 		return
 	}
 	if compareReport == nil || !compareDecisionApplies(decision) {
+		if compareDecisionApplies(decision) {
+			validateCompareLocatorMaterializeHint(addIssue, decision, index)
+		}
 		return
 	}
-	newIndex, err := compareResolveDecisionNode(compareReport.New.Nodes, "new", decision.New, decision.NewFingerprint)
+	newIndex, err := compareResolveDecisionNodeOrLocator(compareReport.New.Nodes, "new", decision.New, decision.NewFingerprint, decision.NewLocator)
 	if err != nil {
 		addIssue("error", decision, index, "new", err.Error())
 		return
@@ -1096,6 +1525,7 @@ func validateCompareNewDecision(report *compareDecisionValidationReport, addIssu
 		return
 	}
 	used[newIndex] = compareDecisionLineNumber(decision, index)
+	validateCompareLocatorMaterializeHint(addIssue, decision, index)
 }
 
 func validateCompareFindingDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), used map[string]int, decision compareDecision, index int, compareReport *compareReport) {
@@ -1150,6 +1580,39 @@ func validateCompareFindingClusterDecision(report *compareDecisionValidationRepo
 		}
 		used[findingID] = compareDecisionLineNumber(decision, index)
 	}
+}
+
+func validateCompareLocatorMaterializeHint(addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int) {
+	if compareDecisionHasOnlyLocator(decision.Old, decision.OldFingerprint, decision.OldLocator) {
+		addIssue("warning", decision, index, "old_locator", "locator-only decisions should be materialized with compare materialize-decisions before compare")
+	}
+	if compareDecisionHasOnlyLocator(decision.New, decision.NewFingerprint, decision.NewLocator) {
+		addIssue("warning", decision, index, "new_locator", "locator-only decisions should be materialized with compare materialize-decisions before compare")
+	}
+}
+
+func compareDecisionHasOnlyLocator(ref string, fingerprint string, locator string) bool {
+	return compareDecisionUnknownValue(ref) && strings.TrimSpace(fingerprint) == "" && strings.TrimSpace(locator) != ""
+}
+
+func compareRejectLocatorOnlyDecisionSide(side string, ref string, fingerprint string, locator string) error {
+	if !compareDecisionHasOnlyLocator(ref, fingerprint, locator) {
+		return nil
+	}
+	return fmt.Errorf("%s locator-only decision must be materialized with compare materialize-decisions before compare", side)
+}
+
+func compareDecisionWithResolvedLocators(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) (compareDecision, error) {
+	next, _, err := materializeCompareDecisionSide(decision, oldNodes, true)
+	if err != nil {
+		return decision, err
+	}
+	decision = next
+	next, _, err = materializeCompareDecisionSide(decision, newNodes, false)
+	if err != nil {
+		return decision, err
+	}
+	return next, nil
 }
 
 func compareReportHasFindingID(report *compareReport, findingID string) bool {

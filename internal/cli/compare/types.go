@@ -173,6 +173,21 @@ type compareDecisionNormalizeReport struct {
 	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
 }
 
+type compareDecisionMaterializeSummary struct {
+	InputDecisions   int    `json:"input_decisions"`
+	OutputDecisions  int    `json:"output_decisions"`
+	MaterializedRefs int    `json:"materialized_refs"`
+	Output           string `json:"output,omitempty"`
+	Errors           int    `json:"errors"`
+	Warnings         int    `json:"warnings"`
+	CompareJSONUsed  bool   `json:"compare_json_used"`
+}
+
+type compareDecisionMaterializeReport struct {
+	Summary compareDecisionMaterializeSummary `json:"summary"`
+	Issues  []compareDecisionValidationIssue  `json:"issues,omitempty"`
+}
+
 type compareDecisionAuditSummary struct {
 	TotalDecisions  int  `json:"total_decisions"`
 	Applied         int  `json:"applied"`

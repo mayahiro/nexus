@@ -15,7 +15,8 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
 	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
@@ -23,6 +24,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "matching: --match-mode exact preserves fingerprint matching, stable uses unique identity keys, heuristic adds conservative fuzzy matching, histogram experimentally anchors low-occurrence semantic keys before local matching")
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
 	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
+	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator fields to current refs before compare")
 	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
 	fmt.Fprintln(w, "review packet: --review-dir writes compare.json, compare.md, decision templates, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
@@ -49,6 +51,15 @@ func PrintNormalizeDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "normalizes compare decision JSONL tokens, materializes finding-cluster decisions from --compare-json or --review-summary, removes duplicate decisions, and validates current refs/fingerprints/finding_ids")
 	fmt.Fprintln(w, "without --output, normalized JSONL is written to stdout unless --json is used")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "compare guide", aiCompareDocURL)
+}
+
+func PrintMaterializeDecisionsHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "resolves old_locator and new_locator fields against compare JSON nodes and writes decisions with concrete old/new refs")
+	fmt.Fprintln(w, "locator terms support @eN, role:button, name:Save, label:Save, text:Login, href:/jobs, testid:submit, fingerprint:<value>, and role=button&name=Save")
+	fmt.Fprintln(w, "without --output, materialized JSONL is written to stdout unless --json is used")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }

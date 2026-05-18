@@ -76,6 +76,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ol
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
+nxctl compare materialize-decisions --decisions-file pair-decisions.locators.jsonl --compare-json compare-debug.json --output pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug --output-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
@@ -103,11 +104,13 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 
 ```jsonl
 {"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"same role/name and nearby bbox"}
+{"kind":"pair","old_locator":"role:button label:\"Save changes\"","new_locator":"href:/jobs","confidence":"high","reason":"same CTA"}
 {"kind":"subtree_pair","old":"@e40","new":"@e72","confidence":"high","match_kind":"ordered_children","count":12,"reason":"same link list region"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs human review"}
 {"kind":"accepted_finding","finding_id":"text_changed:3fa21c9d4b2a","reason":"approved copy change"}
 ```
 
+When a decision uses `old_locator` or `new_locator`, first run `nxctl compare materialize-decisions --decisions-file pair-decisions.locators.jsonl --compare-json compare-debug.json --output pair-decisions.jsonl`. Each locator must match exactly one compare JSON node, then the command writes the concrete `old` or `new` ref.
 Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
 Use `--review-dir review/orders` when starting a review pass to produce `compare.json`, `compare.md`, pair and finding decision templates, full-page screenshots, cropped finding screenshots, repeated finding clusters, and `review-summary.json` together.
 For a manifest run, use `nxctl compare --manifest migration-pages.json --review-dir review/migration` to produce manifest-level summaries, `review-index.md`, `review-index.html`, and one review packet directory per page. Start with `review-index.md` to prioritize pages with critical or warning findings, or open `review-index.html` for a static side-by-side screenshot overview with repeated finding clusters, cropped finding screenshots, finding IDs, and copyable decision JSONL stubs visible.
