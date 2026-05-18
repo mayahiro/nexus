@@ -28,6 +28,8 @@ const (
 	compareStablePriorityAttr
 	compareStablePriorityPlaceholder
 	compareStablePriorityFingerprint
+	compareHistogramPriorityStructureKey
+	compareHistogramPrioritySubtreeSignature
 )
 
 type compareNodeMatch struct {
@@ -259,7 +261,7 @@ func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes [
 	ambiguous := 0
 	ambiguousCandidates := make([]compareAmbiguousCandidate, 0)
 
-	for priority := compareStablePriorityTestID; priority <= compareStablePriorityFingerprint; priority++ {
+	for priority := compareStablePriorityTestID; priority <= compareHistogramPrioritySubtreeSignature; priority++ {
 		oldByKey := compareStableKeyIndex(oldNodes, oldSet, priority)
 		newByKey := compareStableKeyIndex(newNodes, newSet, priority)
 		keys := compareSharedStableKeys(oldByKey, newByKey)
@@ -636,7 +638,7 @@ func compareSharedStableKeys(oldByKey map[compareStableIdentityKey][]int, newByK
 }
 
 func compareStableIdentityKeys(node compareSnapshotNode) []compareStableIdentityKey {
-	keys := make([]compareStableIdentityKey, 0, 8)
+	keys := make([]compareStableIdentityKey, 0, 10)
 	role := strings.ToLower(strings.TrimSpace(node.Role))
 	tag := strings.ToLower(strings.TrimSpace(node.Tag))
 	appendKey := func(priority int, kind string, parts ...string) {
@@ -671,6 +673,8 @@ func compareStableIdentityKeys(node compareSnapshotNode) []compareStableIdentity
 	}
 	appendKey(compareStablePriorityPlaceholder, "placeholder", role, node.Placeholder)
 	appendKey(compareStablePriorityFingerprint, "fingerprint", node.Fingerprint)
+	appendKey(compareHistogramPriorityStructureKey, "structure-key", node.StructureKey)
+	appendKey(compareHistogramPrioritySubtreeSignature, "subtree-signature", node.SubtreeSignature)
 	return keys
 }
 
@@ -1142,6 +1146,8 @@ func compareAmbiguousEvidence(oldNode compareSnapshotNode, newNode compareSnapsh
 	addField("placeholder", oldNode.Placeholder, newNode.Placeholder)
 	addField("aria-label", oldNode.AriaLabel, newNode.AriaLabel)
 	addField("fingerprint", oldNode.Fingerprint, newNode.Fingerprint)
+	addField("structure-key", oldNode.StructureKey, newNode.StructureKey)
+	addField("subtree-signature", oldNode.SubtreeSignature, newNode.SubtreeSignature)
 	addField("state", compareNodeState(oldNode), compareNodeState(newNode))
 	if oldNode.MatchBounds != nil && newNode.MatchBounds != nil {
 		if compareLayoutCenterScore(oldNode, newNode) > 0 {

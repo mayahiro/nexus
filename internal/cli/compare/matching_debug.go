@@ -125,19 +125,21 @@ func buildCompareMatchingDebugNode(nodes []compareSnapshotNode, index int, oldSi
 		locator = compareFindingLocator(nil, &node)
 	}
 	return compareMatchingDebugNode{
-		Index:         index,
-		OriginalIndex: node.OriginalIndex,
-		Ref:           node.Ref,
-		Locator:       locator,
-		Role:          node.Role,
-		Label:         node.Label,
-		Name:          node.Name,
-		Text:          node.Text,
-		Href:          node.Href,
-		TestID:        node.TestID,
-		AriaLabel:     node.AriaLabel,
-		Fingerprint:   node.Fingerprint,
-		Bounds:        node.MatchBounds,
+		Index:            index,
+		OriginalIndex:    node.OriginalIndex,
+		Ref:              node.Ref,
+		Locator:          locator,
+		Role:             node.Role,
+		Label:            node.Label,
+		Name:             node.Name,
+		Text:             node.Text,
+		Href:             node.Href,
+		TestID:           node.TestID,
+		AriaLabel:        node.AriaLabel,
+		Fingerprint:      node.Fingerprint,
+		StructureKey:     node.StructureKey,
+		SubtreeSignature: node.SubtreeSignature,
+		Bounds:           node.MatchBounds,
 	}
 }
 

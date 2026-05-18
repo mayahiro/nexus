@@ -218,8 +218,24 @@ func TestCompareNodeScopeFlagValidation(t *testing.T) {
 	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected invalid node scope to fail")
 	}
-	if !strings.Contains(stdout.String(), "node-scope must be current, actionable, or semantic") {
+	if !strings.Contains(stdout.String(), "node-scope must be current, actionable, semantic, or all") {
 		t.Fatalf("expected node-scope validation error, got %s", stdout.String())
+	}
+}
+
+func TestCompareAllNodeScopeRequiresScopeBeforeConnect(t *testing.T) {
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--old-session", "old",
+		"--new-session", "new",
+		"--node-scope", "all",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected all node scope without scope selector to fail")
+	}
+	if !strings.Contains(stdout.String(), "--node-scope all requires --scope-selector") {
+		t.Fatalf("expected all scope validation error, got %s", stdout.String())
 	}
 }
 

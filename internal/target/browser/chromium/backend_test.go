@@ -170,9 +170,12 @@ func TestDebugHTTPBaseURL(t *testing.T) {
 func TestParseTreeJSON(t *testing.T) {
 	tree, err := parseTreeJSON(`[
 		{
-			"id": 1,
-			"fingerprint": "button|button|submit|||||Submit|Submit",
-			"role": "button",
+				"id": 1,
+				"fingerprint": "button|button|submit|||||Submit|Submit",
+				"structure_path": "html:1>body:1>form:1>button:1",
+				"text_length": 6,
+				"descendants": 1,
+				"role": "button",
 			"name": " Submit ",
 			"text": " Submit ",
 			"value": "",
@@ -244,6 +247,9 @@ func TestParseTreeJSON(t *testing.T) {
 	if tree[0].Fingerprint == "" || tree[1].Fingerprint == "" {
 		t.Fatalf("expected fingerprints: %+v", tree)
 	}
+	if tree[0].StructurePath != "html:1>body:1>form:1>button:1" || tree[0].TextLength != 6 || tree[0].Descendants != 1 {
+		t.Fatalf("expected structure metadata: %+v", tree[0])
+	}
 	if len(tree[0].Children) != 1 || tree[0].Children[0] != 2 {
 		t.Fatalf("unexpected node children: %+v", tree[0])
 	}
@@ -312,6 +318,10 @@ func TestObserveCandidateSelectorNodeScopes(t *testing.T) {
 	semantic := observeCandidateSelector("semantic")
 	if !strings.Contains(semantic, "h1") || !strings.Contains(semantic, `[role="status"]`) || !strings.Contains(semantic, "[data-testid]") {
 		t.Fatalf("unexpected semantic selector: %s", semantic)
+	}
+
+	if all := observeCandidateSelector("all"); all != "*" {
+		t.Fatalf("unexpected all selector: %s", all)
 	}
 }
 

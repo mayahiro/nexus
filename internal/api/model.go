@@ -102,6 +102,9 @@ type Node struct {
 	Ref           string              `json:"ref,omitempty"`
 	Fingerprint   string              `json:"fingerprint,omitempty"`
 	LocatorHints  []LocatorHint       `json:"locator_hints,omitempty"`
+	StructurePath string              `json:"structure_path,omitempty"`
+	TextLength    int                 `json:"text_length,omitempty"`
+	Descendants   int                 `json:"descendants,omitempty"`
 	Role          string              `json:"role"`
 	Name          string              `json:"name,omitempty"`
 	Text          string              `json:"text,omitempty"`

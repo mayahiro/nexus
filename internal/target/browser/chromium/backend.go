@@ -237,9 +237,32 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
   };
 
   const normalize = (value) => (value || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  const normalizeFullText = (value) => (value || '').trim().replace(/\s+/g, ' ');
 
-	  const cssProperties = [` + strings.Join(properties, ",") + `];
-	  const layoutProperties = [` + strings.Join(layout, ",") + `];
+  const sameTagOrdinal = (el) => {
+    if (!el.parentElement) return 1;
+    const tag = el.tagName.toLowerCase();
+    let ordinal = 0;
+    for (const child of el.parentElement.children) {
+      if (child.tagName.toLowerCase() !== tag) continue;
+      ordinal++;
+      if (child === el) return ordinal;
+    }
+    return ordinal || 1;
+  };
+
+  const structurePathFor = (el) => {
+    const parts = [];
+    for (let current = el; current; current = current.parentElement) {
+      const tag = current.tagName.toLowerCase();
+      parts.push(tag + ':' + sameTagOrdinal(current));
+      if (tag === 'html') break;
+    }
+    return parts.reverse().join('>');
+  };
+
+  const cssProperties = [` + strings.Join(properties, ",") + `];
+  const layoutProperties = [` + strings.Join(layout, ",") + `];
   const colorPropertyPattern = /(^|-)color$/;
   const colorPropertyNames = new Set(['fill', 'stroke']);
   const colorProbe = document.createElement('span');
@@ -416,6 +439,9 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
     return {
       id: index + 1,
       fingerprint: fingerprintFor(el, role, name, attrs),
+      structure_path: structurePathFor(el),
+      text_length: normalizeFullText(el.innerText || el.textContent || '').length,
+      descendants: el.querySelectorAll('*').length,
       role: role,
       name: name,
       text: textFor(el),
@@ -511,6 +537,8 @@ func observeCandidateSelector(nodeScope string) string {
 			`[role="table"]`,
 			`[role="toolbar"]`,
 		), ",")
+	case "all":
+		return "*"
 	default:
 		return strings.Join(current, ",")
 	}
@@ -2449,6 +2477,9 @@ func debugHTTPBaseURL(devtoolsURL string) (string, error) {
 type rawNode struct {
 	ID            int                     `json:"id"`
 	Fingerprint   string                  `json:"fingerprint"`
+	StructurePath string                  `json:"structure_path"`
+	TextLength    int                     `json:"text_length"`
+	Descendants   int                     `json:"descendants"`
 	Role          string                  `json:"role"`
 	Name          string                  `json:"name"`
 	Text          string                  `json:"text"`
@@ -2484,6 +2515,9 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			ID:            node.ID,
 			Ref:           formatNodeRef(node.ID),
 			Fingerprint:   strings.TrimSpace(node.Fingerprint),
+			StructurePath: strings.TrimSpace(node.StructurePath),
+			TextLength:    node.TextLength,
+			Descendants:   node.Descendants,
 			Role:          node.Role,
 			Name:          strings.TrimSpace(node.Name),
 			Text:          strings.TrimSpace(node.Text),

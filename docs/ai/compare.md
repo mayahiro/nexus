@@ -75,6 +75,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
 ```
 
@@ -117,9 +118,11 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - use `stable` for migrations that preserve durable attributes but change text or implementation details
 - use `heuristic` when stable keys are incomplete and the scope is already narrow
 - use `histogram` with `--node-scope semantic` for early page-wide experiments where durable anchors exist across the page
+- use `histogram` with `--node-scope all --scope-selector <css>` for focused subtree work where wrapper `div` and layout containers matter
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
 JSON findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+When `--node-scope all` is used, compare requires `--scope-selector` or both side-specific scope selectors. All visible elements inside that scope are observed. Compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings; histogram can use these as low-occurrence anchors without changing the base fingerprint.
 
 ## Pair Decisions
 

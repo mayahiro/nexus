@@ -554,16 +554,60 @@ func TestCompareNodeScopeFiltersSnapshot(t *testing.T) {
 	if !slices.Contains(roles, "button") || !slices.Contains(roles, "status") || slices.Contains(roles, "generic") {
 		t.Fatalf("semantic node scope should keep semantic nodes without generic text: %+v", semantic.Nodes)
 	}
+
+	all := buildCompareSnapshot(api.Observation{Tree: []api.Node{
+		{ID: 1, Fingerprint: "generic", Role: "generic", Text: "Decorative", Visible: true, StructurePath: "html:1>body:1>div:1", TextLength: 10, Descendants: 2},
+	}}, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
+	if len(all.Nodes) != 1 || all.Nodes[0].StructureKey != "html:1>body:1>div:1" || all.Nodes[0].SubtreeSignature != "generic|text:1-20|desc:1-3" {
+		t.Fatalf("all node scope should preserve structural metadata: %+v", all.Nodes)
+	}
 }
 
 func TestNormalizeCompareNodeScope(t *testing.T) {
-	for _, value := range []string{"", "current", "actionable", "semantic", " SEMANTIC "} {
+	for _, value := range []string{"", "current", "actionable", "semantic", "all", " ALL "} {
 		if _, err := normalizeCompareNodeScope(value); err != nil {
 			t.Fatalf("expected %q to be accepted: %v", value, err)
 		}
 	}
-	if _, err := normalizeCompareNodeScope("unknown"); err == nil || !strings.Contains(err.Error(), "current, actionable, or semantic") {
+	if _, err := normalizeCompareNodeScope("unknown"); err == nil || !strings.Contains(err.Error(), "current, actionable, semantic, or all") {
 		t.Fatalf("expected helpful validation error, got %v", err)
+	}
+}
+
+func TestCompareNodeScopeAllRequiresScopeSelector(t *testing.T) {
+	if err := validateCompareNodeScopeSelectors(compareNodeScopeAll, "", "", ""); err == nil || !strings.Contains(err.Error(), "requires --scope-selector") {
+		t.Fatalf("expected all scope to require a scope selector, got %v", err)
+	}
+	if err := validateCompareNodeScopeSelectors(compareNodeScopeAll, "main", "", ""); err != nil {
+		t.Fatalf("expected common scope selector to be accepted: %v", err)
+	}
+	if err := validateCompareNodeScopeSelectors(compareNodeScopeAll, "", "main", "main"); err != nil {
+		t.Fatalf("expected side-specific scope selectors to be accepted: %v", err)
+	}
+}
+
+func TestCompareHistogramUsesStructureAnchors(t *testing.T) {
+	oldNodes := []compareSnapshotNode{
+		{Fingerprint: "old-a", Role: "div", StructureKey: "html:1>body:1>main:1>section:1>div:1", OriginalIndex: 0},
+		{Fingerprint: "old-b", Role: "div", StructureKey: "html:1>body:1>main:1>section:1>div:2", OriginalIndex: 1},
+	}
+	newNodes := []compareSnapshotNode{
+		{Fingerprint: "new-a", Role: "div", StructureKey: "html:1>body:1>main:1>section:1>div:1", OriginalIndex: 0},
+		{Fingerprint: "new-b", Role: "div", StructureKey: "html:1>body:1>main:1>section:1>div:2", OriginalIndex: 1},
+	}
+
+	result := compareHistogramNodeMatches(oldNodes, newNodes, true)
+
+	if len(result.Matches) != 2 {
+		t.Fatalf("expected structure anchors to match nodes: %+v", result)
+	}
+	for _, match := range result.Matches {
+		if match.MatchedBy != "histogram:structure-key" {
+			t.Fatalf("expected structure-key match, got %+v", match)
+		}
+	}
+	if result.Debug == nil || len(result.Debug.Anchors) != 2 || result.Debug.Anchors[0].KeyKind != "structure-key" {
+		t.Fatalf("expected structure anchors in debug: %+v", result.Debug)
 	}
 }
 

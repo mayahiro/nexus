@@ -11,6 +11,7 @@ import (
 
 func buildCompareSnapshot(observation api.Observation, options compareSnapshotOptions) compareSnapshot {
 	nodes := make([]compareSnapshotNode, 0, len(observation.Tree))
+	includeStructure := compareNodeScopeIncludesStructure(options.NodeScope)
 	for originalIndex, node := range observation.Tree {
 		if matchesCompareSelectorRule(node, options.IgnoreNode) {
 			continue
@@ -47,32 +48,40 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 		css := compareNodeCSS(node, options.CSSProperties)
 		bounds := compareNodeBounds(node, options.CompareLayout)
 		matchBounds := compareNodeMatchingBounds(node)
+		structureKey := ""
+		subtreeSignature := ""
+		if includeStructure {
+			structureKey = compareNodeStructureKey(node)
+			subtreeSignature = compareNodeSubtreeSignature(node, strings.TrimSpace(node.Role))
+		}
 
 		snapshotNode := compareSnapshotNode{
-			Fingerprint:   fingerprint,
-			Ref:           strings.TrimSpace(node.Ref),
-			Role:          strings.TrimSpace(node.Role),
-			Label:         compareNodeLabel(name, text, value, href, testID),
-			Name:          name,
-			Text:          text,
-			Value:         value,
-			Href:          href,
-			TestID:        testID,
-			CSS:           css,
-			Bounds:        bounds,
-			Visible:       node.Visible,
-			Enabled:       node.Enabled,
-			Editable:      node.Editable,
-			Selectable:    node.Selectable,
-			Invokable:     node.Invokable,
-			OriginalIndex: originalIndex,
-			Tag:           tag,
-			IDAttr:        idAttr,
-			NameAttr:      nameAttr,
-			TypeAttr:      typeAttr,
-			Placeholder:   placeholder,
-			AriaLabel:     ariaLabel,
-			MatchBounds:   matchBounds,
+			Fingerprint:      fingerprint,
+			StructureKey:     structureKey,
+			SubtreeSignature: subtreeSignature,
+			Ref:              strings.TrimSpace(node.Ref),
+			Role:             strings.TrimSpace(node.Role),
+			Label:            compareNodeLabel(name, text, value, href, testID),
+			Name:             name,
+			Text:             text,
+			Value:            value,
+			Href:             href,
+			TestID:           testID,
+			CSS:              css,
+			Bounds:           bounds,
+			Visible:          node.Visible,
+			Enabled:          node.Enabled,
+			Editable:         node.Editable,
+			Selectable:       node.Selectable,
+			Invokable:        node.Invokable,
+			OriginalIndex:    originalIndex,
+			Tag:              tag,
+			IDAttr:           idAttr,
+			NameAttr:         nameAttr,
+			TypeAttr:         typeAttr,
+			Placeholder:      placeholder,
+			AriaLabel:        ariaLabel,
+			MatchBounds:      matchBounds,
 		}
 		if !compareNodeInScope(snapshotNode, options.NodeScope) {
 			continue
@@ -194,11 +203,13 @@ func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot co
 	for _, index := range matchResult.UnmatchedOld {
 		node := oldSnapshot.Nodes[index]
 		finding := compareFinding{
-			Kind:        "missing_node",
-			Locator:     compareFindingLocator(&node, nil),
-			Fingerprint: node.Fingerprint,
-			Role:        node.Role,
-			Label:       node.Label,
+			Kind:             "missing_node",
+			Locator:          compareFindingLocator(&node, nil),
+			Fingerprint:      node.Fingerprint,
+			StructureKey:     node.StructureKey,
+			SubtreeSignature: node.SubtreeSignature,
+			Role:             node.Role,
+			Label:            node.Label,
 		}
 		applyCompareDecisionEffect(&finding, decisionEffects.Old[index])
 		add(finding)
@@ -206,11 +217,13 @@ func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot co
 	for _, index := range matchResult.UnmatchedNew {
 		node := newSnapshot.Nodes[index]
 		finding := compareFinding{
-			Kind:        "new_node",
-			Locator:     compareFindingLocator(nil, &node),
-			Fingerprint: node.Fingerprint,
-			Role:        node.Role,
-			Label:       node.Label,
+			Kind:             "new_node",
+			Locator:          compareFindingLocator(nil, &node),
+			Fingerprint:      node.Fingerprint,
+			StructureKey:     node.StructureKey,
+			SubtreeSignature: node.SubtreeSignature,
+			Role:             node.Role,
+			Label:            node.Label,
 		}
 		applyCompareDecisionEffect(&finding, decisionEffects.New[index])
 		add(finding)
@@ -398,6 +411,68 @@ func compareNodeState(node compareSnapshotNode) string {
 		strconv.FormatBool(node.Selectable),
 		strconv.FormatBool(node.Invokable),
 	}, "/")
+}
+
+func compareNodeScopeIncludesStructure(scope string) bool {
+	normalized, err := normalizeCompareNodeScope(scope)
+	return err == nil && normalized == compareNodeScopeAll
+}
+
+func compareNodeStructureKey(node api.Node) string {
+	return strings.TrimSpace(node.StructurePath)
+}
+
+func compareNodeSubtreeSignature(node api.Node, role string) string {
+	textLength := node.TextLength
+	if textLength <= 0 {
+		textLength = len([]rune(strings.Join(strings.Fields(firstNonEmpty(node.Text, node.Name, node.Value)), " ")))
+	}
+	descendants := node.Descendants
+	if descendants <= 0 {
+		descendants = len(node.Children)
+	}
+	role = strings.TrimSpace(role)
+	if role == "" {
+		role = strings.TrimSpace(node.Attrs["tag"])
+	}
+	if role == "" {
+		return ""
+	}
+	return strings.Join([]string{
+		role,
+		"text:" + compareTextLengthBucket(textLength),
+		"desc:" + compareDescendantCountBucket(descendants),
+	}, "|")
+}
+
+func compareTextLengthBucket(value int) string {
+	switch {
+	case value <= 0:
+		return "0"
+	case value <= 20:
+		return "1-20"
+	case value <= 80:
+		return "21-80"
+	case value <= 240:
+		return "81-240"
+	default:
+		return "241+"
+	}
+}
+
+func compareDescendantCountBucket(value int) string {
+	switch {
+	case value <= 0:
+		return "0"
+	case value <= 3:
+		return "1-3"
+	case value <= 10:
+		return "4-10"
+	case value <= 30:
+		return "11-30"
+	default:
+		return "31+"
+	}
 }
 
 func compareNodeCSS(node api.Node, properties []string) map[string]string {

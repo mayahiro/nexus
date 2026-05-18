@@ -77,11 +77,14 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug --output-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 nxctl flow run --manifest migration-flow.json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect --old-scope-selector '#legacy-summary' --new-scope-selector '[data-testid="order-summary"]' --old-session old --new-session new --css-property width
 ```
+
+Use `--node-scope all` only with an explicit scope selector when wrappers or layout containers are part of the migration. It observes every visible element in that subtree and emits `structure_key` / `subtree_signature` metadata so histogram can anchor containers without changing the base fingerprint.
 
 ## If Next.js Or Another Modern Frontend Looks Incomplete
 

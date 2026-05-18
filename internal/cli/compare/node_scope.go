@@ -9,6 +9,7 @@ const (
 	compareNodeScopeCurrent    = defaultCompareNodeScope
 	compareNodeScopeActionable = "actionable"
 	compareNodeScopeSemantic   = "semantic"
+	compareNodeScopeAll        = "all"
 )
 
 func normalizeCompareNodeScope(value string) (string, error) {
@@ -17,10 +18,10 @@ func normalizeCompareNodeScope(value string) (string, error) {
 		return defaultCompareNodeScope, nil
 	}
 	switch normalized {
-	case compareNodeScopeCurrent, compareNodeScopeActionable, compareNodeScopeSemantic:
+	case compareNodeScopeCurrent, compareNodeScopeActionable, compareNodeScopeSemantic, compareNodeScopeAll:
 		return normalized, nil
 	default:
-		return "", errors.New("node-scope must be current, actionable, or semantic")
+		return "", errors.New("node-scope must be current, actionable, semantic, or all")
 	}
 }
 
@@ -34,6 +35,8 @@ func compareNodeInScope(node compareSnapshotNode, scope string) bool {
 		return compareNodeActionable(node)
 	case compareNodeScopeSemantic:
 		return compareNodeSemantic(node)
+	case compareNodeScopeAll:
+		return true
 	default:
 		return true
 	}

@@ -39,7 +39,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	targetRef := fs.String("target-ref", "", "target ref")
 	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
 	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, heuristic, or histogram")
-	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
+	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, semantic, or all")
 	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
 	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
 	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous matching candidates")
@@ -107,6 +107,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if strings.TrimSpace(*manifestPath) == "" {
+		if err := validateCompareNodeScopeSelectors(normalizedNodeScope, *scopeSelector, *oldScopeSelector, *newScopeSelector); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 
 	client, err := connectClient(ctx)
@@ -326,6 +332,9 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
+	if err := validateCompareResolvedNodeScopeSelectors(nodeScope, oldScopeSelector, newScopeSelector); err != nil {
+		return compareReport{}, err
+	}
 
 	oldPrepared, newPrepared, err := prepareCompareSessions(ctx, client, paths, run.OldEndpoint, run.NewEndpoint, run.Backend, run.TargetRef, run.Viewport)
 	if err != nil {
@@ -440,6 +449,24 @@ func resolveCompareScopeSelectors(scopeSelector string, oldScopeSelector string,
 		return "", "", errors.New("compare requires --new-scope-selector or --scope-selector when --old-scope-selector is set")
 	}
 	return oldSelector, newSelector, nil
+}
+
+func validateCompareNodeScopeSelectors(nodeScope string, scopeSelector string, oldScopeSelector string, newScopeSelector string) error {
+	oldSelector, newSelector, err := resolveCompareScopeSelectors(scopeSelector, oldScopeSelector, newScopeSelector)
+	if err != nil {
+		return err
+	}
+	return validateCompareResolvedNodeScopeSelectors(nodeScope, oldSelector, newSelector)
+}
+
+func validateCompareResolvedNodeScopeSelectors(nodeScope string, oldScopeSelector string, newScopeSelector string) error {
+	if nodeScope != compareNodeScopeAll {
+		return nil
+	}
+	if strings.TrimSpace(oldScopeSelector) != "" && strings.TrimSpace(newScopeSelector) != "" {
+		return nil
+	}
+	return errors.New("--node-scope all requires --scope-selector or both --old-scope-selector and --new-scope-selector")
 }
 
 func compareScopeFromObservations(oldSelector string, newSelector string, oldObservation api.Observation, newObservation api.Observation) *compareScope {

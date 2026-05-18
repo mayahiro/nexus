@@ -44,30 +44,32 @@ type compareSnapshot struct {
 }
 
 type compareSnapshotNode struct {
-	Fingerprint   string            `json:"fingerprint"`
-	Ref           string            `json:"ref,omitempty"`
-	Role          string            `json:"role"`
-	Label         string            `json:"label,omitempty"`
-	Name          string            `json:"name,omitempty"`
-	Text          string            `json:"text,omitempty"`
-	Value         string            `json:"value,omitempty"`
-	Href          string            `json:"href,omitempty"`
-	TestID        string            `json:"testid,omitempty"`
-	CSS           map[string]string `json:"css,omitempty"`
-	Bounds        *api.Rect         `json:"bounds,omitempty"`
-	Visible       bool              `json:"visible"`
-	Enabled       bool              `json:"enabled"`
-	Editable      bool              `json:"editable"`
-	Selectable    bool              `json:"selectable"`
-	Invokable     bool              `json:"invokable"`
-	OriginalIndex int               `json:"-"`
-	Tag           string            `json:"-"`
-	IDAttr        string            `json:"-"`
-	NameAttr      string            `json:"-"`
-	TypeAttr      string            `json:"-"`
-	Placeholder   string            `json:"-"`
-	AriaLabel     string            `json:"-"`
-	MatchBounds   *api.Rect         `json:"-"`
+	Fingerprint      string            `json:"fingerprint"`
+	StructureKey     string            `json:"structure_key,omitempty"`
+	SubtreeSignature string            `json:"subtree_signature,omitempty"`
+	Ref              string            `json:"ref,omitempty"`
+	Role             string            `json:"role"`
+	Label            string            `json:"label,omitempty"`
+	Name             string            `json:"name,omitempty"`
+	Text             string            `json:"text,omitempty"`
+	Value            string            `json:"value,omitempty"`
+	Href             string            `json:"href,omitempty"`
+	TestID           string            `json:"testid,omitempty"`
+	CSS              map[string]string `json:"css,omitempty"`
+	Bounds           *api.Rect         `json:"bounds,omitempty"`
+	Visible          bool              `json:"visible"`
+	Enabled          bool              `json:"enabled"`
+	Editable         bool              `json:"editable"`
+	Selectable       bool              `json:"selectable"`
+	Invokable        bool              `json:"invokable"`
+	OriginalIndex    int               `json:"-"`
+	Tag              string            `json:"-"`
+	IDAttr           string            `json:"-"`
+	NameAttr         string            `json:"-"`
+	TypeAttr         string            `json:"-"`
+	Placeholder      string            `json:"-"`
+	AriaLabel        string            `json:"-"`
+	MatchBounds      *api.Rect         `json:"-"`
 }
 
 type compareSummary struct {
@@ -106,20 +108,22 @@ type compareScope struct {
 }
 
 type compareFinding struct {
-	Kind         string   `json:"kind"`
-	Severity     string   `json:"severity,omitempty"`
-	Impact       string   `json:"impact,omitempty"`
-	DecisionKind string   `json:"decision_kind,omitempty"`
-	Locator      string   `json:"locator,omitempty"`
-	Fingerprint  string   `json:"fingerprint,omitempty"`
-	Role         string   `json:"role,omitempty"`
-	Label        string   `json:"label,omitempty"`
-	Field        string   `json:"field,omitempty"`
-	Old          string   `json:"old,omitempty"`
-	New          string   `json:"new,omitempty"`
-	MatchedBy    string   `json:"matched_by,omitempty"`
-	MatchScore   int      `json:"match_score,omitempty"`
-	MatchReasons []string `json:"match_reasons,omitempty"`
+	Kind             string   `json:"kind"`
+	Severity         string   `json:"severity,omitempty"`
+	Impact           string   `json:"impact,omitempty"`
+	DecisionKind     string   `json:"decision_kind,omitempty"`
+	Locator          string   `json:"locator,omitempty"`
+	Fingerprint      string   `json:"fingerprint,omitempty"`
+	StructureKey     string   `json:"structure_key,omitempty"`
+	SubtreeSignature string   `json:"subtree_signature,omitempty"`
+	Role             string   `json:"role,omitempty"`
+	Label            string   `json:"label,omitempty"`
+	Field            string   `json:"field,omitempty"`
+	Old              string   `json:"old,omitempty"`
+	New              string   `json:"new,omitempty"`
+	MatchedBy        string   `json:"matched_by,omitempty"`
+	MatchScore       int      `json:"match_score,omitempty"`
+	MatchReasons     []string `json:"match_reasons,omitempty"`
 }
 
 type compareDecisionValidationSummary struct {
@@ -161,19 +165,21 @@ type compareMatchingDebug struct {
 }
 
 type compareMatchingDebugNode struct {
-	Index         int       `json:"index"`
-	OriginalIndex int       `json:"original_index"`
-	Ref           string    `json:"ref,omitempty"`
-	Locator       string    `json:"locator,omitempty"`
-	Role          string    `json:"role,omitempty"`
-	Label         string    `json:"label,omitempty"`
-	Name          string    `json:"name,omitempty"`
-	Text          string    `json:"text,omitempty"`
-	Href          string    `json:"href,omitempty"`
-	TestID        string    `json:"testid,omitempty"`
-	AriaLabel     string    `json:"aria_label,omitempty"`
-	Fingerprint   string    `json:"fingerprint,omitempty"`
-	Bounds        *api.Rect `json:"bounds,omitempty"`
+	Index            int       `json:"index"`
+	OriginalIndex    int       `json:"original_index"`
+	Ref              string    `json:"ref,omitempty"`
+	Locator          string    `json:"locator,omitempty"`
+	Role             string    `json:"role,omitempty"`
+	Label            string    `json:"label,omitempty"`
+	Name             string    `json:"name,omitempty"`
+	Text             string    `json:"text,omitempty"`
+	Href             string    `json:"href,omitempty"`
+	TestID           string    `json:"testid,omitempty"`
+	AriaLabel        string    `json:"aria_label,omitempty"`
+	Fingerprint      string    `json:"fingerprint,omitempty"`
+	StructureKey     string    `json:"structure_key,omitempty"`
+	SubtreeSignature string    `json:"subtree_signature,omitempty"`
+	Bounds           *api.Rect `json:"bounds,omitempty"`
 }
 
 type compareMatchingDebugAnchor struct {
