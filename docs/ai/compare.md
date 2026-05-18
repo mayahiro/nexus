@@ -123,7 +123,7 @@ JSON findings produced from stable, heuristic, or histogram node pairs include `
 
 Use `--decisions-file <jsonl>` when an AI or human has reviewed ambiguous candidates and wants compare to reuse high-confidence pairings.
 
-Each line is one JSON object. Compare applies only high-confidence `pair` entries before automatic matching:
+Each line is one JSON object. Validate each line against `docs/ai/compare-decisions.schema.json`. Compare applies only high-confidence `pair` entries before automatic matching:
 
 ```jsonl
 {"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"bbox and role/name match; aria-label changed as an a11y improvement"}

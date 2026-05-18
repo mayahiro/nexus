@@ -1,0 +1,301 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/mayahiro/nexus/blob/main/docs/ai/compare-decisions.schema.json",
+  "title": "Nexus compare decision JSONL entry",
+  "description": "Validates one JSON object line in a Nexus compare decisions JSONL file. Validate JSONL files line by line.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "pair",
+        "removed",
+        "added",
+        "accepted_removed",
+        "accepted_added",
+        "regression_removed",
+        "unexpected_added",
+        "unknown",
+        "pattern",
+        "severity"
+      ]
+    },
+    "old": {
+      "$ref": "#/$defs/refOrUnknown"
+    },
+    "new": {
+      "$ref": "#/$defs/refOrUnknown"
+    },
+    "old_fingerprint": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "new_fingerprint": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["high", "tentative", "unknown"]
+    },
+    "reason": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "note": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "decided_by": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "decided_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "context": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "session_context": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "name": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^@e[0-9]+:@e[0-9]+$"
+      },
+      "uniqueItems": true
+    },
+    "finding_id": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "from": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "to": {
+      "$ref": "#/$defs/nonEmptyString"
+    }
+  },
+  "required": ["kind"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pair"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["confidence"],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": ["old"],
+                "properties": {
+                  "old": {
+                    "$ref": "#/$defs/refOrUnknown"
+                  }
+                }
+              },
+              {
+                "required": ["old_fingerprint"]
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": ["new"],
+                "properties": {
+                  "new": {
+                    "$ref": "#/$defs/refOrUnknown"
+                  }
+                }
+              },
+              {
+                "required": ["new_fingerprint"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pair"
+          },
+          "confidence": {
+            "const": "high"
+          }
+        },
+        "required": ["kind", "confidence"]
+      },
+      "then": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": ["old"],
+                "properties": {
+                  "old": {
+                    "$ref": "#/$defs/ref"
+                  }
+                }
+              },
+              {
+                "required": ["old_fingerprint"]
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": ["new"],
+                "properties": {
+                  "new": {
+                    "$ref": "#/$defs/ref"
+                  }
+                }
+              },
+              {
+                "required": ["new_fingerprint"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": ["removed", "accepted_removed", "regression_removed"]
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": ["old"],
+            "properties": {
+              "old": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          },
+          {
+            "required": ["old_fingerprint"]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": ["added", "accepted_added", "unexpected_added"]
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": ["new"],
+            "properties": {
+              "new": {
+                "$ref": "#/$defs/ref"
+              }
+            }
+          },
+          {
+            "required": ["new_fingerprint"]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "pattern"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["name"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "severity"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "anyOf": [
+          {
+            "required": ["finding_id"]
+          },
+          {
+            "required": ["name"]
+          }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "pattern": "^@e[0-9]+$"
+    },
+    "refOrUnknown": {
+      "type": "string",
+      "anyOf": [
+        {
+          "pattern": "^@e[0-9]+$"
+        },
+        {
+          "enum": ["?", "unknown"]
+        }
+      ]
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "examples": [
+    {
+      "schema_version": 1,
+      "kind": "pair",
+      "old": "@e203",
+      "new": "@e222",
+      "confidence": "high",
+      "reason": "same role/name and nearby bbox"
+    },
+    {
+      "schema_version": 1,
+      "kind": "pair",
+      "old": "@e9",
+      "new": "?",
+      "confidence": "unknown",
+      "reason": "needs review"
+    }
+  ]
+}

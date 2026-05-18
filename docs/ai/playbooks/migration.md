@@ -102,3 +102,4 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 ```
 
 Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` entries affect matching; other entries remain review notes.
+Validate each JSONL line against `docs/ai/compare-decisions.schema.json` when generating or reviewing the file.
