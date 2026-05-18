@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	compareReviewFileReview                   = "REVIEW.md"
 	compareReviewFileJSON                     = "compare.json"
 	compareReviewFileMarkdown                 = "compare.md"
 	compareReviewFilePairDecisionsTemplate    = "pair-decisions.todo.jsonl"
@@ -48,6 +49,7 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 		return err
 	}
 	files := compareReviewFiles{
+		ReviewMarkdown:           filepath.Join(dir, compareReviewFileReview),
 		CompareJSON:              filepath.Join(dir, compareReviewFileJSON),
 		CompareMarkdown:          filepath.Join(dir, compareReviewFileMarkdown),
 		PairDecisionsTemplate:    filepath.Join(dir, compareReviewFilePairDecisionsTemplate),
@@ -82,7 +84,11 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 	if err := writeCompareFindingDecisionsTemplate(files.FindingDecisionsTemplate, report); err != nil {
 		return err
 	}
-	return writeIndentedJSONFile(files.ReviewSummary, buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings))
+	summary := buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings)
+	if err := writeCompareReviewGuide(files.ReviewMarkdown, summary); err != nil {
+		return err
+	}
+	return writeIndentedJSONFile(files.ReviewSummary, summary)
 }
 
 func buildCompareReviewSummary(report compareReport, files compareReviewFiles, screenshotWarnings []string, cropWarnings []string) compareReviewSummary {
@@ -119,6 +125,100 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		"nxctl compare validate-decisions --decisions-file " + files.FindingDecisionsTemplate + " --compare-json " + files.CompareJSON,
 	}
 	return summary
+}
+
+func writeCompareReviewGuide(path string, summary compareReviewSummary) error {
+	return os.WriteFile(path, []byte(renderCompareReviewGuide(summary)), 0o644)
+}
+
+func renderCompareReviewGuide(summary compareReviewSummary) string {
+	var builder strings.Builder
+	builder.WriteString("# Nexus Compare Review\n\n")
+	builder.WriteString("This directory is the working packet for one compare review.\n\n")
+
+	builder.WriteString("## Summary\n\n")
+	fmt.Fprintf(&builder, "- Old: %s\n", firstNonEmpty(summary.Old, "(not recorded)"))
+	fmt.Fprintf(&builder, "- New: %s\n", firstNonEmpty(summary.New, "(not recorded)"))
+	if strings.TrimSpace(summary.Scope) != "" {
+		fmt.Fprintf(&builder, "- Scope: %s\n", summary.Scope)
+	}
+	fmt.Fprintf(&builder, "- Findings: %d total, %d critical, %d warning, %d info\n", summary.TotalFindings, summary.CriticalFindings, summary.WarningFindings, summary.InfoFindings)
+	if summary.MatchedNodes > 0 {
+		fmt.Fprintf(&builder, "- Matched nodes: %d\n", summary.MatchedNodes)
+	}
+	if summary.AmbiguousCandidates > 0 || summary.UnmatchedOld > 0 || summary.UnmatchedNew > 0 {
+		fmt.Fprintf(&builder, "- Matching review: %d ambiguous, %d unmatched old, %d unmatched new\n", summary.AmbiguousCandidates, summary.UnmatchedOld, summary.UnmatchedNew)
+	}
+	if summary.PairDecisionTemplate != nil {
+		counts := summary.PairDecisionTemplate
+		fmt.Fprintf(&builder, "- Pair decision template: %d ambiguous, %d unmatched old, %d unmatched new", counts.Ambiguous, counts.UnmatchedOld, counts.UnmatchedNew)
+		extras := []string{}
+		if counts.TruncatedOld > 0 {
+			extras = append(extras, fmt.Sprintf("%d old truncated", counts.TruncatedOld))
+		}
+		if counts.TruncatedNew > 0 {
+			extras = append(extras, fmt.Sprintf("%d new truncated", counts.TruncatedNew))
+		}
+		if counts.SkippedDuplicateOld > 0 {
+			extras = append(extras, fmt.Sprintf("%d old duplicates skipped", counts.SkippedDuplicateOld))
+		}
+		if counts.SkippedDuplicateNew > 0 {
+			extras = append(extras, fmt.Sprintf("%d new duplicates skipped", counts.SkippedDuplicateNew))
+		}
+		if len(extras) > 0 {
+			fmt.Fprintf(&builder, " (%s)", strings.Join(extras, ", "))
+		}
+		builder.WriteString("\n")
+	}
+	if len(summary.FindingClusters) > 0 {
+		fmt.Fprintf(&builder, "- Repeated finding clusters: %d\n", len(summary.FindingClusters))
+	}
+	if len(summary.ScreenshotWarnings) > 0 || len(summary.CropWarnings) > 0 {
+		fmt.Fprintf(&builder, "- Capture warnings: %d screenshots, %d crops\n", len(summary.ScreenshotWarnings), len(summary.CropWarnings))
+	}
+
+	builder.WriteString("\n## Start Here\n\n")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewMarkdown, "this guide")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewSummary, "machine-readable packet metadata and next commands")
+	writeCompareReviewGuideFile(&builder, summary.Files.CompareMarkdown, "human-readable compare findings")
+	writeCompareReviewGuideFile(&builder, summary.Files.CompareJSON, "full compare data for AI review")
+	writeCompareReviewGuideFile(&builder, summary.Files.PairDecisionsTemplate, "editable pair, unmatched, and subtree decision stubs")
+	writeCompareReviewGuideFile(&builder, summary.Files.FindingDecisionsTemplate, "editable finding decision stubs")
+	writeCompareReviewGuideFile(&builder, summary.Files.OldScreenshot, "old full-page screenshot")
+	writeCompareReviewGuideFile(&builder, summary.Files.NewScreenshot, "new full-page screenshot")
+	writeCompareReviewGuideFile(&builder, summary.Files.FindingScreenshotsDir, "cropped finding screenshots")
+
+	if len(summary.NextCommands) > 0 {
+		builder.WriteString("\n## Commands\n\n")
+		builder.WriteString("```sh\n")
+		for _, command := range summary.NextCommands {
+			fmt.Fprintf(&builder, "%s\n", command)
+		}
+		builder.WriteString("```\n")
+	}
+
+	builder.WriteString("\n## Decision Guidance\n\n")
+	builder.WriteString("- Ambiguous candidates: keep `kind:\"pair\"`, set `new` or `new_locator`, and use `confidence:\"high\"` only when the correspondence is clear.\n")
+	builder.WriteString("- Unmatched old nodes: pair them with a new node, convert them to `accepted_removed`, or leave them unknown when unsure.\n")
+	builder.WriteString("- Unmatched new nodes: keep `accepted_added` for intentional additions, convert them to `pair` when they correspond to old nodes, or leave them unknown when unsure.\n")
+	builder.WriteString("- Finding decisions: use `accepted_finding` for approved differences and `regression_finding` for real regressions.\n")
+	builder.WriteString("- Finding clusters: use `accepted_finding_cluster` or `regression_finding_cluster` when repeated findings share one decision.\n")
+	return builder.String()
+}
+
+func writeCompareReviewGuideFile(builder *strings.Builder, path string, description string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	fmt.Fprintf(builder, "- `%s`: %s\n", compareReviewGuideDisplayPath(path), description)
+}
+
+func compareReviewGuideDisplayPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
 }
 
 func writeCompareReviewFindingScreenshots(dir string, report compareReport, screenshots compareReviewScreenshots, files *compareReviewFiles) ([]string, error) {

@@ -215,6 +215,7 @@ type compareDecisionTemplateCounts struct {
 }
 
 type compareReviewFiles struct {
+	ReviewMarkdown           string `json:"review_markdown"`
 	CompareJSON              string `json:"compare_json"`
 	CompareMarkdown          string `json:"compare_markdown"`
 	PairDecisionsTemplate    string `json:"pair_decisions_template"`

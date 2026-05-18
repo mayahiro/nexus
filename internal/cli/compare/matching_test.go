@@ -1065,6 +1065,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		t.Fatalf("expected review packet to write: %v", err)
 	}
 	for _, name := range []string{
+		compareReviewFileReview,
 		compareReviewFileJSON,
 		compareReviewFileMarkdown,
 		compareReviewFilePairDecisionsTemplate,
@@ -1088,7 +1089,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if summary.TotalFindings != 2 || summary.CriticalFindings != 1 || summary.WarningFindings != 1 || summary.AmbiguousCandidates != 1 || summary.UnmatchedOld != 1 || summary.UnmatchedNew != 1 {
 		t.Fatalf("unexpected review summary: %+v", summary)
 	}
-	if summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
+	if summary.Files.ReviewMarkdown != filepath.Join(dir, compareReviewFileReview) || summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
 		t.Fatalf("expected review files and next commands: %+v", summary)
 	}
 	if summary.PairDecisionTemplate == nil || summary.PairDecisionTemplate.Ambiguous != 1 || summary.PairDecisionTemplate.UnmatchedOld != 1 || summary.PairDecisionTemplate.UnmatchedNew != 1 {
@@ -1111,6 +1112,13 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	}
 	if string(oldScreenshot) != "old screenshot bytes" {
 		t.Fatalf("unexpected old screenshot bytes: %q", string(oldScreenshot))
+	}
+	reviewGuide, err := os.ReadFile(filepath.Join(dir, compareReviewFileReview))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
+		t.Fatalf("unexpected review guide:\n%s", string(reviewGuide))
 	}
 }
 
