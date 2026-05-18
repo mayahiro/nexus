@@ -131,6 +131,7 @@ func buildCompareMatchingDebugNode(nodes []compareSnapshotNode, index int, oldSi
 		OriginalIndex:    node.OriginalIndex,
 		Ref:              node.Ref,
 		Locator:          locator,
+		Selector:         compareNodeSelector(node, nodes),
 		Role:             node.Role,
 		Label:            node.Label,
 		Name:             node.Name,

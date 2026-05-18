@@ -331,6 +331,7 @@ type compareMatchingDebugNode struct {
 	OriginalIndex    int       `json:"original_index"`
 	Ref              string    `json:"ref,omitempty"`
 	Locator          string    `json:"locator,omitempty"`
+	Selector         string    `json:"selector,omitempty"`
 	Role             string    `json:"role,omitempty"`
 	Label            string    `json:"label,omitempty"`
 	Name             string    `json:"name,omitempty"`

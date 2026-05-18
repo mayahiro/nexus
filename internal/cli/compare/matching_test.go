@@ -964,6 +964,29 @@ func TestValidateCompareDecisionsReportsUnknownKind(t *testing.T) {
 	}
 }
 
+func TestCompareNodeSelectorPrefersUniqueStableSelectors(t *testing.T) {
+	nodes := []compareSnapshotNode{
+		{Ref: "@e1", Tag: "button", IDAttr: "save:primary"},
+		{Ref: "@e2", Tag: "button", TestID: "cancel"},
+		{Ref: "@e3", Tag: "button", TestID: "cancel"},
+		{Ref: "@e4", Tag: "a", Href: "/jobs"},
+		{Ref: "@e5", Tag: "div", StructureKey: "html:1>body:1>main:1>section:2>div:3"},
+	}
+
+	if got := compareNodeSelector(nodes[0], nodes); got != `button[id="save:primary"]` {
+		t.Fatalf("expected id selector, got %q", got)
+	}
+	if got := compareNodeSelector(nodes[1], nodes); got != "" {
+		t.Fatalf("expected duplicate testid selector to be skipped, got %q", got)
+	}
+	if got := compareNodeSelector(nodes[3], nodes); got != `a[href="/jobs"]` {
+		t.Fatalf("expected href selector, got %q", got)
+	}
+	if got := compareNodeSelector(nodes[4], nodes); got != `html > body:nth-of-type(1) > main:nth-of-type(1) > section:nth-of-type(2) > div:nth-of-type(3)` {
+		t.Fatalf("expected structure selector, got %q", got)
+	}
+}
+
 func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	debug := &compareMatchingDebug{
 		AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
@@ -971,12 +994,13 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 				Old: compareMatchingDebugNode{
 					Ref:         "@e1",
 					Locator:     `role button --name "Save"`,
+					Selector:    `button[id="save"]`,
 					Fingerprint: "old-save",
 				},
 				ReasonSkipped: "candidate margin below threshold",
 				NewCandidates: []compareMatchingDebugCandidateOption{
 					{
-						Node:       compareMatchingDebugNode{Ref: "@e2", Locator: `role button --name "Save"`},
+						Node:       compareMatchingDebugNode{Ref: "@e2", Locator: `role button --name "Save"`, Selector: `button[data-testid="save"],button[data-test="save"]`},
 						Score:      85,
 						SharedKeys: []string{"role", "name"},
 					},
@@ -1008,18 +1032,21 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	if decision.OldLocator != `role button --name "Save"` {
 		t.Fatalf("expected old locator in template: %+v", decision)
 	}
-	if !strings.Contains(decision.Note, "@e2") || !strings.Contains(decision.Note, `locator="role button --name \"Save\""`) || !strings.Contains(decision.Note, "score=85") || !strings.Contains(decision.Note, "shared=role,name") {
-		t.Fatalf("expected candidate refs, locators, and scores in note: %+v", decision)
+	if decision.OldSelector != `button[id="save"]` {
+		t.Fatalf("expected old selector in template: %+v", decision)
+	}
+	if !strings.Contains(decision.Note, "@e2") || !strings.Contains(decision.Note, `locator="role button --name \"Save\""`) || !strings.Contains(decision.Note, `selector="button[data-testid=\"save\"],button[data-test=\"save\"]"`) || !strings.Contains(decision.Note, "score=85") || !strings.Contains(decision.Note, "shared=role,name") {
+		t.Fatalf("expected candidate refs, locators, selectors, and scores in note: %+v", decision)
 	}
 }
 
 func TestCompareDecisionsTemplateWritesUnmatchedStubs(t *testing.T) {
 	debug := &compareMatchingDebug{
 		UnmatchedOld: []compareMatchingDebugNode{
-			{Ref: "@e10", Locator: `role link --name "Legacy"`, Fingerprint: "old-legacy", Role: "link", Label: "Legacy"},
+			{Ref: "@e10", Locator: `role link --name "Legacy"`, Selector: `a[id="legacy"]`, Fingerprint: "old-legacy", Role: "link", Label: "Legacy"},
 		},
 		UnmatchedNew: []compareMatchingDebugNode{
-			{Ref: "@e88", Locator: `testid "skip-link"`, Fingerprint: "new-skip", Role: "link", Label: "Skip to content", TestID: "skip-link"},
+			{Ref: "@e88", Locator: `testid "skip-link"`, Selector: `a[data-testid="skip-link"],a[data-test="skip-link"]`, Fingerprint: "new-skip", Role: "link", Label: "Skip to content", TestID: "skip-link"},
 		},
 	}
 
@@ -1035,14 +1062,14 @@ func TestCompareDecisionsTemplateWritesUnmatchedStubs(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[0]), &oldDecision); err != nil {
 		t.Fatalf("expected old stub jsonl: %v\n%s", err, lines[0])
 	}
-	if oldDecision.Kind != "pair" || oldDecision.Old != "@e10" || oldDecision.New != "?" || oldDecision.OldLocator == "" || !strings.Contains(oldDecision.Note, "accepted_removed") {
+	if oldDecision.Kind != "pair" || oldDecision.Old != "@e10" || oldDecision.New != "?" || oldDecision.OldLocator == "" || oldDecision.OldSelector == "" || !strings.Contains(oldDecision.Note, "accepted_removed") || !strings.Contains(oldDecision.Note, "new_selector") {
 		t.Fatalf("unexpected unmatched old stub: %+v", oldDecision)
 	}
 	var newDecision compareDecision
 	if err := json.Unmarshal([]byte(lines[1]), &newDecision); err != nil {
 		t.Fatalf("expected new stub jsonl: %v\n%s", err, lines[1])
 	}
-	if newDecision.Kind != "accepted_added" || newDecision.New != "@e88" || newDecision.NewLocator == "" || !strings.Contains(newDecision.Note, "old/old_locator") {
+	if newDecision.Kind != "accepted_added" || newDecision.New != "@e88" || newDecision.NewLocator == "" || newDecision.NewSelector == "" || !strings.Contains(newDecision.Note, "old/old_locator/old_selector") {
 		t.Fatalf("unexpected unmatched new stub: %+v", newDecision)
 	}
 }

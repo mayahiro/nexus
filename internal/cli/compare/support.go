@@ -25,7 +25,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
 	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
 	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator and session-backed old_selector/new_selector fields to current refs before compare")
-	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates and unmatched old/new nodes")
+	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs with locator and unique selector hints for ambiguous and unmatched old/new nodes")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
 	fmt.Fprintln(w, "review packet: --review-dir writes REVIEW.md, compare.json, compare.md, pair/finding/cluster decision templates, decision audit counts, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
 	fmt.Fprintln(w, "node scope: --node-scope current preserves existing candidates, actionable narrows to controls, semantic includes named/content semantic nodes, all observes every visible element inside an explicit scope")
@@ -230,6 +230,163 @@ func compareNodeLocator(node compareSnapshotNode) string {
 		return compareQuotedLocator("text", node.Text)
 	}
 	return ""
+}
+
+type compareNodeSelectorCandidate struct {
+	Selector string
+	Matches  func(compareSnapshotNode) bool
+}
+
+func compareNodeSelector(node compareSnapshotNode, nodes []compareSnapshotNode) string {
+	for _, candidate := range compareNodeSelectorCandidates(node) {
+		if strings.TrimSpace(candidate.Selector) == "" || candidate.Matches == nil {
+			continue
+		}
+		matches := 0
+		for _, other := range nodes {
+			if candidate.Matches(other) {
+				matches++
+			}
+		}
+		if matches == 1 {
+			return candidate.Selector
+		}
+	}
+	return ""
+}
+
+func compareNodeSelectorCandidates(node compareSnapshotNode) []compareNodeSelectorCandidate {
+	tag := compareCSSSelectorTag(node.Tag)
+	if tag == "" {
+		return nil
+	}
+
+	candidates := []compareNodeSelectorCandidate{}
+	sameTag := func(other compareSnapshotNode) bool {
+		return compareCSSSelectorTag(other.Tag) == tag
+	}
+	addAttr := func(attr string, value string, matches func(compareSnapshotNode) bool) {
+		value = strings.TrimSpace(value)
+		if value == "" || matches == nil {
+			return
+		}
+		selector := tag + "[" + attr + "=" + compareCSSString(value) + "]"
+		candidates = append(candidates, compareNodeSelectorCandidate{Selector: selector, Matches: matches})
+	}
+
+	addAttr("id", node.IDAttr, func(other compareSnapshotNode) bool {
+		return sameTag(other) && strings.TrimSpace(other.IDAttr) == strings.TrimSpace(node.IDAttr)
+	})
+	if testID := strings.TrimSpace(node.TestID); testID != "" {
+		selector := tag + "[data-testid=" + compareCSSString(testID) + "]," + tag + "[data-test=" + compareCSSString(testID) + "]"
+		candidates = append(candidates, compareNodeSelectorCandidate{
+			Selector: selector,
+			Matches: func(other compareSnapshotNode) bool {
+				return sameTag(other) && strings.TrimSpace(other.TestID) == testID
+			},
+		})
+	}
+	if name := strings.TrimSpace(node.NameAttr); name != "" {
+		selector := tag + "[name=" + compareCSSString(name) + "]"
+		typeAttr := strings.TrimSpace(node.TypeAttr)
+		if typeAttr != "" {
+			selector += "[type=" + compareCSSString(typeAttr) + "]"
+		}
+		candidates = append(candidates, compareNodeSelectorCandidate{
+			Selector: selector,
+			Matches: func(other compareSnapshotNode) bool {
+				if !sameTag(other) || strings.TrimSpace(other.NameAttr) != name {
+					return false
+				}
+				return typeAttr == "" || strings.TrimSpace(other.TypeAttr) == typeAttr
+			},
+		})
+	}
+	addAttr("href", node.Href, func(other compareSnapshotNode) bool {
+		return sameTag(other) && strings.TrimSpace(other.Href) == strings.TrimSpace(node.Href)
+	})
+	addAttr("aria-label", node.AriaLabel, func(other compareSnapshotNode) bool {
+		return sameTag(other) && strings.TrimSpace(other.AriaLabel) == strings.TrimSpace(node.AriaLabel)
+	})
+	if selector := compareStructureKeySelector(node.StructureKey); selector != "" {
+		structureKey := strings.TrimSpace(node.StructureKey)
+		candidates = append(candidates, compareNodeSelectorCandidate{
+			Selector: selector,
+			Matches: func(other compareSnapshotNode) bool {
+				return strings.TrimSpace(other.StructureKey) == structureKey
+			},
+		})
+	}
+	return candidates
+}
+
+func compareStructureKeySelector(structureKey string) string {
+	parts := strings.Split(strings.TrimSpace(structureKey), ">")
+	if len(parts) == 0 {
+		return ""
+	}
+	selectorParts := make([]string, 0, len(parts))
+	for index, part := range parts {
+		tag, ordinal, ok := parseCompareStructureKeyPart(part)
+		if !ok {
+			return ""
+		}
+		selector := tag
+		if index > 0 && ordinal > 0 {
+			selector += fmt.Sprintf(":nth-of-type(%d)", ordinal)
+		}
+		selectorParts = append(selectorParts, selector)
+	}
+	return strings.Join(selectorParts, " > ")
+}
+
+func parseCompareStructureKeyPart(part string) (string, int, bool) {
+	tag, rawOrdinal, ok := strings.Cut(strings.TrimSpace(part), ":")
+	if !ok {
+		return "", 0, false
+	}
+	tag = compareCSSSelectorTag(tag)
+	if tag == "" {
+		return "", 0, false
+	}
+	ordinal, err := strconv.Atoi(strings.TrimSpace(rawOrdinal))
+	if err != nil || ordinal <= 0 {
+		return "", 0, false
+	}
+	return tag, ordinal, true
+}
+
+func compareCSSSelectorTag(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return ""
+	}
+	return value
+}
+
+func compareCSSString(value string) string {
+	value = strings.TrimSpace(value)
+	var builder strings.Builder
+	builder.WriteByte('"')
+	for _, r := range value {
+		switch r {
+		case '\\', '"':
+			builder.WriteByte('\\')
+			builder.WriteRune(r)
+		case '\n', '\r', '\f':
+			builder.WriteByte(' ')
+		default:
+			builder.WriteRune(r)
+		}
+	}
+	builder.WriteByte('"')
+	return builder.String()
 }
 
 func compareSharedValue(oldValue string, newValue string) string {

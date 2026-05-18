@@ -1802,6 +1802,7 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 			Kind:           "pair",
 			Old:            candidate.Old.Ref,
 			OldLocator:     candidate.Old.Locator,
+			OldSelector:    candidate.Old.Selector,
 			OldFingerprint: candidate.Old.Fingerprint,
 			New:            "?",
 			Confidence:     "unknown",
@@ -1911,6 +1912,9 @@ func compareDecisionTemplateNodeKey(node compareMatchingDebugNode) string {
 	if value := strings.TrimSpace(node.Locator); value != "" {
 		return "locator:" + value
 	}
+	if value := strings.TrimSpace(node.Selector); value != "" {
+		return "selector:" + value
+	}
 	values := []string{
 		fmt.Sprint(node.OriginalIndex),
 		strings.TrimSpace(node.Role),
@@ -1941,11 +1945,12 @@ func printCompareUnmatchedOldDecisionsTemplate(encoder *json.Encoder, plan compa
 			Kind:           "pair",
 			Old:            firstNonEmpty(node.Ref, "?"),
 			OldLocator:     strings.TrimSpace(node.Locator),
+			OldSelector:    strings.TrimSpace(node.Selector),
 			OldFingerprint: strings.TrimSpace(node.Fingerprint),
 			New:            "?",
 			Confidence:     "unknown",
 			Reason:         "review unmatched old node",
-			Note:           compareUnmatchedDecisionTemplateNote("unmatched old", node, "choose new/new_locator, change kind to accepted_removed, or leave unknown"),
+			Note:           compareUnmatchedDecisionTemplateNote("unmatched old", node, "choose new/new_locator/new_selector, change kind to accepted_removed, or leave unknown"),
 		}
 		if err := encoder.Encode(decision); err != nil {
 			return err
@@ -1961,10 +1966,11 @@ func printCompareUnmatchedNewDecisionsTemplate(encoder *json.Encoder, plan compa
 			Kind:           "accepted_added",
 			New:            firstNonEmpty(node.Ref, "?"),
 			NewLocator:     strings.TrimSpace(node.Locator),
+			NewSelector:    strings.TrimSpace(node.Selector),
 			NewFingerprint: strings.TrimSpace(node.Fingerprint),
 			Confidence:     "unknown",
 			Reason:         "review unmatched new node",
-			Note:           compareUnmatchedDecisionTemplateNote("unmatched new", node, "confirm accepted_added, change kind to pair with old/old_locator, or leave unknown"),
+			Note:           compareUnmatchedDecisionTemplateNote("unmatched new", node, "confirm accepted_added, change kind to pair with old/old_locator/old_selector, or leave unknown"),
 		}
 		if err := encoder.Encode(decision); err != nil {
 			return err
@@ -2093,6 +2099,9 @@ func compareMatchingDebugNodeTemplateNote(node compareMatchingDebugNode) string 
 	if locator := strings.TrimSpace(node.Locator); locator != "" {
 		values = append(values, "locator="+strconv.Quote(locator))
 	}
+	if selector := strings.TrimSpace(node.Selector); selector != "" {
+		values = append(values, "selector="+strconv.Quote(selector))
+	}
 	if role := strings.TrimSpace(node.Role); role != "" {
 		values = append(values, "role="+role)
 	}
@@ -2153,6 +2162,9 @@ func compareDecisionTemplateCandidateNote(option compareMatchingDebugCandidateOp
 	}
 	if locator := strings.TrimSpace(option.Node.Locator); locator != "" {
 		values = append(values, "locator="+strconv.Quote(locator))
+	}
+	if selector := strings.TrimSpace(option.Node.Selector); selector != "" {
+		values = append(values, "selector="+strconv.Quote(selector))
 	}
 	if option.Score > 0 {
 		values = append(values, fmt.Sprintf("score=%d", option.Score))
