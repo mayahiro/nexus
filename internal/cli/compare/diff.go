@@ -1,6 +1,7 @@
 package comparecmd
 
 import (
+	"crypto/sha1"
 	"fmt"
 	"slices"
 	"strconv"
@@ -129,6 +130,10 @@ func buildCompareReportWithDecisionMatches(oldSnapshot compareSnapshot, newSnaps
 }
 
 func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch, decisionEffects compareDecisionEffects) compareReport {
+	return buildCompareReportWithDecisionEffects(oldSnapshot, newSnapshot, scope, matchMode, matchingDebug, decisionMatches, decisionEffects, compareFindingDecisionEffects{})
+}
+
+func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch, decisionEffects compareDecisionEffects, findingDecisionEffects compareFindingDecisionEffects) compareReport {
 	report := compareReport{
 		Old:   oldSnapshot,
 		New:   newSnapshot,
@@ -136,6 +141,10 @@ func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot co
 	}
 
 	add := func(finding compareFinding) {
+		if strings.TrimSpace(finding.FindingID) == "" {
+			finding.FindingID = compareFindingID(finding)
+		}
+		applyCompareFindingDecisionEffect(&finding, findingDecisionEffects.ByID[finding.FindingID])
 		severity, impact := classifyCompareFinding(finding)
 		if finding.Severity == "" {
 			finding.Severity = severity
@@ -248,6 +257,82 @@ func applyCompareDecisionEffect(finding *compareFinding, effect compareDecisionE
 	if effect.Impact != "" {
 		finding.Impact = effect.Impact
 	}
+}
+
+func applyCompareFindingDecisionEffect(finding *compareFinding, effect compareDecisionEffect) {
+	if effect.Kind == "" {
+		return
+	}
+	finding.DecisionKind = effect.Kind
+	if finding.MatchedBy == "" {
+		finding.MatchedBy = effect.MatchedBy
+	}
+	finding.MatchReasons = appendCompareDecisionReasons(finding.MatchReasons, effect.Reasons)
+	if effect.Severity != "" {
+		finding.Severity = effect.Severity
+	}
+	if effect.Impact != "" {
+		finding.Impact = effect.Impact
+	}
+}
+
+func appendCompareDecisionReasons(current []string, reasons []string) []string {
+	result := append([]string(nil), current...)
+	for _, reason := range reasons {
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		if slices.Contains(result, reason) {
+			continue
+		}
+		result = append(result, reason)
+	}
+	return result
+}
+
+func compareFindingID(finding compareFinding) string {
+	kind := compareFindingIDKind(finding.Kind)
+	parts := []string{
+		strings.TrimSpace(finding.Kind),
+		strings.TrimSpace(finding.Locator),
+		strings.TrimSpace(finding.Fingerprint),
+		strings.TrimSpace(finding.StructureKey),
+		strings.TrimSpace(finding.SubtreeSignature),
+		strings.TrimSpace(finding.Role),
+		strings.TrimSpace(finding.Label),
+		strings.TrimSpace(finding.Field),
+		strings.TrimSpace(finding.Old),
+		strings.TrimSpace(finding.New),
+	}
+	sum := sha1.Sum([]byte(strings.Join(parts, "\x1f")))
+	hash := fmt.Sprintf("%x", sum)
+	if len(hash) > 12 {
+		hash = hash[:12]
+	}
+	return kind + ":" + hash
+}
+
+func compareFindingIDKind(kind string) string {
+	kind = normalizeCompareDecisionToken(kind)
+	if kind == "" {
+		return "finding"
+	}
+	var builder strings.Builder
+	for _, r := range kind {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '_' || r == '-':
+			builder.WriteByte('_')
+		}
+	}
+	if builder.Len() == 0 {
+		return "finding"
+	}
+	return builder.String()
 }
 
 func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {

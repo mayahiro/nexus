@@ -105,7 +105,8 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 {"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"same role/name and nearby bbox"}
 {"kind":"subtree_pair","old":"@e40","new":"@e72","confidence":"high","match_kind":"ordered_children","count":12,"reason":"same link list region"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs human review"}
+{"kind":"accepted_finding","finding_id":"text_changed:3fa21c9d4b2a","reason":"approved copy change"}
 ```
 
-Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions are stamped back onto findings with `decision_kind`.
+Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
 Use `--output-decisions-template pair-decisions.todo.jsonl` to generate editable unknown pair stubs from ambiguous candidates. Validate the reviewed file with `nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json`; each line also matches `docs/ai/compare-decisions.schema.json`.

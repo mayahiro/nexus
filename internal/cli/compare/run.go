@@ -420,8 +420,12 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
+	findingDecisionEffects, err := compareResolveFindingDecisionEffects(decisions)
+	if err != nil {
+		return compareReport{}, err
+	}
 
-	return buildCompareReportWithDecisions(
+	return buildCompareReportWithDecisionEffects(
 		oldSnapshot,
 		newSnapshot,
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
@@ -429,6 +433,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		run.MatchingDebug,
 		decisionMatches,
 		decisionEffects,
+		findingDecisionEffects,
 	), nil
 }
 

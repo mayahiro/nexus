@@ -111,6 +111,7 @@ type compareScope struct {
 
 type compareFinding struct {
 	Kind             string   `json:"kind"`
+	FindingID        string   `json:"finding_id,omitempty"`
 	Severity         string   `json:"severity,omitempty"`
 	Impact           string   `json:"impact,omitempty"`
 	DecisionKind     string   `json:"decision_kind,omitempty"`
@@ -129,16 +130,18 @@ type compareFinding struct {
 }
 
 type compareDecisionValidationSummary struct {
-	TotalDecisions  int  `json:"total_decisions"`
-	HighPairs       int  `json:"high_pairs"`
-	TentativePairs  int  `json:"tentative_pairs"`
-	UnknownPairs    int  `json:"unknown_pairs"`
-	SubtreePairs    int  `json:"subtree_pairs"`
-	AcceptedRemoved int  `json:"accepted_removed"`
-	AcceptedAdded   int  `json:"accepted_added"`
-	Errors          int  `json:"errors"`
-	Warnings        int  `json:"warnings"`
-	CompareJSONUsed bool `json:"compare_json_used"`
+	TotalDecisions     int  `json:"total_decisions"`
+	HighPairs          int  `json:"high_pairs"`
+	TentativePairs     int  `json:"tentative_pairs"`
+	UnknownPairs       int  `json:"unknown_pairs"`
+	SubtreePairs       int  `json:"subtree_pairs"`
+	AcceptedRemoved    int  `json:"accepted_removed"`
+	AcceptedAdded      int  `json:"accepted_added"`
+	AcceptedFindings   int  `json:"accepted_findings"`
+	RegressionFindings int  `json:"regression_findings"`
+	Errors             int  `json:"errors"`
+	Warnings           int  `json:"warnings"`
+	CompareJSONUsed    bool `json:"compare_json_used"`
 }
 
 type compareDecisionValidationIssue struct {

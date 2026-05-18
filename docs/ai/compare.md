@@ -121,7 +121,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - use `histogram` with `--node-scope all --scope-selector <css>` for focused subtree work where wrapper `div` and layout containers matter
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
-JSON findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+JSON findings include a stable `finding_id`. Findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
 When `--node-scope all` is used, compare requires `--scope-selector` or both side-specific scope selectors. All visible elements inside that scope are observed. Compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings; histogram can use these as low-occurrence anchors without changing the base fingerprint.
 
 ## Pair Decisions
@@ -136,14 +136,16 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
 {"kind":"accepted_removed","old":"@e45","reason":"legacy-only footer link intentionally removed"}
 {"kind":"accepted_added","new":"@e88","reason":"new skip-link"}
+{"kind":"accepted_finding","finding_id":"text_changed:3fa21c9d4b2a","reason":"approved copy change"}
+{"kind":"regression_finding","finding_id":"layout_changed:4d2aa4107e9f","reason":"primary CTA moved below the fold"}
 ```
 
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. Non-high entries are accepted as review notes but are not used as anchors or matches.
 `subtree_pair` currently supports `match_kind:"ordered_children"` for ref/fingerprint-based roots; it pairs the roots, then pairs observed direct children in DOM order. `count` is optional and validates the expected number of child pairs when present.
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable `unknown` pair stubs from `matching_debug.ambiguous_candidates`.
-Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs/subtrees, and current refs/fingerprints before rerunning compare.
-`accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `regression_removed` and `unexpected_added` keep the finding explicit with `decision_kind` metadata.
+Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs/subtrees/finding decisions, and current refs/fingerprints/finding IDs before rerunning compare.
+`accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `accepted_finding` marks an existing finding by `finding_id` as approved `info`; `regression_finding`, `regression_removed`, and `unexpected_added` keep the finding explicit with `decision_kind` metadata.
 Confidence is intentionally conservative in the current matcher: only `high` pair and subtree decisions become anchors, and finding decisions apply only when confidence is omitted or `high`. `tentative` and `unknown` stay in the JSONL as review evidence so later soft-match workflows can consume the same file format.
 
 ## Matching Debug

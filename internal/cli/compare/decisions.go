@@ -18,6 +18,7 @@ type compareDecision struct {
 	New            string `json:"new,omitempty"`
 	OldFingerprint string `json:"old_fingerprint,omitempty"`
 	NewFingerprint string `json:"new_fingerprint,omitempty"`
+	FindingID      string `json:"finding_id,omitempty"`
 	Confidence     string `json:"confidence,omitempty"`
 	MatchKind      string `json:"match_kind,omitempty"`
 	Count          int    `json:"count,omitempty"`
@@ -40,6 +41,10 @@ type compareDecisionEffect struct {
 type compareDecisionEffects struct {
 	Old map[int]compareDecisionEffect
 	New map[int]compareDecisionEffect
+}
+
+type compareFindingDecisionEffects struct {
+	ByID map[string]compareDecisionEffect
 }
 
 func loadCompareDecisions(path string) ([]compareDecision, error) {
@@ -264,6 +269,30 @@ func compareResolveDecisionEffects(decisions []compareDecision, oldNodes []compa
 	return effects, nil
 }
 
+func compareResolveFindingDecisionEffects(decisions []compareDecision) (compareFindingDecisionEffects, error) {
+	effects := compareFindingDecisionEffects{
+		ByID: map[string]compareDecisionEffect{},
+	}
+	for index, decision := range decisions {
+		lineNumber := compareDecisionLineNumber(decision, index)
+		if !compareDecisionApplies(decision) {
+			continue
+		}
+		switch decision.Kind {
+		case "accepted_finding", "regression_finding":
+			findingID := strings.TrimSpace(decision.FindingID)
+			if compareDecisionUnknownValue(findingID) {
+				return compareFindingDecisionEffects{}, fmt.Errorf("decision line %d: finding decision requires finding_id", lineNumber)
+			}
+			if _, ok := effects.ByID[findingID]; ok {
+				return compareFindingDecisionEffects{}, fmt.Errorf("decision line %d: finding %q already has a decision effect", lineNumber, findingID)
+			}
+			effects.ByID[findingID] = compareDecisionEffectFor(decision.Kind)
+		}
+	}
+	return effects, nil
+}
+
 func compareDecisionEffectFor(kind string) compareDecisionEffect {
 	effect := compareDecisionEffect{
 		Kind:      kind,
@@ -283,6 +312,12 @@ func compareDecisionEffectFor(kind string) compareDecisionEffect {
 	case "unexpected_added":
 		effect.Severity = "warning"
 		effect.Impact = "unexpected_added"
+	case "accepted_finding":
+		effect.Severity = "info"
+		effect.Impact = "accepted_finding"
+	case "regression_finding":
+		effect.Severity = "critical"
+		effect.Impact = "regression_finding"
 	}
 	return effect
 }
@@ -343,7 +378,7 @@ func compareResolveDecisionNode(nodes []compareSnapshotNode, side string, ref st
 
 func compareDecisionKindSupported(kind string) bool {
 	switch kind {
-	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "unknown", "pattern", "severity":
+	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "accepted_finding", "regression_finding", "unknown", "pattern", "severity":
 		return true
 	default:
 		return false
@@ -384,6 +419,7 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 	usedNewPairs := map[int]int{}
 	usedOldEffects := map[int]int{}
 	usedNewEffects := map[int]int{}
+	usedFindingEffects := map[string]int{}
 
 	for index, decision := range decisions {
 		decision.Kind = normalizeCompareDecisionToken(decision.Kind)
@@ -410,6 +446,8 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 			validateCompareOldDecision(&report, addIssue, usedOldEffects, decision, index, compareReport)
 		case "accepted_added", "unexpected_added":
 			validateCompareNewDecision(&report, addIssue, usedNewEffects, decision, index, compareReport)
+		case "accepted_finding", "regression_finding":
+			validateCompareFindingDecision(&report, addIssue, usedFindingEffects, decision, index, compareReport)
 		case "pattern":
 			if strings.TrimSpace(decision.Context) == "" && strings.TrimSpace(decision.Note) == "" && strings.TrimSpace(decision.Reason) == "" {
 				addIssue("warning", decision, index, "reason", "pattern decisions should include reason, note, or context")
@@ -559,6 +597,41 @@ func validateCompareNewDecision(report *compareDecisionValidationReport, addIssu
 		return
 	}
 	used[newIndex] = compareDecisionLineNumber(decision, index)
+}
+
+func validateCompareFindingDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), used map[string]int, decision compareDecision, index int, compareReport *compareReport) {
+	if decision.Kind == "accepted_finding" {
+		report.Summary.AcceptedFindings++
+	}
+	if decision.Kind == "regression_finding" {
+		report.Summary.RegressionFindings++
+	}
+	findingID := strings.TrimSpace(decision.FindingID)
+	if compareDecisionUnknownValue(findingID) {
+		addIssue("error", decision, index, "finding_id", "finding decisions require finding_id")
+		return
+	}
+	if compareReport == nil || !compareDecisionApplies(decision) {
+		return
+	}
+	if !compareReportHasFindingID(compareReport, findingID) {
+		addIssue("error", decision, index, "finding_id", fmt.Sprintf("finding_id %q was not found in compare report", findingID))
+		return
+	}
+	if previousLine, ok := used[findingID]; ok {
+		addIssue("error", decision, index, "finding_id", fmt.Sprintf("finding already has a decision effect from line %d", previousLine))
+		return
+	}
+	used[findingID] = compareDecisionLineNumber(decision, index)
+}
+
+func compareReportHasFindingID(report *compareReport, findingID string) bool {
+	for _, finding := range report.Findings {
+		if strings.TrimSpace(finding.FindingID) == findingID {
+			return true
+		}
+	}
+	return false
 }
 
 func writeCompareDecisionsTemplate(path string, debug *compareMatchingDebug) error {

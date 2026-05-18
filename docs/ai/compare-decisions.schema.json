@@ -19,6 +19,8 @@
         "accepted_added",
         "regression_removed",
         "unexpected_added",
+        "accepted_finding",
+        "regression_finding",
         "unknown",
         "pattern",
         "severity"
@@ -328,6 +330,19 @@
       "if": {
         "properties": {
           "kind": {
+            "enum": ["accepted_finding", "regression_finding"]
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["finding_id"]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
             "const": "pattern"
           }
         },
@@ -405,6 +420,12 @@
       "match_kind": "ordered_children",
       "count": 12,
       "reason": "same link list region"
+    },
+    {
+      "schema_version": 1,
+      "kind": "accepted_finding",
+      "finding_id": "text_changed:3fa21c9d4b2a",
+      "reason": "approved copy change"
     }
   ]
 }

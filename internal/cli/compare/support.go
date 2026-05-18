@@ -20,7 +20,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "layout: --compare-layout reports significant viewport-relative bounds changes for matching nodes")
 	fmt.Fprintln(w, "matching: --match-mode exact preserves fingerprint matching, stable uses unique identity keys, heuristic adds conservative fuzzy matching, histogram experimentally anchors low-occurrence semantic keys before local matching")
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
-	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair or subtree_pair decisions before automatic matching")
+	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
 	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates")
 	fmt.Fprintln(w, "node scope: --node-scope current preserves existing candidates, actionable narrows to controls, semantic includes named/content semantic nodes, all observes every visible element inside an explicit scope")
 	fmt.Fprintln(w, "scope: --scope-selector applies to both sides; --old-scope-selector and --new-scope-selector override it per side")
@@ -35,7 +35,7 @@ func PrintHelp(w io.Writer) {
 
 func PrintValidateDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--json]")
-	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees, and current refs/fingerprints when --compare-json is provided")
+	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, and current refs/fingerprints/finding_ids when --compare-json is provided")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }

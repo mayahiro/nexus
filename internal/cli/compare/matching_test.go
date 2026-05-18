@@ -573,6 +573,86 @@ func TestAcceptedRemovedDecisionDowngradesMissingFinding(t *testing.T) {
 	}
 }
 
+func TestCompareFindingsIncludeStableIDs(t *testing.T) {
+	oldSnapshot := compareSnapshot{Title: "Old title"}
+	newSnapshot := compareSnapshot{Title: "New title"}
+
+	first := buildCompareReport(oldSnapshot, newSnapshot, nil, compareMatchModeExact)
+	second := buildCompareReport(oldSnapshot, newSnapshot, nil, compareMatchModeExact)
+
+	if len(first.Findings) != 1 || len(second.Findings) != 1 {
+		t.Fatalf("expected one title finding: first=%+v second=%+v", first.Findings, second.Findings)
+	}
+	if first.Findings[0].FindingID == "" || first.Findings[0].FindingID != second.Findings[0].FindingID {
+		t.Fatalf("expected stable finding id: first=%+v second=%+v", first.Findings[0], second.Findings[0])
+	}
+	if !strings.HasPrefix(first.Findings[0].FindingID, "title_changed:") {
+		t.Fatalf("expected kind-prefixed finding id: %+v", first.Findings[0])
+	}
+}
+
+func TestAcceptedFindingDecisionDowngradesExistingFinding(t *testing.T) {
+	oldSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{Fingerprint: "button|save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+		},
+	}
+	newSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{Fingerprint: "button|save", Ref: "@e2", Role: "button", Label: "Save changes", Name: "Save changes", Visible: true, Enabled: true, Invokable: true},
+		},
+	}
+	base := buildCompareReport(oldSnapshot, newSnapshot, nil, compareMatchModeExact)
+	if len(base.Findings) != 1 || base.Findings[0].FindingID == "" {
+		t.Fatalf("expected one text finding with id: %+v", base.Findings)
+	}
+
+	report := buildCompareReportWithDecisionEffects(
+		oldSnapshot,
+		newSnapshot,
+		nil,
+		compareMatchModeExact,
+		false,
+		nil,
+		compareDecisionEffects{},
+		compareFindingDecisionEffects{
+			ByID: map[string]compareDecisionEffect{
+				base.Findings[0].FindingID: compareDecisionEffectFor("accepted_finding"),
+			},
+		},
+	)
+
+	if report.Summary.TextChanged != 1 || report.Summary.Info != 1 || report.Summary.Critical != 0 {
+		t.Fatalf("expected accepted finding to become info: %+v", report.Summary)
+	}
+	finding := report.Findings[0]
+	if finding.FindingID != base.Findings[0].FindingID || finding.Severity != "info" || finding.Impact != "accepted_finding" || finding.DecisionKind != "accepted_finding" {
+		t.Fatalf("expected accepted finding metadata: %+v", finding)
+	}
+}
+
+func TestValidateCompareDecisionsChecksFindingID(t *testing.T) {
+	report := compareReport{
+		Findings: []compareFinding{
+			{Kind: "text_changed", FindingID: "text_changed:abc123"},
+		},
+	}
+	validation := validateCompareDecisions([]compareDecision{
+		{Kind: "accepted_finding", FindingID: "text_changed:abc123", Line: 1},
+		{Kind: "regression_finding", FindingID: "missing_node:def456", Line: 2},
+	}, &report)
+
+	if validation.Summary.AcceptedFindings != 1 || validation.Summary.RegressionFindings != 1 || !validation.Summary.CompareJSONUsed {
+		t.Fatalf("expected finding decision counts: %+v", validation.Summary)
+	}
+	if validation.Summary.Errors != 1 {
+		t.Fatalf("expected missing finding_id error: %+v", validation)
+	}
+	if len(validation.Issues) != 1 || validation.Issues[0].Field != "finding_id" {
+		t.Fatalf("expected finding_id validation issue: %+v", validation.Issues)
+	}
+}
+
 func TestNormalizeCompareMatchMode(t *testing.T) {
 	for _, value := range []string{"", "exact", "stable", "heuristic", "histogram", " STABLE "} {
 		if _, err := normalizeCompareMatchMode(value); err != nil {
