@@ -25,7 +25,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
 	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
 	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator fields to current refs before compare")
-	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates")
+	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates and unmatched old/new nodes")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
 	fmt.Fprintln(w, "review packet: --review-dir writes compare.json, compare.md, decision templates, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
 	fmt.Fprintln(w, "node scope: --node-scope current preserves existing candidates, actionable narrows to controls, semantic includes named/content semantic nodes, all observes every visible element inside an explicit scope")

@@ -895,6 +895,63 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	}
 }
 
+func TestCompareDecisionsTemplateWritesUnmatchedStubs(t *testing.T) {
+	debug := &compareMatchingDebug{
+		UnmatchedOld: []compareMatchingDebugNode{
+			{Ref: "@e10", Locator: `role link --name "Legacy"`, Fingerprint: "old-legacy", Role: "link", Label: "Legacy"},
+		},
+		UnmatchedNew: []compareMatchingDebugNode{
+			{Ref: "@e88", Locator: `testid "skip-link"`, Fingerprint: "new-skip", Role: "link", Label: "Skip to content", TestID: "skip-link"},
+		},
+	}
+
+	var buffer bytes.Buffer
+	if err := printCompareDecisionsTemplate(&buffer, debug); err != nil {
+		t.Fatalf("expected template to render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected unmatched old/new stubs, got %d lines:\n%s", len(lines), buffer.String())
+	}
+	var oldDecision compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &oldDecision); err != nil {
+		t.Fatalf("expected old stub jsonl: %v\n%s", err, lines[0])
+	}
+	if oldDecision.Kind != "pair" || oldDecision.Old != "@e10" || oldDecision.New != "?" || oldDecision.OldLocator == "" || !strings.Contains(oldDecision.Note, "accepted_removed") {
+		t.Fatalf("unexpected unmatched old stub: %+v", oldDecision)
+	}
+	var newDecision compareDecision
+	if err := json.Unmarshal([]byte(lines[1]), &newDecision); err != nil {
+		t.Fatalf("expected new stub jsonl: %v\n%s", err, lines[1])
+	}
+	if newDecision.Kind != "accepted_added" || newDecision.New != "@e88" || newDecision.NewLocator == "" || !strings.Contains(newDecision.Note, "old/old_locator") {
+		t.Fatalf("unexpected unmatched new stub: %+v", newDecision)
+	}
+}
+
+func TestCompareDecisionsTemplateCapsUnmatchedStubs(t *testing.T) {
+	nodes := make([]compareMatchingDebugNode, 0, compareDecisionTemplateMaxUnmatchedNodes+1)
+	for i := 0; i < compareDecisionTemplateMaxUnmatchedNodes+1; i++ {
+		nodes = append(nodes, compareMatchingDebugNode{Ref: fmt.Sprintf("@e%d", i+1), Role: "link", Label: fmt.Sprintf("Link %d", i+1)})
+	}
+
+	var buffer bytes.Buffer
+	if err := printCompareDecisionsTemplate(&buffer, &compareMatchingDebug{UnmatchedOld: nodes}); err != nil {
+		t.Fatalf("expected template to render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != compareDecisionTemplateMaxUnmatchedNodes+1 {
+		t.Fatalf("expected capped unmatched stubs plus summary, got %d lines", len(lines))
+	}
+	var summary compareDecision
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &summary); err != nil {
+		t.Fatalf("expected truncation summary jsonl: %v\n%s", err, lines[len(lines)-1])
+	}
+	if summary.Kind != "unknown" || !strings.Contains(summary.Note, "emitted 50 of 51") {
+		t.Fatalf("unexpected truncation summary: %+v", summary)
+	}
+}
+
 func TestCompareFindingDecisionsTemplateWritesReviewStubs(t *testing.T) {
 	report := compareReport{
 		Findings: []compareFinding{

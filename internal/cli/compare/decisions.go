@@ -12,6 +12,7 @@ import (
 )
 
 const compareDecisionMaxLineBytes = 1024 * 1024
+const compareDecisionTemplateMaxUnmatchedNodes = 50
 
 type compareDecision struct {
 	SchemaVersion  int      `json:"schema_version,omitempty"`
@@ -1666,7 +1667,73 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 			return err
 		}
 	}
+	if err := printCompareUnmatchedOldDecisionsTemplate(encoder, debug.UnmatchedOld); err != nil {
+		return err
+	}
+	if err := printCompareUnmatchedNewDecisionsTemplate(encoder, debug.UnmatchedNew); err != nil {
+		return err
+	}
 	return nil
+}
+
+func printCompareUnmatchedOldDecisionsTemplate(encoder *json.Encoder, nodes []compareMatchingDebugNode) error {
+	for _, node := range compareDecisionTemplateNodes(nodes) {
+		decision := compareDecision{
+			SchemaVersion:  1,
+			Kind:           "pair",
+			Old:            firstNonEmpty(node.Ref, "?"),
+			OldLocator:     strings.TrimSpace(node.Locator),
+			OldFingerprint: strings.TrimSpace(node.Fingerprint),
+			New:            "?",
+			Confidence:     "unknown",
+			Reason:         "review unmatched old node",
+			Note:           compareUnmatchedDecisionTemplateNote("unmatched old", node, "choose new/new_locator, change kind to accepted_removed, or leave unknown"),
+		}
+		if err := encoder.Encode(decision); err != nil {
+			return err
+		}
+	}
+	return printCompareDecisionTemplateTruncation(encoder, "unmatched_old", len(nodes))
+}
+
+func printCompareUnmatchedNewDecisionsTemplate(encoder *json.Encoder, nodes []compareMatchingDebugNode) error {
+	for _, node := range compareDecisionTemplateNodes(nodes) {
+		decision := compareDecision{
+			SchemaVersion:  1,
+			Kind:           "accepted_added",
+			New:            firstNonEmpty(node.Ref, "?"),
+			NewLocator:     strings.TrimSpace(node.Locator),
+			NewFingerprint: strings.TrimSpace(node.Fingerprint),
+			Confidence:     "unknown",
+			Reason:         "review unmatched new node",
+			Note:           compareUnmatchedDecisionTemplateNote("unmatched new", node, "confirm accepted_added, change kind to pair with old/old_locator, or leave unknown"),
+		}
+		if err := encoder.Encode(decision); err != nil {
+			return err
+		}
+	}
+	return printCompareDecisionTemplateTruncation(encoder, "unmatched_new", len(nodes))
+}
+
+func compareDecisionTemplateNodes(nodes []compareMatchingDebugNode) []compareMatchingDebugNode {
+	if len(nodes) <= compareDecisionTemplateMaxUnmatchedNodes {
+		return nodes
+	}
+	return nodes[:compareDecisionTemplateMaxUnmatchedNodes]
+}
+
+func printCompareDecisionTemplateTruncation(encoder *json.Encoder, kind string, total int) error {
+	if total <= compareDecisionTemplateMaxUnmatchedNodes {
+		return nil
+	}
+	decision := compareDecision{
+		SchemaVersion: 1,
+		Kind:          "unknown",
+		Confidence:    "unknown",
+		Reason:        kind + " template truncated",
+		Note:          fmt.Sprintf("emitted %d of %d nodes; inspect matching_debug.%s for the remaining nodes", compareDecisionTemplateMaxUnmatchedNodes, total, kind),
+	}
+	return encoder.Encode(decision)
 }
 
 func printCompareFindingDecisionsTemplate(w io.Writer, report compareReport) error {
@@ -1720,6 +1787,41 @@ func compareFindingDecisionTemplateNote(finding compareFinding) string {
 		strings.TrimSpace(finding.Field),
 	}
 	return strings.Join(compactCompareDecisionTemplateValues(values), " | ")
+}
+
+func compareUnmatchedDecisionTemplateNote(prefix string, node compareMatchingDebugNode, action string) string {
+	values := []string{
+		prefix,
+		action,
+		compareMatchingDebugNodeTemplateNote(node),
+	}
+	return strings.Join(compactCompareDecisionTemplateValues(values), " | ")
+}
+
+func compareMatchingDebugNodeTemplateNote(node compareMatchingDebugNode) string {
+	values := []string{}
+	if ref := strings.TrimSpace(node.Ref); ref != "" {
+		values = append(values, "ref="+ref)
+	}
+	if locator := strings.TrimSpace(node.Locator); locator != "" {
+		values = append(values, "locator="+strconv.Quote(locator))
+	}
+	if role := strings.TrimSpace(node.Role); role != "" {
+		values = append(values, "role="+role)
+	}
+	if label := strings.TrimSpace(firstNonEmpty(node.Label, node.Name, node.Text)); label != "" {
+		values = append(values, "label="+strconv.Quote(label))
+	}
+	if href := strings.TrimSpace(node.Href); href != "" {
+		values = append(values, "href="+strconv.Quote(href))
+	}
+	if testID := strings.TrimSpace(node.TestID); testID != "" {
+		values = append(values, "testid="+strconv.Quote(testID))
+	}
+	if fingerprint := strings.TrimSpace(node.Fingerprint); fingerprint != "" {
+		values = append(values, "fingerprint="+strconv.Quote(fingerprint))
+	}
+	return strings.Join(values, " ")
 }
 
 func compactCompareDecisionTemplateValues(values []string) []string {

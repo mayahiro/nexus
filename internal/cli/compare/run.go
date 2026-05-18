@@ -51,7 +51,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, semantic, or all")
 	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
 	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
-	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous matching candidates")
+	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous and unmatched matching debug nodes")
 	outputFindingDecisionsTemplate := fs.String("output-finding-decisions-template", "", "write a JSONL decisions template from current findings")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
