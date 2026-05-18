@@ -109,7 +109,8 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 ```
 
 Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
-Use `--review-dir review/orders` when starting a review pass to produce `compare.json`, `compare.md`, pair and finding decision templates, and `review-summary.json` together.
+Use `--review-dir review/orders` when starting a review pass to produce `compare.json`, `compare.md`, pair and finding decision templates, viewport screenshots, and `review-summary.json` together.
+For a manifest run, use `nxctl compare --manifest migration-pages.json --review-dir review/migration` to produce manifest-level summaries and one review packet directory per page.
 Use `--output-finding-decisions-template finding-decisions.todo.jsonl` after a compare run to produce `unknown`-confidence review stubs for current critical and warning findings.
 Use `nxctl compare normalize-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json --output pair-decisions.normalized.jsonl` before reusing a reviewed file to remove duplicate decisions and catch stale refs or finding IDs.
 Use `nxctl compare audit-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json` after rerunning compare to confirm reviewed decisions were applied and to surface stale or conflicting entries.

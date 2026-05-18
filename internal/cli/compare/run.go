@@ -145,6 +145,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		MatchingDebug:           *matchingDebug || strings.TrimSpace(*outputDecisionsTemplate) != "" || strings.TrimSpace(*reviewDir) != "",
 		DecisionsFile:           *decisionsFile,
 		OutputDecisionsTemplate: strings.TrimSpace(*outputDecisionsTemplate),
+		ReviewDir:               strings.TrimSpace(*reviewDir),
 		WaitSelector:            *waitSelector,
 		ScopeSelector:           *scopeSelector,
 		OldScopeSelector:        *oldScopeSelector,
@@ -167,10 +168,6 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		}
 		if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
 			fmt.Fprintln(stderr, "compare can not use --output-finding-decisions-template with --manifest")
-			return 1
-		}
-		if strings.TrimSpace(*reviewDir) != "" {
-			fmt.Fprintln(stderr, "compare can not use --review-dir with --manifest")
 			return 1
 		}
 		manifest, err := loadCompareManifest(*manifestPath)
@@ -247,13 +244,6 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 			return 1
 		}
 	}
-	if strings.TrimSpace(*reviewDir) != "" {
-		if err := writeCompareReviewPacket(strings.TrimSpace(*reviewDir), report); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-	}
-
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -597,7 +587,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		return compareReport{}, err
 	}
 
-	return buildCompareReportWithDecisionEffects(
+	report := buildCompareReportWithDecisionEffects(
 		oldSnapshot,
 		newSnapshot,
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
@@ -606,7 +596,14 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		decisionMatches,
 		decisionEffects,
 		findingDecisionEffects,
-	), nil
+	)
+	if strings.TrimSpace(run.ReviewDir) != "" {
+		screenshots := captureCompareReviewScreenshots(ctx, client, oldPrepared.SessionID, newPrepared.SessionID)
+		if err := writeCompareReviewPacket(strings.TrimSpace(run.ReviewDir), report, screenshots); err != nil {
+			return compareReport{}, err
+		}
+	}
+	return report, nil
 }
 
 func resolveCompareScopeSelectors(scopeSelector string, oldScopeSelector string, newScopeSelector string) (string, string, error) {

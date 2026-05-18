@@ -191,6 +191,130 @@ func TestCompareManifest(t *testing.T) {
 	}
 }
 
+func TestCompareManifestReviewDir(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	handler := &compareURLRPCHandler{
+		observations: map[string]api.Observation{
+			"https://old.example.test/dashboard": {
+				URLOrScreen: "https://old.example.test/dashboard",
+				Title:       "Dashboard",
+				Text:        "Dashboard",
+				Screenshot:  "b2xkLXBuZw==",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Dashboard", Visible: true, Enabled: true},
+				},
+			},
+			"https://new.example.test/dashboard": {
+				URLOrScreen: "https://new.example.test/dashboard",
+				Title:       "Dashboard",
+				Text:        "Dashboard",
+				Screenshot:  "bmV3LXBuZw==",
+				Tree: []api.Node{
+					{ID: 1, Ref: "@e1", Fingerprint: "title", Role: "heading", Name: "Dashboard", Visible: true, Enabled: true},
+				},
+			},
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
+	}()
+
+	tempDir := t.TempDir()
+	manifestPath := filepath.Join(tempDir, "compare-manifest.json")
+	reviewDir := filepath.Join(tempDir, "review")
+	manifest := map[string]any{
+		"pages": []map[string]any{
+			{
+				"name":    "dashboard page",
+				"old_url": "https://old.example.test/dashboard",
+				"new_url": "https://new.example.test/dashboard",
+			},
+		},
+	}
+	manifestBytes, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	args := []string{
+		"compare",
+		"--manifest", manifestPath,
+		"--target-ref", "/tmp/fake-chromium",
+		"--review-dir", reviewDir,
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected compare manifest review exit code: %d\n%s", code, stdout.String())
+	}
+
+	pageDir := filepath.Join(reviewDir, "001-dashboard-page")
+	for _, path := range []string{
+		filepath.Join(reviewDir, "manifest.json"),
+		filepath.Join(reviewDir, "manifest.md"),
+		filepath.Join(reviewDir, "review-summary.json"),
+		filepath.Join(pageDir, "compare.json"),
+		filepath.Join(pageDir, "compare.md"),
+		filepath.Join(pageDir, "pair-decisions.todo.jsonl"),
+		filepath.Join(pageDir, "finding-decisions.todo.jsonl"),
+		filepath.Join(pageDir, "old.png"),
+		filepath.Join(pageDir, "new.png"),
+		filepath.Join(pageDir, "review-summary.json"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected review file %s to exist: %v", path, err)
+		}
+	}
+	oldScreenshot, err := os.ReadFile(filepath.Join(pageDir, "old.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(oldScreenshot) != "old-png" {
+		t.Fatalf("unexpected old screenshot bytes: %q", string(oldScreenshot))
+	}
+	newScreenshot, err := os.ReadFile(filepath.Join(pageDir, "new.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(newScreenshot) != "new-png" {
+		t.Fatalf("unexpected new screenshot bytes: %q", string(newScreenshot))
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestCompareManifestAppliesBackendAndViewportOverrides(t *testing.T) {
 	configureXDGTestEnv(t)
 

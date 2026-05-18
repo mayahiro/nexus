@@ -192,6 +192,8 @@ type compareReviewFiles struct {
 	CompareMarkdown          string `json:"compare_markdown"`
 	PairDecisionsTemplate    string `json:"pair_decisions_template"`
 	FindingDecisionsTemplate string `json:"finding_decisions_template"`
+	OldScreenshot            string `json:"old_screenshot,omitempty"`
+	NewScreenshot            string `json:"new_screenshot,omitempty"`
 	ReviewSummary            string `json:"review_summary"`
 }
 
@@ -210,7 +212,35 @@ type compareReviewSummary struct {
 	UnmatchedOld            int                `json:"unmatched_old,omitempty"`
 	UnmatchedNew            int                `json:"unmatched_new,omitempty"`
 	Files                   compareReviewFiles `json:"files"`
+	ScreenshotWarnings      []string           `json:"screenshot_warnings,omitempty"`
 	NextCommands            []string           `json:"next_commands,omitempty"`
+}
+
+type compareManifestReviewPageDirectory struct {
+	Name      string `json:"name"`
+	Directory string `json:"directory,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+type compareManifestReviewFiles struct {
+	ManifestJSON     string                               `json:"manifest_json"`
+	ManifestMarkdown string                               `json:"manifest_markdown"`
+	ReviewSummary    string                               `json:"review_summary"`
+	PageDirectories  []compareManifestReviewPageDirectory `json:"page_directories,omitempty"`
+}
+
+type compareManifestReviewSummary struct {
+	Manifest         string                     `json:"manifest,omitempty"`
+	TotalPages       int                        `json:"total_pages"`
+	ComparedPages    int                        `json:"compared_pages"`
+	FailedPages      int                        `json:"failed_pages"`
+	SamePages        int                        `json:"same_pages"`
+	DifferentPages   int                        `json:"different_pages"`
+	TotalFindings    int                        `json:"total_findings"`
+	CriticalFindings int                        `json:"critical_findings"`
+	WarningFindings  int                        `json:"warning_findings"`
+	InfoFindings     int                        `json:"info_findings"`
+	Files            compareManifestReviewFiles `json:"files"`
 }
 
 type compareMatchingDebug struct {
@@ -390,6 +420,7 @@ type compareRun struct {
 	MatchingDebug           bool
 	DecisionsFile           string
 	OutputDecisionsTemplate string
+	ReviewDir               string
 	WaitSelector            string
 	ScopeSelector           string
 	OldScopeSelector        string

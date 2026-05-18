@@ -754,7 +754,12 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		},
 	}
 
-	if err := writeCompareReviewPacket(dir, report); err != nil {
+	screenshots := compareReviewScreenshots{
+		Old:      []byte("old screenshot bytes"),
+		New:      []byte("new screenshot bytes"),
+		Warnings: []string{"new screenshot: test warning"},
+	}
+	if err := writeCompareReviewPacket(dir, report, screenshots); err != nil {
 		t.Fatalf("expected review packet to write: %v", err)
 	}
 	for _, name := range []string{
@@ -762,6 +767,8 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		compareReviewFileMarkdown,
 		compareReviewFilePairDecisionsTemplate,
 		compareReviewFileFindingDecisionsTemplate,
+		compareReviewFileOldScreenshot,
+		compareReviewFileNewScreenshot,
 		compareReviewFileSummary,
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -781,6 +788,79 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	}
 	if summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
 		t.Fatalf("expected review files and next commands: %+v", summary)
+	}
+	if summary.Files.OldScreenshot != filepath.Join(dir, compareReviewFileOldScreenshot) || summary.Files.NewScreenshot != filepath.Join(dir, compareReviewFileNewScreenshot) {
+		t.Fatalf("expected screenshot file references: %+v", summary.Files)
+	}
+	if len(summary.ScreenshotWarnings) != 1 {
+		t.Fatalf("expected screenshot warning in review summary: %+v", summary)
+	}
+	oldScreenshot, err := os.ReadFile(filepath.Join(dir, compareReviewFileOldScreenshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(oldScreenshot) != "old screenshot bytes" {
+		t.Fatalf("unexpected old screenshot bytes: %q", string(oldScreenshot))
+	}
+}
+
+func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
+	dir := t.TempDir()
+	report := compareManifestReport{
+		Manifest: "manifest.json",
+		Summary: compareManifestSummary{
+			TotalPages:     2,
+			ComparedPages:  1,
+			FailedPages:    1,
+			DifferentPages: 1,
+			TotalFindings:  3,
+			Critical:       1,
+			Warning:        2,
+		},
+		Pages: []compareManifestPageReport{
+			{Name: "dashboard", Report: &compareReport{Summary: compareSummary{TotalFindings: 3}}},
+			{Name: "settings", Error: "failed"},
+		},
+	}
+	pageDirectories := []compareManifestReviewPageDirectory{
+		{Name: "dashboard", Directory: filepath.Join(dir, "001-dashboard")},
+		{Name: "settings", Directory: filepath.Join(dir, "002-settings"), Error: "failed"},
+	}
+
+	if err := writeCompareManifestReviewPacket(dir, report, pageDirectories); err != nil {
+		t.Fatalf("expected manifest review packet to write: %v", err)
+	}
+	for _, name := range []string{
+		compareReviewFileManifestJSON,
+		compareReviewFileManifestMarkdown,
+		compareReviewFileSummary,
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+	var summary compareManifestReviewSummary
+	bytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileSummary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bytes, &summary); err != nil {
+		t.Fatalf("expected manifest review summary json: %v\n%s", err, string(bytes))
+	}
+	if summary.TotalPages != 2 || summary.ComparedPages != 1 || summary.FailedPages != 1 || summary.CriticalFindings != 1 || summary.WarningFindings != 2 {
+		t.Fatalf("unexpected manifest review summary: %+v", summary)
+	}
+	if len(summary.Files.PageDirectories) != 2 || summary.Files.PageDirectories[1].Error != "failed" {
+		t.Fatalf("expected page directory summary: %+v", summary.Files.PageDirectories)
+	}
+}
+
+func TestCompareManifestReviewDirNameSanitizesPageName(t *testing.T) {
+	if got := compareManifestReviewDirName("admin/settings page", 1); got != "002-admin-settings-page" {
+		t.Fatalf("unexpected sanitized review dir name: %q", got)
+	}
+	if got := compareManifestReviewDirName("../", 0); got != "001-page-001" {
+		t.Fatalf("unexpected fallback review dir name: %q", got)
 	}
 }
 

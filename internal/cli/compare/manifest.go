@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/mayahiro/nexus/internal/config"
 	"github.com/mayahiro/nexus/internal/rpc"
@@ -25,14 +27,33 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 		Manifest: manifestPath,
 		Pages:    make([]compareManifestPageReport, 0, len(pages)),
 	}
+	reviewDir := strings.TrimSpace(base.ReviewDir)
+	pageDirectories := make([]compareManifestReviewPageDirectory, 0, len(pages))
+	if reviewDir != "" {
+		if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+			return compareManifestReport{}, err
+		}
+	}
 
 	for i, page := range pages {
 		name := compareManifestPageName(page, i)
 		run := mergeCompareManifestPage(base, manifest.Defaults, page)
+		var pageDirectory compareManifestReviewPageDirectory
+		if reviewDir != "" {
+			pageDirectory = compareManifestReviewPageDirectory{
+				Name:      name,
+				Directory: filepath.Join(reviewDir, compareManifestReviewDirName(name, i)),
+			}
+			run.ReviewDir = pageDirectory.Directory
+		}
 		single, err := executeCompare(ctx, client, paths, run)
 		if err != nil {
 			if !continueOnError {
 				return compareManifestReport{}, fmt.Errorf("manifest %s failed: %w", name, err)
+			}
+			if reviewDir != "" {
+				pageDirectory.Error = err.Error()
+				pageDirectories = append(pageDirectories, pageDirectory)
 			}
 			report.Pages = append(report.Pages, compareManifestPageReport{
 				Name:  name,
@@ -44,9 +65,17 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 			Name:   name,
 			Report: &single,
 		})
+		if reviewDir != "" {
+			pageDirectories = append(pageDirectories, pageDirectory)
+		}
 	}
 
 	report.Summary = summarizeCompareManifest(report.Pages)
+	if reviewDir != "" {
+		if err := writeCompareManifestReviewPacket(reviewDir, report, pageDirectories); err != nil {
+			return compareManifestReport{}, err
+		}
+	}
 	return report, nil
 }
 
@@ -82,6 +111,7 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		NodeScope:        base.NodeScope,
 		MatchingDebug:    base.MatchingDebug,
 		DecisionsFile:    base.DecisionsFile,
+		ReviewDir:        base.ReviewDir,
 		WaitSelector:     base.WaitSelector,
 		ScopeSelector:    base.ScopeSelector,
 		OldScopeSelector: base.OldScopeSelector,
@@ -215,6 +245,26 @@ func compareManifestPageName(page compareManifestPage, index int) string {
 		return strings.TrimSpace(page.Name)
 	}
 	return fmt.Sprintf("page[%d]", index)
+}
+
+func compareManifestReviewDirName(name string, index int) string {
+	base := strings.TrimSpace(name)
+	if base == "" {
+		base = fmt.Sprintf("page-%03d", index+1)
+	}
+	var builder strings.Builder
+	for _, r := range base {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_' || r == '.' {
+			builder.WriteRune(r)
+			continue
+		}
+		builder.WriteByte('-')
+	}
+	sanitized := strings.Trim(builder.String(), ".-")
+	if sanitized == "" {
+		sanitized = fmt.Sprintf("page-%03d", index+1)
+	}
+	return fmt.Sprintf("%03d-%s", index+1, sanitized)
 }
 
 func summarizeCompareManifest(pages []compareManifestPageReport) compareManifestSummary {
