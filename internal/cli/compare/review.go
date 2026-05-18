@@ -108,6 +108,7 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		summary.AmbiguousCandidates = len(report.MatchingDebug.AmbiguousCandidates)
 		summary.UnmatchedOld = len(report.MatchingDebug.UnmatchedOld)
 		summary.UnmatchedNew = len(report.MatchingDebug.UnmatchedNew)
+		summary.PairDecisionTemplate = compareDecisionTemplateCountsForDebug(report.MatchingDebug)
 	}
 	materializedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.materialized.jsonl")
 	normalizedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.normalized.jsonl")

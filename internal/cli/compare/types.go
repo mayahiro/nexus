@@ -204,6 +204,16 @@ type compareDecisionAuditReport struct {
 	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
 }
 
+type compareDecisionTemplateCounts struct {
+	Ambiguous           int `json:"ambiguous"`
+	UnmatchedOld        int `json:"unmatched_old"`
+	UnmatchedNew        int `json:"unmatched_new"`
+	TruncatedOld        int `json:"truncated_old,omitempty"`
+	TruncatedNew        int `json:"truncated_new,omitempty"`
+	SkippedDuplicateOld int `json:"skipped_duplicate_old,omitempty"`
+	SkippedDuplicateNew int `json:"skipped_duplicate_new,omitempty"`
+}
+
 type compareReviewFiles struct {
 	CompareJSON              string `json:"compare_json"`
 	CompareMarkdown          string `json:"compare_markdown"`
@@ -216,24 +226,25 @@ type compareReviewFiles struct {
 }
 
 type compareReviewSummary struct {
-	Old                     string                  `json:"old,omitempty"`
-	New                     string                  `json:"new,omitempty"`
-	Scope                   string                  `json:"scope,omitempty"`
-	Same                    bool                    `json:"same"`
-	TotalFindings           int                     `json:"total_findings"`
-	CriticalFindings        int                     `json:"critical_findings"`
-	WarningFindings         int                     `json:"warning_findings"`
-	InfoFindings            int                     `json:"info_findings"`
-	MatchedNodes            int                     `json:"matched_nodes,omitempty"`
-	AmbiguousMatchesSkipped int                     `json:"ambiguous_matches_skipped,omitempty"`
-	AmbiguousCandidates     int                     `json:"ambiguous_candidates,omitempty"`
-	UnmatchedOld            int                     `json:"unmatched_old,omitempty"`
-	UnmatchedNew            int                     `json:"unmatched_new,omitempty"`
-	Files                   compareReviewFiles      `json:"files"`
-	FindingClusters         []compareFindingCluster `json:"finding_clusters,omitempty"`
-	ScreenshotWarnings      []string                `json:"screenshot_warnings,omitempty"`
-	CropWarnings            []string                `json:"crop_warnings,omitempty"`
-	NextCommands            []string                `json:"next_commands,omitempty"`
+	Old                     string                         `json:"old,omitempty"`
+	New                     string                         `json:"new,omitempty"`
+	Scope                   string                         `json:"scope,omitempty"`
+	Same                    bool                           `json:"same"`
+	TotalFindings           int                            `json:"total_findings"`
+	CriticalFindings        int                            `json:"critical_findings"`
+	WarningFindings         int                            `json:"warning_findings"`
+	InfoFindings            int                            `json:"info_findings"`
+	MatchedNodes            int                            `json:"matched_nodes,omitempty"`
+	AmbiguousMatchesSkipped int                            `json:"ambiguous_matches_skipped,omitempty"`
+	AmbiguousCandidates     int                            `json:"ambiguous_candidates,omitempty"`
+	UnmatchedOld            int                            `json:"unmatched_old,omitempty"`
+	UnmatchedNew            int                            `json:"unmatched_new,omitempty"`
+	PairDecisionTemplate    *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	Files                   compareReviewFiles             `json:"files"`
+	FindingClusters         []compareFindingCluster        `json:"finding_clusters,omitempty"`
+	ScreenshotWarnings      []string                       `json:"screenshot_warnings,omitempty"`
+	CropWarnings            []string                       `json:"crop_warnings,omitempty"`
+	NextCommands            []string                       `json:"next_commands,omitempty"`
 }
 
 type compareFindingCluster struct {

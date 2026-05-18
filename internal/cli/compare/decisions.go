@@ -14,6 +14,13 @@ import (
 const compareDecisionMaxLineBytes = 1024 * 1024
 const compareDecisionTemplateMaxUnmatchedNodes = 50
 
+type compareDecisionTemplatePlan struct {
+	Ambiguous    []compareMatchingDebugAmbiguousCandidate
+	UnmatchedOld []compareMatchingDebugNode
+	UnmatchedNew []compareMatchingDebugNode
+	Counts       compareDecisionTemplateCounts
+}
+
 type compareDecision struct {
 	SchemaVersion  int      `json:"schema_version,omitempty"`
 	Kind           string   `json:"kind,omitempty"`
@@ -1647,8 +1654,9 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 	if debug == nil {
 		return nil
 	}
+	plan := buildCompareDecisionTemplatePlan(debug)
 	encoder := json.NewEncoder(w)
-	for _, candidate := range debug.AmbiguousCandidates {
+	for _, candidate := range plan.Ambiguous {
 		decision := compareDecision{
 			SchemaVersion:  1,
 			Kind:           "pair",
@@ -1667,17 +1675,127 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 			return err
 		}
 	}
-	if err := printCompareUnmatchedOldDecisionsTemplate(encoder, debug.UnmatchedOld); err != nil {
+	if err := printCompareUnmatchedOldDecisionsTemplate(encoder, plan); err != nil {
 		return err
 	}
-	if err := printCompareUnmatchedNewDecisionsTemplate(encoder, debug.UnmatchedNew); err != nil {
+	if err := printCompareUnmatchedNewDecisionsTemplate(encoder, plan); err != nil {
 		return err
 	}
 	return nil
 }
 
-func printCompareUnmatchedOldDecisionsTemplate(encoder *json.Encoder, nodes []compareMatchingDebugNode) error {
-	for _, node := range compareDecisionTemplateNodes(nodes) {
+func compareDecisionTemplateCountsForDebug(debug *compareMatchingDebug) *compareDecisionTemplateCounts {
+	if debug == nil {
+		return nil
+	}
+	plan := buildCompareDecisionTemplatePlan(debug)
+	return &plan.Counts
+}
+
+func buildCompareDecisionTemplatePlan(debug *compareMatchingDebug) compareDecisionTemplatePlan {
+	plan := compareDecisionTemplatePlan{}
+	if debug == nil {
+		return plan
+	}
+
+	oldKeys := map[string]struct{}{}
+	newKeys := map[string]struct{}{}
+	for _, candidate := range debug.AmbiguousCandidates {
+		oldKey := compareDecisionTemplateNodeKey(candidate.Old)
+		if oldKey != "" {
+			if _, ok := oldKeys[oldKey]; ok {
+				plan.Counts.SkippedDuplicateOld++
+				continue
+			}
+			oldKeys[oldKey] = struct{}{}
+		}
+		plan.Ambiguous = append(plan.Ambiguous, candidate)
+		for _, option := range candidate.NewCandidates {
+			newKey := compareDecisionTemplateNodeKey(option.Node)
+			if newKey != "" {
+				newKeys[newKey] = struct{}{}
+			}
+		}
+	}
+	plan.Counts.Ambiguous = len(plan.Ambiguous)
+
+	filteredOld := make([]compareMatchingDebugNode, 0, len(debug.UnmatchedOld))
+	seenOld := map[string]struct{}{}
+	for _, node := range debug.UnmatchedOld {
+		key := compareDecisionTemplateNodeKey(node)
+		if key != "" {
+			if _, ok := oldKeys[key]; ok {
+				plan.Counts.SkippedDuplicateOld++
+				continue
+			}
+			if _, ok := seenOld[key]; ok {
+				plan.Counts.SkippedDuplicateOld++
+				continue
+			}
+			seenOld[key] = struct{}{}
+		}
+		filteredOld = append(filteredOld, node)
+	}
+	plan.UnmatchedOld, plan.Counts.TruncatedOld = compareDecisionTemplateCapNodes(filteredOld)
+	plan.Counts.UnmatchedOld = len(plan.UnmatchedOld)
+
+	filteredNew := make([]compareMatchingDebugNode, 0, len(debug.UnmatchedNew))
+	seenNew := map[string]struct{}{}
+	for _, node := range debug.UnmatchedNew {
+		key := compareDecisionTemplateNodeKey(node)
+		if key != "" {
+			if _, ok := newKeys[key]; ok {
+				plan.Counts.SkippedDuplicateNew++
+				continue
+			}
+			if _, ok := seenNew[key]; ok {
+				plan.Counts.SkippedDuplicateNew++
+				continue
+			}
+			seenNew[key] = struct{}{}
+		}
+		filteredNew = append(filteredNew, node)
+	}
+	plan.UnmatchedNew, plan.Counts.TruncatedNew = compareDecisionTemplateCapNodes(filteredNew)
+	plan.Counts.UnmatchedNew = len(plan.UnmatchedNew)
+	return plan
+}
+
+func compareDecisionTemplateNodeKey(node compareMatchingDebugNode) string {
+	if value := strings.TrimSpace(node.Ref); value != "" {
+		return "ref:" + value
+	}
+	if value := strings.TrimSpace(node.Fingerprint); value != "" {
+		return "fingerprint:" + value
+	}
+	if value := strings.TrimSpace(node.Locator); value != "" {
+		return "locator:" + value
+	}
+	values := []string{
+		fmt.Sprint(node.OriginalIndex),
+		strings.TrimSpace(node.Role),
+		strings.TrimSpace(node.Label),
+		strings.TrimSpace(node.Name),
+		strings.TrimSpace(node.Text),
+		strings.TrimSpace(node.Href),
+		strings.TrimSpace(node.TestID),
+	}
+	key := strings.Join(compactCompareDecisionTemplateValues(values), "|")
+	if key == "" {
+		return ""
+	}
+	return "node:" + key
+}
+
+func compareDecisionTemplateCapNodes(nodes []compareMatchingDebugNode) ([]compareMatchingDebugNode, int) {
+	if len(nodes) <= compareDecisionTemplateMaxUnmatchedNodes {
+		return nodes, 0
+	}
+	return nodes[:compareDecisionTemplateMaxUnmatchedNodes], len(nodes) - compareDecisionTemplateMaxUnmatchedNodes
+}
+
+func printCompareUnmatchedOldDecisionsTemplate(encoder *json.Encoder, plan compareDecisionTemplatePlan) error {
+	for _, node := range plan.UnmatchedOld {
 		decision := compareDecision{
 			SchemaVersion:  1,
 			Kind:           "pair",
@@ -1693,11 +1811,11 @@ func printCompareUnmatchedOldDecisionsTemplate(encoder *json.Encoder, nodes []co
 			return err
 		}
 	}
-	return printCompareDecisionTemplateTruncation(encoder, "unmatched_old", len(nodes))
+	return printCompareDecisionTemplateTruncation(encoder, "unmatched_old", plan.Counts.UnmatchedOld, plan.Counts.TruncatedOld)
 }
 
-func printCompareUnmatchedNewDecisionsTemplate(encoder *json.Encoder, nodes []compareMatchingDebugNode) error {
-	for _, node := range compareDecisionTemplateNodes(nodes) {
+func printCompareUnmatchedNewDecisionsTemplate(encoder *json.Encoder, plan compareDecisionTemplatePlan) error {
+	for _, node := range plan.UnmatchedNew {
 		decision := compareDecision{
 			SchemaVersion:  1,
 			Kind:           "accepted_added",
@@ -1712,26 +1830,20 @@ func printCompareUnmatchedNewDecisionsTemplate(encoder *json.Encoder, nodes []co
 			return err
 		}
 	}
-	return printCompareDecisionTemplateTruncation(encoder, "unmatched_new", len(nodes))
+	return printCompareDecisionTemplateTruncation(encoder, "unmatched_new", plan.Counts.UnmatchedNew, plan.Counts.TruncatedNew)
 }
 
-func compareDecisionTemplateNodes(nodes []compareMatchingDebugNode) []compareMatchingDebugNode {
-	if len(nodes) <= compareDecisionTemplateMaxUnmatchedNodes {
-		return nodes
-	}
-	return nodes[:compareDecisionTemplateMaxUnmatchedNodes]
-}
-
-func printCompareDecisionTemplateTruncation(encoder *json.Encoder, kind string, total int) error {
-	if total <= compareDecisionTemplateMaxUnmatchedNodes {
+func printCompareDecisionTemplateTruncation(encoder *json.Encoder, kind string, emitted int, truncated int) error {
+	if truncated <= 0 {
 		return nil
 	}
+	total := emitted + truncated
 	decision := compareDecision{
 		SchemaVersion: 1,
 		Kind:          "unknown",
 		Confidence:    "unknown",
 		Reason:        kind + " template truncated",
-		Note:          fmt.Sprintf("emitted %d of %d nodes; inspect matching_debug.%s for the remaining nodes", compareDecisionTemplateMaxUnmatchedNodes, total, kind),
+		Note:          fmt.Sprintf("emitted %d of %d nodes; inspect matching_debug.%s for the remaining nodes", emitted, total, kind),
 	}
 	return encoder.Encode(decision)
 }

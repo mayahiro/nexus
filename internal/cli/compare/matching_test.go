@@ -929,6 +929,46 @@ func TestCompareDecisionsTemplateWritesUnmatchedStubs(t *testing.T) {
 	}
 }
 
+func TestCompareDecisionsTemplateDeduplicatesAmbiguousAndUnmatchedNodes(t *testing.T) {
+	debug := &compareMatchingDebug{
+		AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
+			{
+				Old: compareMatchingDebugNode{Ref: "@e1", Locator: `role button --name "Save"`},
+				NewCandidates: []compareMatchingDebugCandidateOption{
+					{Node: compareMatchingDebugNode{Ref: "@e2", Locator: `role button --name "Save"`}},
+				},
+			},
+		},
+		UnmatchedOld: []compareMatchingDebugNode{
+			{Ref: "@e1", Locator: `role button --name "Save"`},
+			{Ref: "@e3", Locator: `role link --name "Legacy"`},
+			{Ref: "@e3", Locator: `role link --name "Legacy"`},
+		},
+		UnmatchedNew: []compareMatchingDebugNode{
+			{Ref: "@e2", Locator: `role button --name "Save"`},
+			{Ref: "@e4", Locator: `role link --name "Skip"`},
+			{Ref: "@e4", Locator: `role link --name "Skip"`},
+		},
+	}
+
+	plan := buildCompareDecisionTemplatePlan(debug)
+	if plan.Counts.Ambiguous != 1 || plan.Counts.UnmatchedOld != 1 || plan.Counts.UnmatchedNew != 1 || plan.Counts.SkippedDuplicateOld != 2 || plan.Counts.SkippedDuplicateNew != 2 {
+		t.Fatalf("unexpected template counts: %+v", plan.Counts)
+	}
+
+	var buffer bytes.Buffer
+	if err := printCompareDecisionsTemplate(&buffer, debug); err != nil {
+		t.Fatalf("expected template to render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected deduplicated ambiguous/unmatched stubs, got %d lines:\n%s", len(lines), buffer.String())
+	}
+	if strings.Count(buffer.String(), "@e1") != 1 || strings.Count(buffer.String(), "@e2") != 1 {
+		t.Fatalf("expected ambiguous duplicate nodes to appear once:\n%s", buffer.String())
+	}
+}
+
 func TestCompareDecisionsTemplateCapsUnmatchedStubs(t *testing.T) {
 	nodes := make([]compareMatchingDebugNode, 0, compareDecisionTemplateMaxUnmatchedNodes+1)
 	for i := 0; i < compareDecisionTemplateMaxUnmatchedNodes+1; i++ {
@@ -1050,6 +1090,9 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	}
 	if summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
 		t.Fatalf("expected review files and next commands: %+v", summary)
+	}
+	if summary.PairDecisionTemplate == nil || summary.PairDecisionTemplate.Ambiguous != 1 || summary.PairDecisionTemplate.UnmatchedOld != 1 || summary.PairDecisionTemplate.UnmatchedNew != 1 {
+		t.Fatalf("expected pair decision template counts: %+v", summary.PairDecisionTemplate)
 	}
 	if !slices.ContainsFunc(summary.NextCommands, func(command string) bool {
 		return strings.Contains(command, "compare materialize-decisions") && strings.Contains(command, "pair-decisions.materialized.jsonl")
