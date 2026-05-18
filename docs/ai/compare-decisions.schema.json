@@ -14,6 +14,7 @@
       "type": "string",
       "enum": [
         "pair",
+        "subtree_pair",
         "accepted_removed",
         "accepted_added",
         "regression_removed",
@@ -38,6 +39,14 @@
     "confidence": {
       "type": "string",
       "enum": ["high", "tentative", "unknown"]
+    },
+    "match_kind": {
+      "type": "string",
+      "enum": ["ordered_children", "ordered-children"]
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0
     },
     "reason": {
       "$ref": "#/$defs/nonEmptyString"
@@ -115,6 +124,98 @@
                 "properties": {
                   "new": {
                     "$ref": "#/$defs/refOrUnknown"
+                  }
+                }
+              },
+              {
+                "required": ["new_fingerprint"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "subtree_pair"
+          }
+        },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["confidence", "match_kind"],
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": ["old"],
+                "properties": {
+                  "old": {
+                    "$ref": "#/$defs/refOrUnknown"
+                  }
+                }
+              },
+              {
+                "required": ["old_fingerprint"]
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": ["new"],
+                "properties": {
+                  "new": {
+                    "$ref": "#/$defs/refOrUnknown"
+                  }
+                }
+              },
+              {
+                "required": ["new_fingerprint"]
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "subtree_pair"
+          },
+          "confidence": {
+            "const": "high"
+          }
+        },
+        "required": ["kind", "confidence"]
+      },
+      "then": {
+        "allOf": [
+          {
+            "anyOf": [
+              {
+                "required": ["old"],
+                "properties": {
+                  "old": {
+                    "$ref": "#/$defs/ref"
+                  }
+                }
+              },
+              {
+                "required": ["old_fingerprint"]
+              }
+            ]
+          },
+          {
+            "anyOf": [
+              {
+                "required": ["new"],
+                "properties": {
+                  "new": {
+                    "$ref": "#/$defs/ref"
                   }
                 }
               },
@@ -294,6 +395,16 @@
       "new": "?",
       "confidence": "unknown",
       "reason": "needs review"
+    },
+    {
+      "schema_version": 1,
+      "kind": "subtree_pair",
+      "old": "@e40",
+      "new": "@e72",
+      "confidence": "high",
+      "match_kind": "ordered_children",
+      "count": 12,
+      "reason": "same link list region"
     }
   ]
 }

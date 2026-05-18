@@ -356,6 +356,39 @@ func TestCompareHighConfidenceDecisionPairsNodes(t *testing.T) {
 	}
 }
 
+func TestCompareHighConfidenceSubtreePairMatchesOrderedChildren(t *testing.T) {
+	oldSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 1, Children: []int{2, 3}, Fingerprint: "old-list", Ref: "@e1", Role: "list", Label: "Jobs", OriginalIndex: 0, Visible: true},
+			{ID: 2, Fingerprint: "old-a", Ref: "@e2", Role: "listitem", Label: "Engineer", OriginalIndex: 1, Visible: true},
+			{ID: 3, Fingerprint: "old-b", Ref: "@e3", Role: "listitem", Label: "Designer", OriginalIndex: 2, Visible: true},
+		},
+	}
+	newSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 10, Children: []int{11, 12}, Fingerprint: "new-grid", Ref: "@e10", Role: "generic", Label: "Jobs", OriginalIndex: 0, Visible: true},
+			{ID: 11, Fingerprint: "new-a", Ref: "@e11", Role: "link", Label: "Engineer", OriginalIndex: 1, Visible: true, Invokable: true},
+			{ID: 12, Fingerprint: "new-b", Ref: "@e12", Role: "link", Label: "Designer", OriginalIndex: 2, Visible: true, Invokable: true},
+		},
+	}
+	decisionMatches, err := compareResolveDecisionMatches(
+		[]compareDecision{{Kind: "subtree_pair", Old: "@e1", New: "@e10", Confidence: "high", MatchKind: "ordered_children", Count: 2}},
+		oldSnapshot.Nodes,
+		newSnapshot.Nodes,
+	)
+	if err != nil {
+		t.Fatalf("expected subtree decision to resolve: %v", err)
+	}
+	report := buildCompareReportWithDecisionMatches(oldSnapshot, newSnapshot, nil, compareMatchModeExact, true, decisionMatches)
+
+	if len(decisionMatches) != 3 || report.Summary.DecisionMatches != 3 || report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 {
+		t.Fatalf("expected root and ordered children to be decision matched: matches=%+v summary=%+v", decisionMatches, report.Summary)
+	}
+	if report.MatchingDebug == nil || len(report.MatchingDebug.Matches) != 3 || report.MatchingDebug.Matches[1].MatchedBy != "decision:subtree_pair" {
+		t.Fatalf("expected subtree decision in matching debug: %+v", report.MatchingDebug)
+	}
+}
+
 func TestValidateCompareDecisionsDetectsDuplicateHighPair(t *testing.T) {
 	report := compareReport{
 		Old: compareSnapshot{
@@ -380,6 +413,30 @@ func TestValidateCompareDecisionsDetectsDuplicateHighPair(t *testing.T) {
 	}
 	if validation.Summary.HighPairs != 2 || !validation.Summary.CompareJSONUsed {
 		t.Fatalf("expected validation summary to count high pairs: %+v", validation.Summary)
+	}
+}
+
+func TestValidateCompareDecisionsChecksSubtreePairCount(t *testing.T) {
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{ID: 1, Children: []int{2}, Fingerprint: "old-list", Ref: "@e1", Role: "list"},
+				{ID: 2, Fingerprint: "old-a", Ref: "@e2", Role: "listitem", OriginalIndex: 1},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{ID: 10, Children: []int{11}, Fingerprint: "new-list", Ref: "@e10", Role: "generic"},
+				{ID: 11, Fingerprint: "new-a", Ref: "@e11", Role: "link", OriginalIndex: 1},
+			},
+		},
+	}
+	validation := validateCompareDecisions([]compareDecision{
+		{Kind: "subtree_pair", Old: "@e1", New: "@e10", Confidence: "high", MatchKind: "ordered_children", Count: 2, Line: 1},
+	}, &report)
+
+	if validation.Summary.Errors == 0 || validation.Summary.SubtreePairs != 1 {
+		t.Fatalf("expected subtree count validation error: %+v", validation)
 	}
 }
 

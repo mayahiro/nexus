@@ -159,6 +159,7 @@ func printCompareDecisionValidationReport(w io.Writer, report compareDecisionVal
 	fmt.Fprintf(w, "high_pairs: %d\n", report.Summary.HighPairs)
 	fmt.Fprintf(w, "tentative_pairs: %d\n", report.Summary.TentativePairs)
 	fmt.Fprintf(w, "unknown_pairs: %d\n", report.Summary.UnknownPairs)
+	fmt.Fprintf(w, "subtree_pairs: %d\n", report.Summary.SubtreePairs)
 	fmt.Fprintf(w, "accepted_removed: %d\n", report.Summary.AcceptedRemoved)
 	fmt.Fprintf(w, "accepted_added: %d\n", report.Summary.AcceptedAdded)
 	fmt.Fprintf(w, "compare_json_used: %t\n", report.Summary.CompareJSONUsed)

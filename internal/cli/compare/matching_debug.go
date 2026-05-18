@@ -1,5 +1,7 @@
 package comparecmd
 
+import "strings"
+
 func buildCompareMatchingDebug(mode string, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, result compareNodeMatchResult) *compareMatchingDebug {
 	return &compareMatchingDebug{
 		Mode:                    mode,
@@ -39,8 +41,8 @@ func buildCompareMatchingDebugAnchors(oldNodes []compareSnapshotNode, newNodes [
 	for _, anchor := range anchors {
 		matchedBy := "histogram:" + anchor.Key.Kind
 		reasons := []string{anchor.Key.Kind, "low-occurrence-anchor"}
-		if anchor.Key.Kind == "decision" {
-			matchedBy = "decision:pair"
+		if strings.HasPrefix(anchor.Key.Kind, "decision:") {
+			matchedBy = anchor.Key.Kind
 			reasons = []string{"decision"}
 		}
 		debug = append(debug, compareMatchingDebugAnchor{

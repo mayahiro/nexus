@@ -62,6 +62,8 @@ type compareSnapshotNode struct {
 	Editable         bool              `json:"editable"`
 	Selectable       bool              `json:"selectable"`
 	Invokable        bool              `json:"invokable"`
+	ID               int               `json:"id,omitempty"`
+	Children         []int             `json:"children,omitempty"`
 	OriginalIndex    int               `json:"-"`
 	Tag              string            `json:"-"`
 	IDAttr           string            `json:"-"`
@@ -131,6 +133,7 @@ type compareDecisionValidationSummary struct {
 	HighPairs       int  `json:"high_pairs"`
 	TentativePairs  int  `json:"tentative_pairs"`
 	UnknownPairs    int  `json:"unknown_pairs"`
+	SubtreePairs    int  `json:"subtree_pairs"`
 	AcceptedRemoved int  `json:"accepted_removed"`
 	AcceptedAdded   int  `json:"accepted_added"`
 	Errors          int  `json:"errors"`

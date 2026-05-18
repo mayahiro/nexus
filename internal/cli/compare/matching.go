@@ -135,7 +135,7 @@ func compareMatchNodesWithDecisionMatches(oldNodes []compareSnapshotNode, newNod
 			NewIndex: match.NewIndex,
 			Key: compareStableIdentityKey{
 				Priority: -1,
-				Kind:     "decision",
+				Kind:     match.MatchedBy,
 				Value:    compareDecisionAnchorValue(oldNodes, newNodes, match),
 			},
 		})

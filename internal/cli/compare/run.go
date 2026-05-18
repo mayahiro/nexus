@@ -412,7 +412,7 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
-	decisionMatches, err := compareResolvePairDecisionMatches(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
+	decisionMatches, err := compareResolveDecisionMatches(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
 	if err != nil {
 		return compareReport{}, err
 	}

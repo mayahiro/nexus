@@ -19,6 +19,8 @@ type compareDecision struct {
 	OldFingerprint string `json:"old_fingerprint,omitempty"`
 	NewFingerprint string `json:"new_fingerprint,omitempty"`
 	Confidence     string `json:"confidence,omitempty"`
+	MatchKind      string `json:"match_kind,omitempty"`
+	Count          int    `json:"count,omitempty"`
 	Reason         string `json:"reason,omitempty"`
 	Note           string `json:"note,omitempty"`
 	DecidedBy      string `json:"decided_by,omitempty"`
@@ -68,8 +70,12 @@ func loadCompareDecisions(path string) ([]compareDecision, error) {
 		}
 		decision.Kind = normalizeCompareDecisionToken(decision.Kind)
 		decision.Confidence = normalizeCompareDecisionToken(decision.Confidence)
+		decision.MatchKind = normalizeCompareDecisionMatchKind(decision.MatchKind)
 		if decision.Confidence != "" && !compareDecisionConfidenceSupported(decision.Confidence) {
 			return nil, fmt.Errorf("invalid decisions file %q line %d: unsupported confidence %q", path, lineNumber, decision.Confidence)
+		}
+		if decision.Count < 0 {
+			return nil, fmt.Errorf("invalid decisions file %q line %d: count must be non-negative", path, lineNumber)
 		}
 		if decision.Kind == "" {
 			return nil, fmt.Errorf("invalid decisions file %q line %d: kind is required", path, lineNumber)
@@ -102,7 +108,7 @@ func loadCompareReport(path string) (compareReport, error) {
 	return report, nil
 }
 
-func compareResolvePairDecisionMatches(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
+func compareResolveDecisionMatches(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
 	if len(decisions) == 0 {
 		return nil, nil
 	}
@@ -111,34 +117,117 @@ func compareResolvePairDecisionMatches(decisions []compareDecision, oldNodes []c
 	usedNew := map[int]struct{}{}
 	for index, decision := range decisions {
 		lineNumber := compareDecisionLineNumber(decision, index)
-		if decision.Kind != "pair" || decision.Confidence != "high" {
+		if decision.Confidence != "high" {
 			continue
 		}
-		oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
+		var decisionMatches []compareNodeMatch
+		var err error
+		switch decision.Kind {
+		case "pair":
+			decisionMatches, err = compareBuildPairDecisionMatches(decision, oldNodes, newNodes)
+		case "subtree_pair":
+			decisionMatches, err = compareBuildSubtreePairDecisionMatches(decision, oldNodes, newNodes)
+		default:
+			continue
+		}
 		if err != nil {
 			return nil, fmt.Errorf("decision line %d: %w", lineNumber, err)
 		}
-		newIndex, err := compareResolveDecisionNode(newNodes, "new", decision.New, decision.NewFingerprint)
-		if err != nil {
-			return nil, fmt.Errorf("decision line %d: %w", lineNumber, err)
+		for _, match := range decisionMatches {
+			if _, ok := usedOld[match.OldIndex]; ok {
+				return nil, fmt.Errorf("decision line %d: old node %q is already paired", lineNumber, oldNodes[match.OldIndex].Ref)
+			}
+			if _, ok := usedNew[match.NewIndex]; ok {
+				return nil, fmt.Errorf("decision line %d: new node %q is already paired", lineNumber, newNodes[match.NewIndex].Ref)
+			}
+			usedOld[match.OldIndex] = struct{}{}
+			usedNew[match.NewIndex] = struct{}{}
+			matches = append(matches, match)
 		}
-		if _, ok := usedOld[oldIndex]; ok {
-			return nil, fmt.Errorf("decision line %d: old node %q is already paired", lineNumber, decision.Old)
-		}
-		if _, ok := usedNew[newIndex]; ok {
-			return nil, fmt.Errorf("decision line %d: new node %q is already paired", lineNumber, decision.New)
-		}
-		usedOld[oldIndex] = struct{}{}
-		usedNew[newIndex] = struct{}{}
+	}
+	return matches, nil
+}
+
+func compareResolvePairDecisionMatches(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
+	return compareResolveDecisionMatches(decisions, oldNodes, newNodes)
+}
+
+func compareBuildPairDecisionMatches(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
+	oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	newIndex, err := compareResolveDecisionNode(newNodes, "new", decision.New, decision.NewFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	return []compareNodeMatch{{
+		OldIndex:  oldIndex,
+		NewIndex:  newIndex,
+		MatchedBy: "decision:pair",
+		Score:     100,
+		Reasons:   []string{"decision"},
+	}}, nil
+}
+
+func compareBuildSubtreePairDecisionMatches(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
+	if normalizeCompareDecisionMatchKind(decision.MatchKind) != "ordered_children" {
+		return nil, fmt.Errorf("subtree_pair decision requires match_kind ordered_children")
+	}
+	oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	newIndex, err := compareResolveDecisionNode(newNodes, "new", decision.New, decision.NewFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	oldChildren := compareDecisionChildNodeIndices(oldNodes, oldIndex)
+	newChildren := compareDecisionChildNodeIndices(newNodes, newIndex)
+	childPairs := min(len(oldChildren), len(newChildren))
+	if decision.Count > 0 && decision.Count != childPairs {
+		return nil, fmt.Errorf("subtree_pair count %d does not match %d ordered child pairs", decision.Count, childPairs)
+	}
+	matches := []compareNodeMatch{{
+		OldIndex:  oldIndex,
+		NewIndex:  newIndex,
+		MatchedBy: "decision:subtree_pair",
+		Score:     100,
+		Reasons:   []string{"decision", "subtree-pair"},
+	}}
+	for i := 0; i < childPairs; i++ {
 		matches = append(matches, compareNodeMatch{
-			OldIndex:  oldIndex,
-			NewIndex:  newIndex,
-			MatchedBy: "decision:pair",
+			OldIndex:  oldChildren[i],
+			NewIndex:  newChildren[i],
+			MatchedBy: "decision:subtree_pair",
 			Score:     100,
-			Reasons:   []string{"decision"},
+			Reasons:   []string{"decision", "subtree-pair", "ordered-children"},
 		})
 	}
 	return matches, nil
+}
+
+func compareDecisionChildNodeIndices(nodes []compareSnapshotNode, rootIndex int) []int {
+	if rootIndex < 0 || rootIndex >= len(nodes) {
+		return nil
+	}
+	byID := map[int]int{}
+	for index, node := range nodes {
+		if node.ID <= 0 {
+			continue
+		}
+		byID[node.ID] = index
+	}
+	indices := make([]int, 0, len(nodes[rootIndex].Children))
+	for _, childID := range nodes[rootIndex].Children {
+		childIndex, ok := byID[childID]
+		if !ok {
+			continue
+		}
+		indices = append(indices, childIndex)
+	}
+	compareSortNodeIndicesBySequence(nodes, indices)
+	return indices
 }
 
 func compareResolveDecisionEffects(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) (compareDecisionEffects, error) {
@@ -254,7 +343,7 @@ func compareResolveDecisionNode(nodes []compareSnapshotNode, side string, ref st
 
 func compareDecisionKindSupported(kind string) bool {
 	switch kind {
-	case "pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "unknown", "pattern", "severity":
+	case "pair", "subtree_pair", "accepted_removed", "accepted_added", "regression_removed", "unexpected_added", "unknown", "pattern", "severity":
 		return true
 	default:
 		return false
@@ -299,6 +388,7 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 	for index, decision := range decisions {
 		decision.Kind = normalizeCompareDecisionToken(decision.Kind)
 		decision.Confidence = normalizeCompareDecisionToken(decision.Confidence)
+		decision.MatchKind = normalizeCompareDecisionMatchKind(decision.MatchKind)
 		if decision.Kind == "" {
 			addIssue("error", decision, index, "kind", "decision kind is required")
 			continue
@@ -314,6 +404,8 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 		switch decision.Kind {
 		case "pair":
 			validateComparePairDecision(&report, addIssue, usedOldPairs, usedNewPairs, decision, index, compareReport)
+		case "subtree_pair":
+			validateCompareSubtreePairDecision(&report, addIssue, usedOldPairs, usedNewPairs, decision, index, compareReport)
 		case "accepted_removed", "regression_removed":
 			validateCompareOldDecision(&report, addIssue, usedOldEffects, decision, index, compareReport)
 		case "accepted_added", "unexpected_added":
@@ -372,6 +464,54 @@ func validateComparePairDecision(report *compareDecisionValidationReport, addIss
 		addIssue("error", decision, index, "new", fmt.Sprintf("new node already paired by decision line %d", previousLine))
 	} else {
 		usedNew[newIndex] = compareDecisionLineNumber(decision, index)
+	}
+}
+
+func validateCompareSubtreePairDecision(report *compareDecisionValidationReport, addIssue func(string, compareDecision, int, string, string), usedOld map[int]int, usedNew map[int]int, decision compareDecision, index int, compareReport *compareReport) {
+	report.Summary.SubtreePairs++
+	switch decision.Confidence {
+	case "high", "tentative", "unknown":
+	default:
+		addIssue("error", decision, index, "confidence", "subtree_pair decisions require confidence high, tentative, or unknown")
+	}
+	if decision.MatchKind != "ordered_children" {
+		addIssue("error", decision, index, "match_kind", "subtree_pair decisions require match_kind ordered_children")
+	}
+	if decision.Count < 0 {
+		addIssue("error", decision, index, "count", "subtree_pair count must be non-negative")
+	}
+	if compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
+		addIssue("error", decision, index, "old", "subtree_pair decisions require old ref or old_fingerprint")
+	}
+	if compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" && decision.Confidence != "unknown" {
+		addIssue("error", decision, index, "new", "subtree_pair decisions require new ref, new_fingerprint, or confidence unknown")
+	}
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.New) && strings.TrimSpace(decision.NewFingerprint) == "" {
+		addIssue("error", decision, index, "new", "high-confidence subtree_pair decisions require a concrete new ref or new_fingerprint")
+	}
+	if decision.Confidence == "high" && compareDecisionUnknownValue(decision.Old) && strings.TrimSpace(decision.OldFingerprint) == "" {
+		addIssue("error", decision, index, "old", "high-confidence subtree_pair decisions require a concrete old ref or old_fingerprint")
+	}
+	if compareReport == nil || decision.Confidence != "high" {
+		return
+	}
+	matches, err := compareBuildSubtreePairDecisionMatches(decision, compareReport.Old.Nodes, compareReport.New.Nodes)
+	if err != nil {
+		addIssue("error", decision, index, "subtree_pair", err.Error())
+		return
+	}
+	lineNumber := compareDecisionLineNumber(decision, index)
+	for _, match := range matches {
+		if previousLine, ok := usedOld[match.OldIndex]; ok {
+			addIssue("error", decision, index, "old", fmt.Sprintf("old node already paired by decision line %d", previousLine))
+			continue
+		}
+		if previousLine, ok := usedNew[match.NewIndex]; ok {
+			addIssue("error", decision, index, "new", fmt.Sprintf("new node already paired by decision line %d", previousLine))
+			continue
+		}
+		usedOld[match.OldIndex] = lineNumber
+		usedNew[match.NewIndex] = lineNumber
 	}
 }
 
@@ -487,6 +627,10 @@ func compareDecisionLineNumber(decision compareDecision, index int) int {
 
 func normalizeCompareDecisionToken(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func normalizeCompareDecisionMatchKind(value string) string {
+	return strings.ReplaceAll(normalizeCompareDecisionToken(value), "-", "_")
 }
 
 func compareDecisionUnknownValue(value string) bool {

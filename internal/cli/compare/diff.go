@@ -74,6 +74,8 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Editable:         node.Editable,
 			Selectable:       node.Selectable,
 			Invokable:        node.Invokable,
+			ID:               node.ID,
+			Children:         append([]int(nil), node.Children...),
 			OriginalIndex:    originalIndex,
 			Tag:              tag,
 			IDAttr:           idAttr,

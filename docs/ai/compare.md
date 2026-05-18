@@ -128,21 +128,23 @@ When `--node-scope all` is used, compare requires `--scope-selector` or both sid
 
 Use `--decisions-file <jsonl>` when an AI or human has reviewed ambiguous candidates and wants compare to reuse high-confidence pairings.
 
-Each line is one JSON object. Validate each line against `docs/ai/compare-decisions.schema.json`. Compare applies only high-confidence `pair` entries before automatic matching:
+Each line is one JSON object. Validate each line against `docs/ai/compare-decisions.schema.json`. Compare applies high-confidence `pair` and `subtree_pair` entries before automatic matching:
 
 ```jsonl
 {"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"bbox and role/name match; aria-label changed as an a11y improvement"}
+{"kind":"subtree_pair","old":"@e40","new":"@e72","confidence":"high","match_kind":"ordered_children","count":12,"reason":"same link list region"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
 {"kind":"accepted_removed","old":"@e45","reason":"legacy-only footer link intentionally removed"}
 {"kind":"accepted_added","new":"@e88","reason":"new skip-link"}
 ```
 
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. Non-high entries are accepted as review notes but are not used as anchors or matches.
+`subtree_pair` currently supports `match_kind:"ordered_children"` for ref/fingerprint-based roots; it pairs the roots, then pairs observed direct children in DOM order. `count` is optional and validates the expected number of child pairs when present.
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable `unknown` pair stubs from `matching_debug.ambiguous_candidates`.
-Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs, and current refs/fingerprints before rerunning compare.
+Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs/subtrees, and current refs/fingerprints before rerunning compare.
 `accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `regression_removed` and `unexpected_added` keep the finding explicit with `decision_kind` metadata.
-Confidence is intentionally conservative in the current matcher: only `high` pair decisions become anchors, and finding decisions apply only when confidence is omitted or `high`. `tentative` and `unknown` stay in the JSONL as review evidence so later soft-match workflows can consume the same file format.
+Confidence is intentionally conservative in the current matcher: only `high` pair and subtree decisions become anchors, and finding decisions apply only when confidence is omitted or `high`. `tentative` and `unknown` stay in the JSONL as review evidence so later soft-match workflows can consume the same file format.
 
 ## Matching Debug
 
