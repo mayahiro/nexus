@@ -852,12 +852,21 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 			{
 				Old: compareMatchingDebugNode{
 					Ref:         "@e1",
+					Locator:     `role button --name "Save"`,
 					Fingerprint: "old-save",
 				},
 				ReasonSkipped: "candidate margin below threshold",
 				NewCandidates: []compareMatchingDebugCandidateOption{
-					{Node: compareMatchingDebugNode{Ref: "@e2"}},
-					{Node: compareMatchingDebugNode{Ref: "@e3"}},
+					{
+						Node:       compareMatchingDebugNode{Ref: "@e2", Locator: `role button --name "Save"`},
+						Score:      85,
+						SharedKeys: []string{"role", "name"},
+					},
+					{
+						Node:          compareMatchingDebugNode{Ref: "@e3", Locator: `role button --name "Cancel"`},
+						Score:         65,
+						DifferingKeys: []string{"bbox"},
+					},
 				},
 			},
 		},
@@ -878,8 +887,11 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	if decision.Kind != "pair" || decision.Old != "@e1" || decision.New != "?" || decision.Confidence != "unknown" {
 		t.Fatalf("unexpected template decision: %+v", decision)
 	}
-	if !strings.Contains(decision.Note, "@e2") || !strings.Contains(decision.Note, "@e3") {
-		t.Fatalf("expected candidate refs in note: %+v", decision)
+	if decision.OldLocator != `role button --name "Save"` {
+		t.Fatalf("expected old locator in template: %+v", decision)
+	}
+	if !strings.Contains(decision.Note, "@e2") || !strings.Contains(decision.Note, `locator="role button --name \"Save\""`) || !strings.Contains(decision.Note, "score=85") || !strings.Contains(decision.Note, "shared=role,name") {
+		t.Fatalf("expected candidate refs, locators, and scores in note: %+v", decision)
 	}
 }
 
@@ -981,6 +993,11 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	}
 	if summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
 		t.Fatalf("expected review files and next commands: %+v", summary)
+	}
+	if !slices.ContainsFunc(summary.NextCommands, func(command string) bool {
+		return strings.Contains(command, "compare materialize-decisions") && strings.Contains(command, "pair-decisions.materialized.jsonl")
+	}) {
+		t.Fatalf("expected materialize command in review summary: %+v", summary.NextCommands)
 	}
 	if summary.Files.OldScreenshot != filepath.Join(dir, compareReviewFileOldScreenshot) || summary.Files.NewScreenshot != filepath.Join(dir, compareReviewFileNewScreenshot) {
 		t.Fatalf("expected screenshot file references: %+v", summary.Files)

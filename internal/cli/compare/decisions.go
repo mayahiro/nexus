@@ -1652,6 +1652,7 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 			SchemaVersion:  1,
 			Kind:           "pair",
 			Old:            candidate.Old.Ref,
+			OldLocator:     candidate.Old.Locator,
 			OldFingerprint: candidate.Old.Fingerprint,
 			New:            "?",
 			Confidence:     "unknown",
@@ -1742,17 +1743,41 @@ func compareDecisionTemplateReason(candidate compareMatchingDebugAmbiguousCandid
 }
 
 func compareDecisionTemplateNote(candidate compareMatchingDebugAmbiguousCandidate) string {
-	refs := make([]string, 0, len(candidate.NewCandidates))
+	candidates := make([]string, 0, len(candidate.NewCandidates))
 	for _, option := range candidate.NewCandidates {
-		if strings.TrimSpace(option.Node.Ref) == "" {
+		note := compareDecisionTemplateCandidateNote(option)
+		if note == "" {
 			continue
 		}
-		refs = append(refs, strings.TrimSpace(option.Node.Ref))
+		candidates = append(candidates, note)
 	}
-	if len(refs) == 0 {
+	if len(candidates) == 0 {
 		return ""
 	}
-	return "candidate new refs: " + strings.Join(refs, ", ")
+	return "candidate new nodes: " + strings.Join(candidates, "; ")
+}
+
+func compareDecisionTemplateCandidateNote(option compareMatchingDebugCandidateOption) string {
+	values := []string{}
+	if ref := strings.TrimSpace(option.Node.Ref); ref != "" {
+		values = append(values, ref)
+	}
+	if locator := strings.TrimSpace(option.Node.Locator); locator != "" {
+		values = append(values, "locator="+strconv.Quote(locator))
+	}
+	if option.Score > 0 {
+		values = append(values, fmt.Sprintf("score=%d", option.Score))
+	}
+	if len(option.SharedKeys) > 0 {
+		values = append(values, "shared="+strings.Join(compactCompareDecisionTemplateValues(option.SharedKeys), ","))
+	}
+	if len(option.DifferingKeys) > 0 {
+		values = append(values, "diff="+strings.Join(compactCompareDecisionTemplateValues(option.DifferingKeys), ","))
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	return strings.Join(values, " ")
 }
 
 func compareDecisionLineNumber(decision compareDecision, index int) int {

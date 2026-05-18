@@ -109,10 +109,13 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		summary.UnmatchedOld = len(report.MatchingDebug.UnmatchedOld)
 		summary.UnmatchedNew = len(report.MatchingDebug.UnmatchedNew)
 	}
+	materializedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.materialized.jsonl")
+	normalizedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.normalized.jsonl")
 	summary.NextCommands = []string{
 		"nxctl compare validate-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON,
+		"nxctl compare materialize-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON + " --output " + materializedPairDecisions,
+		"nxctl compare normalize-decisions --decisions-file " + materializedPairDecisions + " --compare-json " + files.CompareJSON + " --output " + normalizedPairDecisions,
 		"nxctl compare validate-decisions --decisions-file " + files.FindingDecisionsTemplate + " --compare-json " + files.CompareJSON,
-		"nxctl compare normalize-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON + " --output " + filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.normalized.jsonl"),
 	}
 	return summary
 }
