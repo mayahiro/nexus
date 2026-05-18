@@ -72,6 +72,7 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 			pageDirectory.CriticalFindings = single.Summary.Critical
 			pageDirectory.WarningFindings = single.Summary.Warning
 			pageDirectory.InfoFindings = single.Summary.Info
+			pageDirectory.PairDecisionTemplate = compareDecisionTemplateCountsForDebug(single.MatchingDebug)
 			pageDirectory.OldScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileOldScreenshot))
 			pageDirectory.NewScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileNewScreenshot))
 			pageDirectories = append(pageDirectories, pageDirectory)

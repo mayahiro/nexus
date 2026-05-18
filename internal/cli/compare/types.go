@@ -267,16 +267,17 @@ type compareFindingCluster struct {
 }
 
 type compareManifestReviewPageDirectory struct {
-	Name             string `json:"name"`
-	Directory        string `json:"directory,omitempty"`
-	Priority         string `json:"priority,omitempty"`
-	TotalFindings    int    `json:"total_findings,omitempty"`
-	CriticalFindings int    `json:"critical_findings,omitempty"`
-	WarningFindings  int    `json:"warning_findings,omitempty"`
-	InfoFindings     int    `json:"info_findings,omitempty"`
-	OldScreenshot    string `json:"old_screenshot,omitempty"`
-	NewScreenshot    string `json:"new_screenshot,omitempty"`
-	Error            string `json:"error,omitempty"`
+	Name                 string                         `json:"name"`
+	Directory            string                         `json:"directory,omitempty"`
+	Priority             string                         `json:"priority,omitempty"`
+	TotalFindings        int                            `json:"total_findings,omitempty"`
+	CriticalFindings     int                            `json:"critical_findings,omitempty"`
+	WarningFindings      int                            `json:"warning_findings,omitempty"`
+	InfoFindings         int                            `json:"info_findings,omitempty"`
+	PairDecisionTemplate *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	OldScreenshot        string                         `json:"old_screenshot,omitempty"`
+	NewScreenshot        string                         `json:"new_screenshot,omitempty"`
+	Error                string                         `json:"error,omitempty"`
 }
 
 type compareManifestReviewFiles struct {
@@ -290,18 +291,19 @@ type compareManifestReviewFiles struct {
 }
 
 type compareManifestReviewSummary struct {
-	Manifest         string                     `json:"manifest,omitempty"`
-	TotalPages       int                        `json:"total_pages"`
-	ComparedPages    int                        `json:"compared_pages"`
-	FailedPages      int                        `json:"failed_pages"`
-	SamePages        int                        `json:"same_pages"`
-	DifferentPages   int                        `json:"different_pages"`
-	TotalFindings    int                        `json:"total_findings"`
-	CriticalFindings int                        `json:"critical_findings"`
-	WarningFindings  int                        `json:"warning_findings"`
-	InfoFindings     int                        `json:"info_findings"`
-	Files            compareManifestReviewFiles `json:"files"`
-	FindingClusters  []compareFindingCluster    `json:"finding_clusters,omitempty"`
+	Manifest             string                         `json:"manifest,omitempty"`
+	TotalPages           int                            `json:"total_pages"`
+	ComparedPages        int                            `json:"compared_pages"`
+	FailedPages          int                            `json:"failed_pages"`
+	SamePages            int                            `json:"same_pages"`
+	DifferentPages       int                            `json:"different_pages"`
+	TotalFindings        int                            `json:"total_findings"`
+	CriticalFindings     int                            `json:"critical_findings"`
+	WarningFindings      int                            `json:"warning_findings"`
+	InfoFindings         int                            `json:"info_findings"`
+	PairDecisionTemplate *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	Files                compareManifestReviewFiles     `json:"files"`
+	FindingClusters      []compareFindingCluster        `json:"finding_clusters,omitempty"`
 }
 
 type compareMatchingDebug struct {

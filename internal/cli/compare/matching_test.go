@@ -1263,8 +1263,14 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 			TotalFindings:    5,
 			CriticalFindings: 1,
 			WarningFindings:  3,
-			OldScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileOldScreenshot),
-			NewScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
+			PairDecisionTemplate: &compareDecisionTemplateCounts{
+				Ambiguous:           2,
+				UnmatchedOld:        3,
+				UnmatchedNew:        4,
+				SkippedDuplicateOld: 1,
+			},
+			OldScreenshot: filepath.Join(dir, "001-dashboard", compareReviewFileOldScreenshot),
+			NewScreenshot: filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
 		},
 		{Name: "settings", Directory: filepath.Join(dir, "002-settings"), Error: "failed"},
 	}
@@ -1305,6 +1311,12 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if len(summary.Files.PageDirectories) != 2 || summary.Files.PageDirectories[1].Error != "failed" {
 		t.Fatalf("expected page directory summary: %+v", summary.Files.PageDirectories)
 	}
+	if summary.PairDecisionTemplate == nil || summary.PairDecisionTemplate.Ambiguous != 2 || summary.PairDecisionTemplate.UnmatchedOld != 3 || summary.PairDecisionTemplate.UnmatchedNew != 4 || summary.PairDecisionTemplate.SkippedDuplicateOld != 1 {
+		t.Fatalf("expected aggregate pair decision counts: %+v", summary.PairDecisionTemplate)
+	}
+	if summary.Files.PageDirectories[0].PairDecisionTemplate == nil || summary.Files.PageDirectories[0].PairDecisionTemplate.UnmatchedNew != 4 {
+		t.Fatalf("expected page pair decision counts: %+v", summary.Files.PageDirectories[0])
+	}
 	if summary.Files.ReviewMarkdown != filepath.Join(dir, compareReviewFileReview) {
 		t.Fatalf("expected root review guide in summary: %+v", summary.Files)
 	}
@@ -1316,7 +1328,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	guide := string(guideBytes)
-	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "accepted_finding_cluster") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
+	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "Pair decision workload: 9 total") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "accepted_finding_cluster") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
 		t.Fatalf("unexpected manifest review guide:\n%s", guide)
 	}
 	if summary.Files.ReviewIndexHTML != filepath.Join(dir, compareReviewFileIndexHTML) {
@@ -1327,7 +1339,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(indexBytes)
-	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
+	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "Pair decisions") || !strings.Contains(index, "9 total") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
 		t.Fatalf("unexpected review index:\n%s", index)
 	}
 	htmlBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndexHTML))

@@ -464,8 +464,8 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 	fmt.Fprintf(&builder, "- Manifest Markdown: %s\n", compareReviewMarkdownLink(rootDir, "manifest.md", files.ManifestMarkdown))
 	fmt.Fprintf(&builder, "- Review Summary: %s\n\n", compareReviewMarkdownLink(rootDir, "review-summary.json", files.ReviewSummary))
 
-	builder.WriteString("| Priority | Page | Findings | Packet | Screenshots | Status |\n")
-	builder.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	builder.WriteString("| Priority | Page | Findings | Pair decisions | Packet | Screenshots | Status |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
 	for i, page := range report.Pages {
 		directory := compareManifestReviewPageDirectory{Name: page.Name}
 		if i < len(files.PageDirectories) {
@@ -482,6 +482,7 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 			priority = "unknown"
 		}
 		findings := compareManifestReviewFindingsLabel(directory, page)
+		pairDecisions := compareManifestReviewPairDecisionTemplateLabel(directory.PairDecisionTemplate)
 		packet := compareManifestReviewPacketLinks(rootDir, directory)
 		screenshots := compareManifestReviewScreenshotLinks(rootDir, directory)
 		status := "ok"
@@ -490,10 +491,11 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 		} else if directory.Error != "" {
 			status = directory.Error
 		}
-		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s | %s |\n",
 			compareReviewMarkdownCell(priority),
 			compareReviewMarkdownCell(firstNonEmpty(directory.Name, page.Name)),
 			compareReviewMarkdownCell(findings),
+			compareReviewMarkdownCell(pairDecisions),
 			compareReviewMarkdownCell(packet),
 			compareReviewMarkdownCell(screenshots),
 			compareReviewMarkdownCell(status),
@@ -519,18 +521,19 @@ func writeCompareManifestReviewHTMLIndex(path string, rootDir string, report com
 
 func buildCompareManifestReviewSummary(report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewSummary {
 	return compareManifestReviewSummary{
-		Manifest:         report.Manifest,
-		TotalPages:       report.Summary.TotalPages,
-		ComparedPages:    report.Summary.ComparedPages,
-		FailedPages:      report.Summary.FailedPages,
-		SamePages:        report.Summary.SamePages,
-		DifferentPages:   report.Summary.DifferentPages,
-		TotalFindings:    report.Summary.TotalFindings,
-		CriticalFindings: report.Summary.Critical,
-		WarningFindings:  report.Summary.Warning,
-		InfoFindings:     report.Summary.Info,
-		Files:            files,
-		FindingClusters:  compareManifestFindingClusters(report),
+		Manifest:             report.Manifest,
+		TotalPages:           report.Summary.TotalPages,
+		ComparedPages:        report.Summary.ComparedPages,
+		FailedPages:          report.Summary.FailedPages,
+		SamePages:            report.Summary.SamePages,
+		DifferentPages:       report.Summary.DifferentPages,
+		TotalFindings:        report.Summary.TotalFindings,
+		CriticalFindings:     report.Summary.Critical,
+		WarningFindings:      report.Summary.Warning,
+		InfoFindings:         report.Summary.Info,
+		PairDecisionTemplate: compareManifestReviewPairDecisionTemplateCounts(files.PageDirectories),
+		Files:                files,
+		FindingClusters:      compareManifestFindingClusters(report),
 	}
 }
 
@@ -550,6 +553,13 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 	fmt.Fprintf(&builder, "- Pages: %d total, %d compared, %d failed\n", summary.TotalPages, summary.ComparedPages, summary.FailedPages)
 	fmt.Fprintf(&builder, "- Page results: %d same, %d different\n", summary.SamePages, summary.DifferentPages)
 	fmt.Fprintf(&builder, "- Findings: %d total, %d critical, %d warning, %d info\n", summary.TotalFindings, summary.CriticalFindings, summary.WarningFindings, summary.InfoFindings)
+	if summary.PairDecisionTemplate != nil {
+		counts := summary.PairDecisionTemplate
+		fmt.Fprintf(&builder, "- Pair decision workload: %s\n", compareManifestReviewPairDecisionTemplateLabel(counts))
+		if counts.TruncatedOld > 0 || counts.TruncatedNew > 0 || counts.SkippedDuplicateOld > 0 || counts.SkippedDuplicateNew > 0 {
+			fmt.Fprintf(&builder, "- Pair decision filtering: %d old truncated, %d new truncated, %d old duplicates skipped, %d new duplicates skipped\n", counts.TruncatedOld, counts.TruncatedNew, counts.SkippedDuplicateOld, counts.SkippedDuplicateNew)
+		}
+	}
 	if len(summary.FindingClusters) > 0 {
 		fmt.Fprintf(&builder, "- Repeated finding clusters: %d\n", len(summary.FindingClusters))
 	}
@@ -565,6 +575,7 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 	builder.WriteString("\n## Priority\n\n")
 	builder.WriteString("- Start with failed pages; they need rerun or environment investigation before findings are trustworthy.\n")
 	builder.WriteString("- Review pages with critical findings next.\n")
+	builder.WriteString("- Review pages with high pair decision workload when matching looks unstable, even if finding counts are lower.\n")
 	builder.WriteString("- Check repeated finding clusters before reviewing every page one by one.\n")
 	builder.WriteString("- Use warning-heavy pages to decide whether scope or decision templates need tightening.\n")
 	writeCompareManifestReviewGuidePages(&builder, summary.Files.PageDirectories)
@@ -604,11 +615,63 @@ func writeCompareManifestReviewGuidePages(builder *strings.Builder, directories 
 		if directory.Error != "" {
 			findings = "not compared"
 		}
-		fmt.Fprintf(builder, "- `%s`: %s; %s; open `%s`\n", firstNonEmpty(directory.Name, filepath.Base(directory.Directory)), status, findings, filepath.Join(compareReviewGuideDisplayPath(directory.Directory), compareReviewFileReview))
+		pairDecisions := compareManifestReviewPairDecisionTemplateLabel(directory.PairDecisionTemplate)
+		if pairDecisions != "" {
+			pairDecisions = "; " + pairDecisions
+		}
+		fmt.Fprintf(builder, "- `%s`: %s; %s%s; open `%s`\n", firstNonEmpty(directory.Name, filepath.Base(directory.Directory)), status, findings, pairDecisions, filepath.Join(compareReviewGuideDisplayPath(directory.Directory), compareReviewFileReview))
 	}
 	if len(ordered) > limit {
 		fmt.Fprintf(builder, "- %d more page packets are listed in `%s`.\n", len(ordered)-limit, compareReviewGuideDisplayPath("review-index.md"))
 	}
+}
+
+func compareManifestReviewPairDecisionTemplateCounts(directories []compareManifestReviewPageDirectory) *compareDecisionTemplateCounts {
+	total := compareDecisionTemplateCounts{}
+	for _, directory := range directories {
+		if directory.PairDecisionTemplate == nil {
+			continue
+		}
+		counts := directory.PairDecisionTemplate
+		total.Ambiguous += counts.Ambiguous
+		total.UnmatchedOld += counts.UnmatchedOld
+		total.UnmatchedNew += counts.UnmatchedNew
+		total.TruncatedOld += counts.TruncatedOld
+		total.TruncatedNew += counts.TruncatedNew
+		total.SkippedDuplicateOld += counts.SkippedDuplicateOld
+		total.SkippedDuplicateNew += counts.SkippedDuplicateNew
+	}
+	if total.Ambiguous == 0 && total.UnmatchedOld == 0 && total.UnmatchedNew == 0 && total.TruncatedOld == 0 && total.TruncatedNew == 0 && total.SkippedDuplicateOld == 0 && total.SkippedDuplicateNew == 0 {
+		return nil
+	}
+	return &total
+}
+
+func compareManifestReviewPairDecisionTemplateLabel(counts *compareDecisionTemplateCounts) string {
+	if counts == nil {
+		return ""
+	}
+	total := counts.Ambiguous + counts.UnmatchedOld + counts.UnmatchedNew
+	values := []string{}
+	if total > 0 {
+		values = append(values, fmt.Sprintf("%d total", total))
+	}
+	if counts.Ambiguous > 0 {
+		values = append(values, fmt.Sprintf("%d ambiguous", counts.Ambiguous))
+	}
+	if counts.UnmatchedOld > 0 {
+		values = append(values, fmt.Sprintf("%d old", counts.UnmatchedOld))
+	}
+	if counts.UnmatchedNew > 0 {
+		values = append(values, fmt.Sprintf("%d new", counts.UnmatchedNew))
+	}
+	if counts.TruncatedOld > 0 || counts.TruncatedNew > 0 {
+		values = append(values, fmt.Sprintf("%d truncated", counts.TruncatedOld+counts.TruncatedNew))
+	}
+	if counts.SkippedDuplicateOld > 0 || counts.SkippedDuplicateNew > 0 {
+		values = append(values, fmt.Sprintf("%d duplicates skipped", counts.SkippedDuplicateOld+counts.SkippedDuplicateNew))
+	}
+	return strings.Join(values, ", ")
 }
 
 type compareManifestReviewHTMLData struct {
