@@ -200,23 +200,42 @@ type compareReviewFiles struct {
 }
 
 type compareReviewSummary struct {
-	Old                     string             `json:"old,omitempty"`
-	New                     string             `json:"new,omitempty"`
-	Scope                   string             `json:"scope,omitempty"`
-	Same                    bool               `json:"same"`
-	TotalFindings           int                `json:"total_findings"`
-	CriticalFindings        int                `json:"critical_findings"`
-	WarningFindings         int                `json:"warning_findings"`
-	InfoFindings            int                `json:"info_findings"`
-	MatchedNodes            int                `json:"matched_nodes,omitempty"`
-	AmbiguousMatchesSkipped int                `json:"ambiguous_matches_skipped,omitempty"`
-	AmbiguousCandidates     int                `json:"ambiguous_candidates,omitempty"`
-	UnmatchedOld            int                `json:"unmatched_old,omitempty"`
-	UnmatchedNew            int                `json:"unmatched_new,omitempty"`
-	Files                   compareReviewFiles `json:"files"`
-	ScreenshotWarnings      []string           `json:"screenshot_warnings,omitempty"`
-	CropWarnings            []string           `json:"crop_warnings,omitempty"`
-	NextCommands            []string           `json:"next_commands,omitempty"`
+	Old                     string                  `json:"old,omitempty"`
+	New                     string                  `json:"new,omitempty"`
+	Scope                   string                  `json:"scope,omitempty"`
+	Same                    bool                    `json:"same"`
+	TotalFindings           int                     `json:"total_findings"`
+	CriticalFindings        int                     `json:"critical_findings"`
+	WarningFindings         int                     `json:"warning_findings"`
+	InfoFindings            int                     `json:"info_findings"`
+	MatchedNodes            int                     `json:"matched_nodes,omitempty"`
+	AmbiguousMatchesSkipped int                     `json:"ambiguous_matches_skipped,omitempty"`
+	AmbiguousCandidates     int                     `json:"ambiguous_candidates,omitempty"`
+	UnmatchedOld            int                     `json:"unmatched_old,omitempty"`
+	UnmatchedNew            int                     `json:"unmatched_new,omitempty"`
+	Files                   compareReviewFiles      `json:"files"`
+	FindingClusters         []compareFindingCluster `json:"finding_clusters,omitempty"`
+	ScreenshotWarnings      []string                `json:"screenshot_warnings,omitempty"`
+	CropWarnings            []string                `json:"crop_warnings,omitempty"`
+	NextCommands            []string                `json:"next_commands,omitempty"`
+}
+
+type compareFindingCluster struct {
+	Key              string   `json:"key"`
+	Count            int      `json:"count"`
+	Severity         string   `json:"severity,omitempty"`
+	Kind             string   `json:"kind,omitempty"`
+	Impact           string   `json:"impact,omitempty"`
+	DecisionKind     string   `json:"decision_kind,omitempty"`
+	Field            string   `json:"field,omitempty"`
+	Role             string   `json:"role,omitempty"`
+	Label            string   `json:"label,omitempty"`
+	Old              string   `json:"old,omitempty"`
+	New              string   `json:"new,omitempty"`
+	ExampleFindingID string   `json:"example_finding_id,omitempty"`
+	FindingIDs       []string `json:"finding_ids,omitempty"`
+	MoreFindingIDs   int      `json:"more_finding_ids,omitempty"`
+	Pages            []string `json:"pages,omitempty"`
 }
 
 type compareManifestReviewPageDirectory struct {
@@ -253,6 +272,7 @@ type compareManifestReviewSummary struct {
 	WarningFindings  int                        `json:"warning_findings"`
 	InfoFindings     int                        `json:"info_findings"`
 	Files            compareManifestReviewFiles `json:"files"`
+	FindingClusters  []compareFindingCluster    `json:"finding_clusters,omitempty"`
 }
 
 type compareMatchingDebug struct {

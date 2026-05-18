@@ -875,6 +875,26 @@ func TestCompareReviewPacketWritesFindingCrops(t *testing.T) {
 	}
 }
 
+func TestCompareFindingClustersGroupsRepeatedFindings(t *testing.T) {
+	clusters := compareFindingClusters([]compareFinding{
+		{Kind: "layout_changed", FindingID: "layout_changed:a", Severity: "warning", Impact: "layout_changed", Field: "bounds", Role: "button", Label: "Save", Old: "10,10 20x20", New: "20,10 20x20"},
+		{Kind: "layout_changed", FindingID: "layout_changed:b", Severity: "warning", Impact: "layout_changed", Field: "bounds", Role: "button", Label: "Save", Old: "30,10 20x20", New: "40,10 20x20"},
+		{Kind: "missing_node", FindingID: "missing_node:c", Severity: "critical", Impact: "missing_primary_action", Role: "button", Label: "Delete"},
+		{Kind: "missing_node", FindingID: "missing_node:d", Severity: "critical", Impact: "missing_primary_action", Role: "button", Label: "Delete"},
+		{Kind: "css_changed", FindingID: "css_changed:e", Severity: "info", Impact: "css_changed", Field: "color", Old: "red", New: "blue"},
+	}, "dashboard")
+
+	if len(clusters) != 2 {
+		t.Fatalf("expected repeated critical and warning clusters, got %+v", clusters)
+	}
+	if clusters[0].Severity != "critical" || clusters[0].Count != 2 || clusters[0].ExampleFindingID != "missing_node:c" || len(clusters[0].FindingIDs) != 2 || len(clusters[0].Pages) != 1 {
+		t.Fatalf("unexpected critical cluster: %+v", clusters[0])
+	}
+	if clusters[1].Severity != "warning" || clusters[1].Count != 2 || clusters[1].Old != "" || clusters[1].New != "" {
+		t.Fatalf("expected layout cluster to ignore per-node bounds values: %+v", clusters[1])
+	}
+}
+
 func testCompareReviewPNG(t *testing.T, width int, height int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -899,20 +919,21 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 			ComparedPages:  1,
 			FailedPages:    1,
 			DifferentPages: 1,
-			TotalFindings:  3,
+			TotalFindings:  5,
 			Critical:       1,
-			Warning:        2,
+			Warning:        3,
 		},
 		Pages: []compareManifestPageReport{
 			{
 				Name: "dashboard",
 				Report: &compareReport{
-					Summary: compareSummary{TotalFindings: 4, Critical: 1, Warning: 2, Info: 1},
+					Summary: compareSummary{TotalFindings: 5, Critical: 1, Warning: 3, Info: 1},
 					Findings: []compareFinding{
 						{Kind: "missing_node", FindingID: "missing_node:aaa111", Severity: "critical", Impact: "missing_primary_action", Locator: "role=button", Role: "button", Label: "Submit"},
 						{Kind: "layout_changed", FindingID: "layout_changed:bbb222", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
 						{Kind: "css_changed", FindingID: "css_changed:ccc333", Severity: "info", Impact: "css_changed", Field: "color"},
 						{Kind: "text_changed", FindingID: "text_changed:ddd444", Severity: "warning", Impact: "text_changed", Role: "heading", Label: "Title"},
+						{Kind: "layout_changed", FindingID: "layout_changed:eee555", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
 					},
 				},
 			},
@@ -924,9 +945,9 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 			Name:             "dashboard",
 			Directory:        filepath.Join(dir, "001-dashboard"),
 			Priority:         "critical",
-			TotalFindings:    3,
+			TotalFindings:    5,
 			CriticalFindings: 1,
-			WarningFindings:  2,
+			WarningFindings:  3,
 			OldScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileOldScreenshot),
 			NewScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
 		},
@@ -962,7 +983,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if err := json.Unmarshal(bytes, &summary); err != nil {
 		t.Fatalf("expected manifest review summary json: %v\n%s", err, string(bytes))
 	}
-	if summary.TotalPages != 2 || summary.ComparedPages != 1 || summary.FailedPages != 1 || summary.CriticalFindings != 1 || summary.WarningFindings != 2 {
+	if summary.TotalPages != 2 || summary.ComparedPages != 1 || summary.FailedPages != 1 || summary.CriticalFindings != 1 || summary.WarningFindings != 3 || len(summary.FindingClusters) != 1 {
 		t.Fatalf("unexpected manifest review summary: %+v", summary)
 	}
 	if len(summary.Files.PageDirectories) != 2 || summary.Files.PageDirectories[1].Error != "failed" {
@@ -987,7 +1008,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(htmlBytes)
-	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, `src="001-dashboard/findings/missing_node-aaa111-old.png"`) || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, `src="001-dashboard/findings/missing_node-aaa111-old.png"`) || !strings.Contains(html, "Repeated finding clusters") || !strings.Contains(html, "2 similar") || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
 		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 }

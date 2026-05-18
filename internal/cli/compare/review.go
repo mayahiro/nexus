@@ -33,6 +33,8 @@ const (
 	compareReviewFileManifestMarkdown         = "manifest.md"
 	compareReviewFileIndex                    = "review-index.md"
 	compareReviewFileIndexHTML                = "review-index.html"
+	compareReviewMaxFindingClusters           = 5
+	compareReviewMaxClusterFindingIDs         = 20
 )
 
 type compareReviewScreenshots struct {
@@ -95,6 +97,7 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		MatchedNodes:            report.Summary.MatchedNodes,
 		AmbiguousMatchesSkipped: report.Summary.AmbiguousMatchesSkipped,
 		Files:                   files,
+		FindingClusters:         compareFindingClusters(report.Findings, ""),
 		ScreenshotWarnings:      append([]string(nil), screenshotWarnings...),
 		CropWarnings:            append([]string(nil), cropWarnings...),
 	}
@@ -417,25 +420,28 @@ func buildCompareManifestReviewSummary(report compareManifestReport, files compa
 		WarningFindings:  report.Summary.Warning,
 		InfoFindings:     report.Summary.Info,
 		Files:            files,
+		FindingClusters:  compareManifestFindingClusters(report),
 	}
 }
 
 type compareManifestReviewHTMLData struct {
-	Manifest         string
-	TotalPages       int
-	ComparedPages    int
-	FailedPages      int
-	SamePages        int
-	DifferentPages   int
-	TotalFindings    int
-	CriticalFindings int
-	WarningFindings  int
-	InfoFindings     int
-	ManifestJSON     string
-	ManifestMarkdown string
-	ReviewSummary    string
-	ReviewIndex      string
-	Pages            []compareManifestReviewHTMLPage
+	Manifest            string
+	TotalPages          int
+	ComparedPages       int
+	FailedPages         int
+	SamePages           int
+	DifferentPages      int
+	TotalFindings       int
+	CriticalFindings    int
+	WarningFindings     int
+	InfoFindings        int
+	ManifestJSON        string
+	ManifestMarkdown    string
+	ReviewSummary       string
+	ReviewIndex         string
+	FindingClusters     []compareManifestReviewHTMLCluster
+	FindingClustersMore int
+	Pages               []compareManifestReviewHTMLPage
 }
 
 type compareManifestReviewHTMLPage struct {
@@ -443,6 +449,8 @@ type compareManifestReviewHTMLPage struct {
 	Priority                 string
 	Findings                 string
 	Status                   string
+	FindingClusters          []compareManifestReviewHTMLCluster
+	FindingClustersMore      int
 	FindingPreview           []compareManifestReviewHTMLFinding
 	FindingPreviewMore       int
 	CompareMarkdown          string
@@ -468,6 +476,23 @@ type compareManifestReviewHTMLFinding struct {
 	RegressionDecision string
 }
 
+type compareManifestReviewHTMLCluster struct {
+	Count              int
+	Severity           string
+	Kind               string
+	Impact             string
+	Target             string
+	Field              string
+	Old                string
+	New                string
+	Pages              string
+	ExampleFindingID   string
+	OldCrop            string
+	NewCrop            string
+	AcceptedDecision   string
+	RegressionDecision string
+}
+
 type compareManifestReviewFindingDecision struct {
 	Kind       string `json:"kind"`
 	FindingID  string `json:"finding_id"`
@@ -477,21 +502,23 @@ type compareManifestReviewFindingDecision struct {
 
 func buildCompareManifestReviewHTMLData(rootDir string, report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewHTMLData {
 	data := compareManifestReviewHTMLData{
-		Manifest:         report.Manifest,
-		TotalPages:       report.Summary.TotalPages,
-		ComparedPages:    report.Summary.ComparedPages,
-		FailedPages:      report.Summary.FailedPages,
-		SamePages:        report.Summary.SamePages,
-		DifferentPages:   report.Summary.DifferentPages,
-		TotalFindings:    report.Summary.TotalFindings,
-		CriticalFindings: report.Summary.Critical,
-		WarningFindings:  report.Summary.Warning,
-		InfoFindings:     report.Summary.Info,
-		ManifestJSON:     compareReviewMarkdownLinkTarget(rootDir, files.ManifestJSON),
-		ManifestMarkdown: compareReviewMarkdownLinkTarget(rootDir, files.ManifestMarkdown),
-		ReviewSummary:    compareReviewMarkdownLinkTarget(rootDir, files.ReviewSummary),
-		ReviewIndex:      compareReviewMarkdownLinkTarget(rootDir, files.ReviewIndex),
-		Pages:            make([]compareManifestReviewHTMLPage, 0, len(report.Pages)),
+		Manifest:            report.Manifest,
+		TotalPages:          report.Summary.TotalPages,
+		ComparedPages:       report.Summary.ComparedPages,
+		FailedPages:         report.Summary.FailedPages,
+		SamePages:           report.Summary.SamePages,
+		DifferentPages:      report.Summary.DifferentPages,
+		TotalFindings:       report.Summary.TotalFindings,
+		CriticalFindings:    report.Summary.Critical,
+		WarningFindings:     report.Summary.Warning,
+		InfoFindings:        report.Summary.Info,
+		ManifestJSON:        compareReviewMarkdownLinkTarget(rootDir, files.ManifestJSON),
+		ManifestMarkdown:    compareReviewMarkdownLinkTarget(rootDir, files.ManifestMarkdown),
+		ReviewSummary:       compareReviewMarkdownLinkTarget(rootDir, files.ReviewSummary),
+		ReviewIndex:         compareReviewMarkdownLinkTarget(rootDir, files.ReviewIndex),
+		FindingClusters:     compareManifestReviewHTMLGlobalClusters(rootDir, report, files),
+		FindingClustersMore: compareManifestReviewHTMLGlobalClusterOverflow(report),
+		Pages:               make([]compareManifestReviewHTMLPage, 0, len(report.Pages)),
 	}
 	for i, page := range report.Pages {
 		directory := compareManifestReviewPageDirectory{Name: page.Name}
@@ -524,12 +551,14 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 		status = directory.Error
 	}
 	htmlPage := compareManifestReviewHTMLPage{
-		Name:               firstNonEmpty(directory.Name, page.Name),
-		Priority:           priority,
-		Findings:           compareManifestReviewFindingsLabel(directory, page),
-		Status:             status,
-		FindingPreview:     compareManifestReviewHTMLFindings(rootDir, directory, page.Report),
-		FindingPreviewMore: compareManifestReviewHTMLFindingOverflow(page.Report),
+		Name:                firstNonEmpty(directory.Name, page.Name),
+		Priority:            priority,
+		Findings:            compareManifestReviewFindingsLabel(directory, page),
+		Status:              status,
+		FindingClusters:     compareManifestReviewHTMLFindingClusters(rootDir, directory, page.Report),
+		FindingClustersMore: compareManifestReviewHTMLFindingClusterOverflow(page.Report),
+		FindingPreview:      compareManifestReviewHTMLFindings(rootDir, directory, page.Report),
+		FindingPreviewMore:  compareManifestReviewHTMLFindingOverflow(page.Report),
 	}
 	if strings.TrimSpace(directory.Directory) == "" || directory.Error != "" {
 		return htmlPage
@@ -579,6 +608,92 @@ func compareManifestReviewHTMLFindings(rootDir string, directory compareManifest
 	return previews
 }
 
+func compareManifestReviewHTMLFindingClusters(rootDir string, directory compareManifestReviewPageDirectory, report *compareReport) []compareManifestReviewHTMLCluster {
+	if report == nil {
+		return nil
+	}
+	return compareManifestReviewHTMLClusters(rootDir, directory, compareFindingClusters(report.Findings, ""))
+}
+
+func compareManifestReviewHTMLGlobalClusters(rootDir string, report compareManifestReport, files compareManifestReviewFiles) []compareManifestReviewHTMLCluster {
+	clusters := compareManifestFindingClusters(report)
+	if len(clusters) > compareReviewMaxFindingClusters {
+		clusters = clusters[:compareReviewMaxFindingClusters]
+	}
+	htmlClusters := make([]compareManifestReviewHTMLCluster, 0, len(clusters))
+	for _, cluster := range clusters {
+		directory := compareManifestReviewClusterDirectory(report, files, cluster.ExampleFindingID)
+		htmlClusters = append(htmlClusters, compareManifestReviewHTMLClusterFromSummary(rootDir, directory, cluster))
+	}
+	return htmlClusters
+}
+
+func compareManifestReviewHTMLClusters(rootDir string, directory compareManifestReviewPageDirectory, clusters []compareFindingCluster) []compareManifestReviewHTMLCluster {
+	if len(clusters) > compareReviewMaxFindingClusters {
+		clusters = clusters[:compareReviewMaxFindingClusters]
+	}
+	htmlClusters := make([]compareManifestReviewHTMLCluster, 0, len(clusters))
+	for _, cluster := range clusters {
+		htmlClusters = append(htmlClusters, compareManifestReviewHTMLClusterFromSummary(rootDir, directory, cluster))
+	}
+	return htmlClusters
+}
+
+func compareManifestReviewHTMLClusterFromSummary(rootDir string, directory compareManifestReviewPageDirectory, cluster compareFindingCluster) compareManifestReviewHTMLCluster {
+	return compareManifestReviewHTMLCluster{
+		Count:              cluster.Count,
+		Severity:           cluster.Severity,
+		Kind:               cluster.Kind,
+		Impact:             cluster.Impact,
+		Target:             compareFindingClusterTarget(cluster),
+		Field:              cluster.Field,
+		Old:                cluster.Old,
+		New:                cluster.New,
+		Pages:              strings.Join(cluster.Pages, ", "),
+		ExampleFindingID:   cluster.ExampleFindingID,
+		OldCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, cluster.ExampleFindingID, "old"),
+		NewCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, cluster.ExampleFindingID, "new"),
+		AcceptedDecision:   compareManifestReviewFindingDecisionJSONL("accepted_finding", cluster.ExampleFindingID),
+		RegressionDecision: compareManifestReviewFindingDecisionJSONL("regression_finding", cluster.ExampleFindingID),
+	}
+}
+
+func compareManifestReviewClusterDirectory(report compareManifestReport, files compareManifestReviewFiles, findingID string) compareManifestReviewPageDirectory {
+	findingID = strings.TrimSpace(findingID)
+	if findingID == "" {
+		return compareManifestReviewPageDirectory{}
+	}
+	for i, page := range report.Pages {
+		if page.Report == nil {
+			continue
+		}
+		for _, finding := range page.Report.Findings {
+			if finding.FindingID == findingID && i < len(files.PageDirectories) {
+				return files.PageDirectories[i]
+			}
+		}
+	}
+	return compareManifestReviewPageDirectory{}
+}
+
+func compareManifestReviewHTMLFindingClusterOverflow(report *compareReport) int {
+	if report == nil {
+		return 0
+	}
+	return compareReviewOverflow(len(compareFindingClusters(report.Findings, "")), compareReviewMaxFindingClusters)
+}
+
+func compareManifestReviewHTMLGlobalClusterOverflow(report compareManifestReport) int {
+	return compareReviewOverflow(len(compareManifestFindingClusters(report)), compareReviewMaxFindingClusters)
+}
+
+func compareReviewOverflow(total int, limit int) int {
+	if total <= limit {
+		return 0
+	}
+	return total - limit
+}
+
 func compareManifestReviewFindingCropLink(rootDir string, pageDir string, findingID string, side string) string {
 	if strings.TrimSpace(pageDir) == "" || strings.TrimSpace(findingID) == "" {
 		return ""
@@ -625,6 +740,156 @@ func compareManifestReviewFindingTarget(finding compareFinding) string {
 		return strings.Join(parts, " ")
 	}
 	return firstNonEmpty(finding.Locator, finding.Fingerprint, finding.StructureKey, finding.SubtreeSignature)
+}
+
+type compareFindingClusterBuilder struct {
+	cluster compareFindingCluster
+	index   int
+	pages   map[string]bool
+}
+
+func compareFindingClusters(findings []compareFinding, pageName string) []compareFindingCluster {
+	builders := map[string]*compareFindingClusterBuilder{}
+	order := []string{}
+	for _, finding := range findings {
+		compareAddFindingCluster(builders, &order, finding, pageName)
+	}
+	return compareSortedFindingClusters(builders, order)
+}
+
+func compareManifestFindingClusters(report compareManifestReport) []compareFindingCluster {
+	builders := map[string]*compareFindingClusterBuilder{}
+	order := []string{}
+	for _, page := range report.Pages {
+		if page.Report == nil {
+			continue
+		}
+		for _, finding := range page.Report.Findings {
+			compareAddFindingCluster(builders, &order, finding, page.Name)
+		}
+	}
+	return compareSortedFindingClusters(builders, order)
+}
+
+func compareAddFindingCluster(builders map[string]*compareFindingClusterBuilder, order *[]string, finding compareFinding, pageName string) {
+	if !compareManifestReviewHTMLFindingIncluded(finding) {
+		return
+	}
+	key := compareFindingClusterKey(finding)
+	builder := builders[key]
+	if builder == nil {
+		builder = &compareFindingClusterBuilder{
+			cluster: compareFindingCluster{
+				Key:              key,
+				Severity:         finding.Severity,
+				Kind:             finding.Kind,
+				Impact:           finding.Impact,
+				DecisionKind:     finding.DecisionKind,
+				Field:            finding.Field,
+				Role:             finding.Role,
+				Label:            finding.Label,
+				Old:              compareFindingClusterValuePart(finding.Old, finding.Kind),
+				New:              compareFindingClusterValuePart(finding.New, finding.Kind),
+				ExampleFindingID: strings.TrimSpace(finding.FindingID),
+			},
+			index: len(*order),
+			pages: map[string]bool{},
+		}
+		builders[key] = builder
+		*order = append(*order, key)
+	}
+	builder.cluster.Count++
+	findingID := strings.TrimSpace(finding.FindingID)
+	if findingID != "" {
+		if builder.cluster.ExampleFindingID == "" {
+			builder.cluster.ExampleFindingID = findingID
+		}
+		if len(builder.cluster.FindingIDs) < compareReviewMaxClusterFindingIDs {
+			builder.cluster.FindingIDs = append(builder.cluster.FindingIDs, findingID)
+		} else {
+			builder.cluster.MoreFindingIDs++
+		}
+	}
+	pageName = strings.TrimSpace(pageName)
+	if pageName != "" && !builder.pages[pageName] {
+		builder.pages[pageName] = true
+		builder.cluster.Pages = append(builder.cluster.Pages, pageName)
+	}
+}
+
+func compareSortedFindingClusters(builders map[string]*compareFindingClusterBuilder, order []string) []compareFindingCluster {
+	clusters := make([]compareFindingCluster, 0, len(builders))
+	indexes := map[string]int{}
+	for _, key := range order {
+		builder := builders[key]
+		if builder == nil || builder.cluster.Count < 2 {
+			continue
+		}
+		clusters = append(clusters, builder.cluster)
+		indexes[builder.cluster.Key] = builder.index
+	}
+	sort.SliceStable(clusters, func(i int, j int) bool {
+		if rankI, rankJ := compareFindingClusterSeverityRank(clusters[i].Severity), compareFindingClusterSeverityRank(clusters[j].Severity); rankI != rankJ {
+			return rankI < rankJ
+		}
+		if clusters[i].Count != clusters[j].Count {
+			return clusters[i].Count > clusters[j].Count
+		}
+		return indexes[clusters[i].Key] < indexes[clusters[j].Key]
+	})
+	return clusters
+}
+
+func compareFindingClusterSeverityRank(severity string) int {
+	switch severity {
+	case "critical":
+		return 0
+	case "warning":
+		return 1
+	default:
+		return 2
+	}
+}
+
+func compareFindingClusterKey(finding compareFinding) string {
+	parts := []string{
+		strings.TrimSpace(finding.Severity),
+		strings.TrimSpace(finding.Kind),
+		strings.TrimSpace(finding.Impact),
+		strings.TrimSpace(finding.DecisionKind),
+		strings.TrimSpace(finding.Field),
+		strings.TrimSpace(finding.Role),
+		strings.TrimSpace(finding.Label),
+		compareFindingClusterValuePart(finding.Old, finding.Kind),
+		compareFindingClusterValuePart(finding.New, finding.Kind),
+	}
+	return strings.Join(parts, " | ")
+}
+
+func compareFindingClusterValuePart(value string, kind string) string {
+	switch kind {
+	case "missing_node", "new_node", "layout_changed":
+		return ""
+	default:
+		return strings.TrimSpace(value)
+	}
+}
+
+func compareFindingClusterTarget(cluster compareFindingCluster) string {
+	parts := make([]string, 0, 3)
+	if cluster.Role != "" {
+		parts = append(parts, cluster.Role)
+	}
+	if cluster.Label != "" {
+		parts = append(parts, cluster.Label)
+	}
+	if cluster.Field != "" {
+		parts = append(parts, cluster.Field)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " ")
+	}
+	return strings.TrimSpace(firstNonEmpty(cluster.Impact, cluster.Kind))
 }
 
 func compareManifestReviewFindingDecisionJSONL(kind string, findingID string) string {
@@ -783,6 +1048,13 @@ main { padding:18px 28px 32px; }
 .packet-links { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
 .findings-preview { margin:0 0 14px; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
 .findings-preview h3 { margin:0; padding:8px 10px; font-size:14px; border-bottom:1px solid var(--border); background:#f6f8fa; }
+.clusters-preview { margin:0 0 14px; border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
+.clusters-preview h3 { margin:0; padding:8px 10px; font-size:14px; border-bottom:1px solid var(--border); background:#f6f8fa; }
+.cluster { padding:9px 10px; border-bottom:1px solid var(--border); }
+.cluster:last-child { border-bottom:0; }
+.cluster-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:4px; }
+.cluster-count { padding:2px 6px; border-radius:999px; color:#fff; background:#6e7781; font-size:12px; font-weight:600; }
+.cluster-pages, .cluster-target, .cluster-values { color:var(--muted); }
 .finding { padding:9px 10px; border-bottom:1px solid var(--border); }
 .finding:last-child { border-bottom:0; }
 .finding-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:4px; }
@@ -827,6 +1099,34 @@ img { display:block; width:100%; height:auto; background:#fff; }
 </nav>
 </header>
 <main>
+{{if .FindingClusters}}
+<section class="clusters-preview">
+<h3>Repeated finding clusters</h3>
+{{range .FindingClusters}}
+<div class="cluster">
+<div class="cluster-head">
+<span class="finding-severity severity-{{.Severity}}">{{.Severity}}</span>
+<span class="cluster-count">{{.Count}} similar</span>
+<span class="finding-kind">{{.Kind}}</span>
+{{if .Impact}}<span class="finding-impact">{{.Impact}}</span>{{end}}
+</div>
+{{if .Target}}<div class="cluster-target">{{.Target}}</div>{{end}}
+{{if .Pages}}<div class="cluster-pages">{{.Pages}}</div>{{end}}
+{{if or .Old .New}}<div class="cluster-values"><code>{{.Old}}</code> -> <code>{{.New}}</code></div>{{end}}
+{{if .ExampleFindingID}}<code>{{.ExampleFindingID}}</code>{{end}}
+{{if or .OldCrop .NewCrop}}
+<div class="finding-crops">
+{{if .OldCrop}}<figure><a href="{{.OldCrop}}"><img src="{{.OldCrop}}" alt="{{.ExampleFindingID}} old cluster crop"></a><figcaption>Old crop</figcaption></figure>{{end}}
+{{if .NewCrop}}<figure><a href="{{.NewCrop}}"><img src="{{.NewCrop}}" alt="{{.ExampleFindingID}} new cluster crop"></a><figcaption>New crop</figcaption></figure>{{end}}
+</div>
+{{end}}
+{{if .AcceptedDecision}}<details class="decision-stubs"><summary>representative decision JSONL</summary><pre><code>{{.AcceptedDecision}}
+{{.RegressionDecision}}</code></pre></details>{{end}}
+</div>
+{{end}}
+{{if .FindingClustersMore}}<div class="cluster cluster-pages">+{{.FindingClustersMore}} more repeated clusters</div>{{end}}
+</section>
+{{end}}
 {{range .Pages}}
 <section class="page priority-{{.Priority}}">
 <div class="page-header">
@@ -843,6 +1143,33 @@ img { display:block; width:100%; height:auto; background:#fff; }
 {{if .PairDecisionsTemplate}}<a href="{{.PairDecisionsTemplate}}">pair decisions</a>{{end}}
 {{if .FindingDecisionsTemplate}}<a href="{{.FindingDecisionsTemplate}}">finding decisions</a>{{end}}
 </nav>
+{{if .FindingClusters}}
+<div class="clusters-preview">
+<h3>Repeated finding clusters</h3>
+{{range .FindingClusters}}
+<div class="cluster">
+<div class="cluster-head">
+<span class="finding-severity severity-{{.Severity}}">{{.Severity}}</span>
+<span class="cluster-count">{{.Count}} similar</span>
+<span class="finding-kind">{{.Kind}}</span>
+{{if .Impact}}<span class="finding-impact">{{.Impact}}</span>{{end}}
+</div>
+{{if .Target}}<div class="cluster-target">{{.Target}}</div>{{end}}
+{{if or .Old .New}}<div class="cluster-values"><code>{{.Old}}</code> -> <code>{{.New}}</code></div>{{end}}
+{{if .ExampleFindingID}}<code>{{.ExampleFindingID}}</code>{{end}}
+{{if or .OldCrop .NewCrop}}
+<div class="finding-crops">
+{{if .OldCrop}}<figure><a href="{{.OldCrop}}"><img src="{{.OldCrop}}" alt="{{.ExampleFindingID}} old cluster crop"></a><figcaption>Old crop</figcaption></figure>{{end}}
+{{if .NewCrop}}<figure><a href="{{.NewCrop}}"><img src="{{.NewCrop}}" alt="{{.ExampleFindingID}} new cluster crop"></a><figcaption>New crop</figcaption></figure>{{end}}
+</div>
+{{end}}
+{{if .AcceptedDecision}}<details class="decision-stubs"><summary>representative decision JSONL</summary><pre><code>{{.AcceptedDecision}}
+{{.RegressionDecision}}</code></pre></details>{{end}}
+</div>
+{{end}}
+{{if .FindingClustersMore}}<div class="cluster cluster-pages">+{{.FindingClustersMore}} more repeated clusters</div>{{end}}
+</div>
+{{end}}
 {{if .FindingPreview}}
 <div class="findings-preview">
 <h3>Critical and warning findings</h3>
