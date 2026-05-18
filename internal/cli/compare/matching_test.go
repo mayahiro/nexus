@@ -493,6 +493,77 @@ func TestRunCompareValidateDecisionsRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+func TestRunCompareNormalizeDecisionsWritesOutput(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	outputPath := filepath.Join(dir, "decisions.normalized.jsonl")
+	input := strings.Join([]string{
+		`{"kind":"PAIR","old":" @e1 ","new":"@e2","confidence":"HIGH","reason":" first "}`,
+		`{"kind":"pair","old":"@e1","new":"@e2","confidence":"high","reason":"duplicate"}`,
+		`{"kind":"accepted_finding","finding_id":" text_changed:abc123 ","confidence":"HIGH","reason":" ok "}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareNormalizeDecisions([]string{"--decisions-file", decisionsPath, "--output", outputPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected normalize to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionNormalizeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected normalize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.InputDecisions != 3 || report.Summary.OutputDecisions != 2 || report.Summary.DuplicatesRemoved != 1 {
+		t.Fatalf("unexpected normalize summary: %+v", report.Summary)
+	}
+	outputBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(outputBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two normalized decisions, got %q", string(outputBytes))
+	}
+	var first compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("expected normalized jsonl: %v\n%s", err, lines[0])
+	}
+	if first.SchemaVersion != 1 || first.Kind != "pair" || first.Old != "@e1" || first.Confidence != "high" || first.Reason != "first" {
+		t.Fatalf("unexpected normalized decision: %+v", first)
+	}
+}
+
+func TestRunCompareNormalizeDecisionsReportsStaleFindingID(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"accepted_finding","finding_id":"missing_node:stale","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Findings: []compareFinding{
+			{Kind: "missing_node", FindingID: "missing_node:current"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareNormalizeDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected stale finding_id to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionNormalizeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected normalize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 1 || !report.Summary.CompareJSONUsed || len(report.Issues) != 1 || report.Issues[0].Field != "finding_id" {
+		t.Fatalf("expected stale finding_id issue: %+v", report)
+	}
+}
+
 func TestValidateCompareDecisionsReportsUnknownKind(t *testing.T) {
 	validation := validateCompareDecisions([]compareDecision{
 		{Kind: "removed", Old: "@e1", Confidence: "high", Line: 1},

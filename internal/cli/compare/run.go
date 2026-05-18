@@ -22,6 +22,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	if len(args) > 0 && args[0] == "validate-decisions" {
 		return runCompareValidateDecisions(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "normalize-decisions" {
+		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -300,6 +303,94 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 		}
 	} else {
 		printCompareDecisionValidationReport(stdout, report)
+	}
+	if report.Summary.Errors > 0 {
+		return 1
+	}
+	return 0
+}
+
+func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		PrintNormalizeDecisionsHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("compare normalize-decisions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to normalize")
+	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs, fingerprints, and finding ids")
+	output := fs.String("output", "", "write normalized decisions JSONL to file")
+	asJSON := fs.Bool("json", false, "print normalization report as json")
+
+	if err := parseCommandFlags(fs, args, stderr, "compare normalize-decisions"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "compare normalize-decisions accepts only flags")
+		PrintNormalizeDecisionsHelp(stderr)
+		return 1
+	}
+	if strings.TrimSpace(*decisionsFile) == "" {
+		fmt.Fprintln(stderr, "compare normalize-decisions requires --decisions-file")
+		return 1
+	}
+
+	decisions, err := loadCompareDecisions(*decisionsFile)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	normalized, duplicates := normalizeCompareDecisions(decisions)
+
+	var loadedCompareReport *compareReport
+	if strings.TrimSpace(*compareJSON) != "" {
+		report, err := loadCompareReport(*compareJSON)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		loadedCompareReport = &report
+	}
+	validation := validateCompareDecisions(normalized, loadedCompareReport)
+	report := compareDecisionNormalizeReport{
+		Summary: compareDecisionNormalizeSummary{
+			InputDecisions:    len(decisions),
+			OutputDecisions:   len(normalized),
+			DuplicatesRemoved: duplicates,
+			Output:            strings.TrimSpace(*output),
+			Errors:            validation.Summary.Errors,
+			Warnings:          validation.Summary.Warnings,
+			CompareJSONUsed:   validation.Summary.CompareJSONUsed,
+		},
+		Issues: validation.Issues,
+	}
+
+	if report.Summary.Output != "" {
+		if err := writeCompareDecisionJSONL(report.Summary.Output, normalized); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else if report.Summary.Output != "" {
+		printCompareDecisionNormalizeReport(stdout, report)
+	} else {
+		if err := printCompareDecisionJSONL(stdout, normalized); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(report.Issues) > 0 {
+			fmt.Fprintln(stderr)
+			printCompareDecisionNormalizeReport(stderr, report)
+		}
 	}
 	if report.Summary.Errors > 0 {
 		return 1

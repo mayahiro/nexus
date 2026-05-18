@@ -185,6 +185,38 @@ func printCompareDecisionValidationReport(w io.Writer, report compareDecisionVal
 	}
 }
 
+func printCompareDecisionNormalizeReport(w io.Writer, report compareDecisionNormalizeReport) {
+	fmt.Fprintf(w, "input_decisions: %d\n", report.Summary.InputDecisions)
+	fmt.Fprintf(w, "output_decisions: %d\n", report.Summary.OutputDecisions)
+	fmt.Fprintf(w, "duplicates_removed: %d\n", report.Summary.DuplicatesRemoved)
+	if report.Summary.Output != "" {
+		fmt.Fprintf(w, "output: %s\n", report.Summary.Output)
+	}
+	fmt.Fprintf(w, "compare_json_used: %t\n", report.Summary.CompareJSONUsed)
+	fmt.Fprintf(w, "errors: %d\n", report.Summary.Errors)
+	fmt.Fprintf(w, "warnings: %d\n", report.Summary.Warnings)
+	if len(report.Issues) == 0 {
+		fmt.Fprintln(w, "no decision issues")
+		return
+	}
+	fmt.Fprintln(w)
+	for _, issue := range report.Issues {
+		if issue.Line > 0 && issue.Field != "" {
+			fmt.Fprintf(w, "[%s] line %d %s: %s\n", issue.Severity, issue.Line, issue.Field, issue.Message)
+			continue
+		}
+		if issue.Line > 0 {
+			fmt.Fprintf(w, "[%s] line %d: %s\n", issue.Severity, issue.Line, issue.Message)
+			continue
+		}
+		if issue.Field != "" {
+			fmt.Fprintf(w, "[%s] %s: %s\n", issue.Severity, issue.Field, issue.Message)
+			continue
+		}
+		fmt.Fprintf(w, "[%s] %s\n", issue.Severity, issue.Message)
+	}
+}
+
 func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintln(w, "# Compare Report")
 	fmt.Fprintln(w)

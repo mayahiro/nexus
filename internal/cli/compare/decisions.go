@@ -12,22 +12,27 @@ import (
 const compareDecisionMaxLineBytes = 1024 * 1024
 
 type compareDecision struct {
-	SchemaVersion  int    `json:"schema_version,omitempty"`
-	Kind           string `json:"kind,omitempty"`
-	Old            string `json:"old,omitempty"`
-	New            string `json:"new,omitempty"`
-	OldFingerprint string `json:"old_fingerprint,omitempty"`
-	NewFingerprint string `json:"new_fingerprint,omitempty"`
-	FindingID      string `json:"finding_id,omitempty"`
-	Confidence     string `json:"confidence,omitempty"`
-	MatchKind      string `json:"match_kind,omitempty"`
-	Count          int    `json:"count,omitempty"`
-	Reason         string `json:"reason,omitempty"`
-	Note           string `json:"note,omitempty"`
-	DecidedBy      string `json:"decided_by,omitempty"`
-	DecidedAt      string `json:"decided_at,omitempty"`
-	Context        string `json:"context,omitempty"`
-	Line           int    `json:"-"`
+	SchemaVersion  int      `json:"schema_version,omitempty"`
+	Kind           string   `json:"kind,omitempty"`
+	Old            string   `json:"old,omitempty"`
+	New            string   `json:"new,omitempty"`
+	OldFingerprint string   `json:"old_fingerprint,omitempty"`
+	NewFingerprint string   `json:"new_fingerprint,omitempty"`
+	FindingID      string   `json:"finding_id,omitempty"`
+	Confidence     string   `json:"confidence,omitempty"`
+	MatchKind      string   `json:"match_kind,omitempty"`
+	Count          int      `json:"count,omitempty"`
+	Reason         string   `json:"reason,omitempty"`
+	Note           string   `json:"note,omitempty"`
+	DecidedBy      string   `json:"decided_by,omitempty"`
+	DecidedAt      string   `json:"decided_at,omitempty"`
+	Context        string   `json:"context,omitempty"`
+	SessionContext string   `json:"session_context,omitempty"`
+	Name           string   `json:"name,omitempty"`
+	Matches        []string `json:"matches,omitempty"`
+	From           string   `json:"from,omitempty"`
+	To             string   `json:"to,omitempty"`
+	Line           int      `json:"-"`
 }
 
 type compareDecisionEffect struct {
@@ -111,6 +116,122 @@ func loadCompareReport(path string) (compareReport, error) {
 		return compareReport{}, fmt.Errorf("invalid compare json %q: %w", path, err)
 	}
 	return report, nil
+}
+
+func writeCompareDecisionJSONL(path string, decisions []compareDecision) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return printCompareDecisionJSONL(file, decisions)
+}
+
+func printCompareDecisionJSONL(w io.Writer, decisions []compareDecision) error {
+	encoder := json.NewEncoder(w)
+	for _, decision := range decisions {
+		decision.Line = 0
+		if err := encoder.Encode(decision); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func normalizeCompareDecisions(decisions []compareDecision) ([]compareDecision, int) {
+	normalized := make([]compareDecision, 0, len(decisions))
+	seen := map[string]struct{}{}
+	duplicates := 0
+	for _, decision := range decisions {
+		decision = normalizeCompareDecision(decision)
+		key := compareDecisionDedupeKey(decision)
+		if _, ok := seen[key]; ok {
+			duplicates++
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, decision)
+	}
+	return normalized, duplicates
+}
+
+func normalizeCompareDecision(decision compareDecision) compareDecision {
+	if decision.SchemaVersion == 0 {
+		decision.SchemaVersion = 1
+	}
+	decision.Kind = normalizeCompareDecisionToken(decision.Kind)
+	decision.Old = strings.TrimSpace(decision.Old)
+	decision.New = strings.TrimSpace(decision.New)
+	decision.OldFingerprint = strings.TrimSpace(decision.OldFingerprint)
+	decision.NewFingerprint = strings.TrimSpace(decision.NewFingerprint)
+	decision.FindingID = strings.TrimSpace(decision.FindingID)
+	decision.Confidence = normalizeCompareDecisionToken(decision.Confidence)
+	decision.MatchKind = normalizeCompareDecisionMatchKind(decision.MatchKind)
+	decision.Reason = strings.TrimSpace(decision.Reason)
+	decision.Note = strings.TrimSpace(decision.Note)
+	decision.DecidedBy = strings.TrimSpace(decision.DecidedBy)
+	decision.DecidedAt = strings.TrimSpace(decision.DecidedAt)
+	decision.Context = strings.TrimSpace(decision.Context)
+	decision.SessionContext = strings.TrimSpace(decision.SessionContext)
+	decision.Name = strings.TrimSpace(decision.Name)
+	decision.Matches = normalizeCompareDecisionStrings(decision.Matches)
+	decision.From = strings.TrimSpace(decision.From)
+	decision.To = strings.TrimSpace(decision.To)
+	decision.Line = 0
+	return decision
+}
+
+func normalizeCompareDecisionStrings(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		normalized = append(normalized, value)
+	}
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
+}
+
+func compareDecisionDedupeKey(decision compareDecision) string {
+	confidence := compareDecisionEffectiveConfidence(decision)
+	switch decision.Kind {
+	case "pair":
+		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldFingerprint, decision.NewFingerprint, confidence}, "\x1f")
+	case "subtree_pair":
+		return strings.Join([]string{decision.Kind, decision.Old, decision.New, decision.OldFingerprint, decision.NewFingerprint, confidence, decision.MatchKind, fmt.Sprint(decision.Count)}, "\x1f")
+	case "accepted_removed", "regression_removed":
+		return strings.Join([]string{decision.Kind, decision.Old, decision.OldFingerprint, confidence}, "\x1f")
+	case "accepted_added", "unexpected_added":
+		return strings.Join([]string{decision.Kind, decision.New, decision.NewFingerprint, confidence}, "\x1f")
+	case "accepted_finding", "regression_finding":
+		return strings.Join([]string{decision.Kind, decision.FindingID, confidence}, "\x1f")
+	case "pattern":
+		return strings.Join(append([]string{decision.Kind, decision.Name}, decision.Matches...), "\x1f")
+	case "severity":
+		return strings.Join([]string{decision.Kind, decision.FindingID, decision.Name, decision.From, decision.To}, "\x1f")
+	default:
+		bytes, err := json.Marshal(decision)
+		if err != nil {
+			return fmt.Sprintf("%+v", decision)
+		}
+		return string(bytes)
+	}
+}
+
+func compareDecisionEffectiveConfidence(decision compareDecision) string {
+	if decision.Confidence != "" {
+		return decision.Confidence
+	}
+	switch decision.Kind {
+	case "accepted_removed", "regression_removed", "accepted_added", "unexpected_added", "accepted_finding", "regression_finding":
+		return "high"
+	default:
+		return ""
+	}
 }
 
 func compareResolveDecisionMatches(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {

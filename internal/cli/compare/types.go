@@ -156,6 +156,21 @@ type compareDecisionValidationReport struct {
 	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
 }
 
+type compareDecisionNormalizeSummary struct {
+	InputDecisions    int    `json:"input_decisions"`
+	OutputDecisions   int    `json:"output_decisions"`
+	DuplicatesRemoved int    `json:"duplicates_removed"`
+	Output            string `json:"output,omitempty"`
+	Errors            int    `json:"errors"`
+	Warnings          int    `json:"warnings"`
+	CompareJSONUsed   bool   `json:"compare_json_used"`
+}
+
+type compareDecisionNormalizeReport struct {
+	Summary compareDecisionNormalizeSummary  `json:"summary"`
+	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
+}
+
 type compareMatchingDebug struct {
 	Mode                    string                                   `json:"mode"`
 	OldNodes                int                                      `json:"old_nodes"`
