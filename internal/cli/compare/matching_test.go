@@ -727,6 +727,12 @@ func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
 	if report.Summary.InputDecisions != 2 || report.Summary.OutputDecisions != 2 || report.Summary.MaterializedRefs != 3 || report.Summary.Errors != 0 || !report.Summary.CompareJSONUsed {
 		t.Fatalf("unexpected materialize summary: %+v", report.Summary)
 	}
+	if len(report.Materialized) != 3 {
+		t.Fatalf("expected materialized detail entries: %+v", report.Materialized)
+	}
+	if report.Materialized[0].Line != 1 || report.Materialized[0].Side != "old" || report.Materialized[0].Source != "old_locator" || report.Materialized[0].Ref != "@e1" || report.Materialized[0].MatchedBy != "locator" {
+		t.Fatalf("unexpected first materialized detail: %+v", report.Materialized[0])
+	}
 	outputBytes, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)
@@ -767,7 +773,7 @@ func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 			},
 		},
 	}
-	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (string, error) {
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
 		if oldSide {
 			return compareResolveSelectorMaterializedRef("old", selector, compareSnapshotNode{Role: "button", Label: "Save", Name: "Save", TestID: "save"}, nodes)
 		}
@@ -778,8 +784,11 @@ func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 	if len(issues) != 0 {
 		t.Fatalf("expected selector materialization without issues: %+v", issues)
 	}
-	if refs != 2 || len(materialized) != 1 || materialized[0].Old != "@e1" || materialized[0].New != "@e2" {
-		t.Fatalf("unexpected materialized decisions: refs=%d decisions=%+v", refs, materialized)
+	if len(refs) != 2 || len(materialized) != 1 || materialized[0].Old != "@e1" || materialized[0].New != "@e2" {
+		t.Fatalf("unexpected materialized decisions: refs=%+v decisions=%+v", refs, materialized)
+	}
+	if refs[0].Source != "old_selector" || refs[0].MatchedBy != "testid" || refs[1].Source != "new_selector" || refs[1].MatchedBy != "href" {
+		t.Fatalf("unexpected selector materialization details: %+v", refs)
 	}
 	if materialized[0].OldSelector != "#save" || materialized[0].NewSelector != "a.jobs" {
 		t.Fatalf("expected selectors to remain as audit metadata: %+v", materialized[0])

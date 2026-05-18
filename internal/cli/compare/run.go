@@ -466,7 +466,7 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 	}
 	materialized := decisions
 	materializeIssues := []compareDecisionValidationIssue{}
-	materializedRefs := 0
+	materializedRefs := []compareDecisionMaterializedRef{}
 	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -475,10 +475,10 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 	defer closeSelectorResolver()
 	materialized, selectorIssues, selectorRefs := materializeCompareDecisionSelectors(materialized, compareReport, selectorResolver)
 	materializeIssues = append(materializeIssues, selectorIssues...)
-	materializedRefs += selectorRefs
+	materializedRefs = append(materializedRefs, selectorRefs...)
 	materialized, locatorIssues, locatorRefs := materializeCompareDecisionRefs(materialized, compareReport)
 	materializeIssues = append(materializeIssues, locatorIssues...)
-	materializedRefs += locatorRefs
+	materializedRefs = append(materializedRefs, locatorRefs...)
 	validation := compareDecisionValidationReport{}
 	if len(materializeIssues) == 0 {
 		validation = validateCompareDecisions(materialized, &compareReport)
@@ -489,11 +489,12 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 		Summary: compareDecisionMaterializeSummary{
 			InputDecisions:   len(decisions),
 			OutputDecisions:  len(materialized),
-			MaterializedRefs: materializedRefs,
+			MaterializedRefs: len(materializedRefs),
 			Output:           strings.TrimSpace(*output),
 			CompareJSONUsed:  true,
 		},
-		Issues: issues,
+		Materialized: materializedRefs,
+		Issues:       issues,
 	}
 	for _, issue := range report.Issues {
 		if issue.Severity == "error" {
@@ -547,7 +548,7 @@ func compareDecisionSelectorResolverForSessions(ctx context.Context, connectClie
 		return nil, func() {}, err
 	}
 	cache := map[string]compareDecisionSelectorCacheEntry{}
-	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (string, error) {
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
 		side := "new"
 		sessionID := newSession
 		if oldSide {
@@ -555,25 +556,25 @@ func compareDecisionSelectorResolverForSessions(ctx context.Context, connectClie
 			sessionID = oldSession
 		}
 		if sessionID == "" {
-			return "", fmt.Errorf("%s_selector requires --%s-session", side, side)
+			return compareDecisionRefResolution{}, fmt.Errorf("%s_selector requires --%s-session", side, side)
 		}
 		cacheKey := side + "\x00" + selector
 		if cached, ok := cache[cacheKey]; ok {
-			return cached.Ref, cached.Err
+			return cached.Resolution, cached.Err
 		}
-		ref, err := compareMaterializeSelectorRef(ctx, client, sessionID, side, selector, nodes)
-		cache[cacheKey] = compareDecisionSelectorCacheEntry{Ref: ref, Err: err}
-		return ref, err
+		resolution, err := compareMaterializeSelectorRef(ctx, client, sessionID, side, selector, nodes)
+		cache[cacheKey] = compareDecisionSelectorCacheEntry{Resolution: resolution, Err: err}
+		return resolution, err
 	}
 	return resolver, func() { client.Close() }, nil
 }
 
 type compareDecisionSelectorCacheEntry struct {
-	Ref string
-	Err error
+	Resolution compareDecisionRefResolution
+	Err        error
 }
 
-func compareMaterializeSelectorRef(ctx context.Context, client *rpc.Client, sessionID string, side string, selector string, nodes []compareSnapshotNode) (string, error) {
+func compareMaterializeSelectorRef(ctx context.Context, client *rpc.Client, sessionID string, side string, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
 	selector = strings.TrimSpace(selector)
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
@@ -584,54 +585,57 @@ func compareMaterializeSelectorRef(ctx context.Context, client *rpc.Client, sess
 		},
 	})
 	if err != nil {
-		return "", fmt.Errorf("%s selector %q: %w", side, selector, err)
+		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q: %w", side, selector, err)
 	}
 	if len(res.Observation.Tree) == 0 {
-		return "", fmt.Errorf("%s selector %q returned no observed nodes", side, selector)
+		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q returned no observed nodes", side, selector)
 	}
 	selected := buildCompareSnapshot(api.Observation{Tree: []api.Node{res.Observation.Tree[0]}}, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
 	if len(selected.Nodes) == 0 {
-		return "", fmt.Errorf("%s selector %q returned no comparable node", side, selector)
+		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q returned no comparable node", side, selector)
 	}
 	return compareResolveSelectorMaterializedRef(side, selector, selected.Nodes[0], nodes)
 }
 
-func compareResolveSelectorMaterializedRef(side string, selector string, selected compareSnapshotNode, nodes []compareSnapshotNode) (string, error) {
-	matches := compareSelectorMaterializeMatches(selected, nodes)
+func compareResolveSelectorMaterializedRef(side string, selector string, selected compareSnapshotNode, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
+	matches, matchedBy := compareSelectorMaterializeMatches(selected, nodes)
 	switch len(matches) {
 	case 0:
-		return "", fmt.Errorf("%s selector %q matched the live DOM but no compare JSON node", side, strings.TrimSpace(selector))
+		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q matched the live DOM but no compare JSON node", side, strings.TrimSpace(selector))
 	case 1:
 		ref := strings.TrimSpace(nodes[matches[0]].Ref)
 		if ref == "" {
-			return "", fmt.Errorf("%s selector %q matched a compare JSON node without ref", side, strings.TrimSpace(selector))
+			return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q matched a compare JSON node without ref", side, strings.TrimSpace(selector))
 		}
-		return ref, nil
+		return compareDecisionRefResolution{Ref: ref, MatchedBy: matchedBy}, nil
 	default:
-		return "", fmt.Errorf("%s selector %q matched %d compare JSON nodes: %s", side, strings.TrimSpace(selector), len(matches), compareDecisionNodeHints(nodes, matches, 5))
+		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q matched %d compare JSON nodes: %s", side, strings.TrimSpace(selector), len(matches), compareDecisionNodeHints(nodes, matches, 5))
 	}
 }
 
-func compareSelectorMaterializeMatches(selected compareSnapshotNode, nodes []compareSnapshotNode) []int {
-	matchers := []func(compareSnapshotNode, compareSnapshotNode) bool{
-		compareSelectorMaterializeStructureMatch,
-		compareSelectorMaterializeTestIDMatch,
-		compareSelectorMaterializeHrefMatch,
-		compareSelectorMaterializeFingerprintMatch,
-		compareSelectorMaterializeContentMatch,
+func compareSelectorMaterializeMatches(selected compareSnapshotNode, nodes []compareSnapshotNode) ([]int, string) {
+	matchers := []struct {
+		MatchedBy string
+		Matches   func(compareSnapshotNode, compareSnapshotNode) bool
+	}{
+		{MatchedBy: "structure_key", Matches: compareSelectorMaterializeStructureMatch},
+		{MatchedBy: "testid", Matches: compareSelectorMaterializeTestIDMatch},
+		{MatchedBy: "href", Matches: compareSelectorMaterializeHrefMatch},
+		{MatchedBy: "fingerprint", Matches: compareSelectorMaterializeFingerprintMatch},
+		{MatchedBy: "content", Matches: compareSelectorMaterializeContentMatch},
 	}
-	for _, matches := range matchers {
+	for _, matcher := range matchers {
 		indices := make([]int, 0, 1)
 		for index, node := range nodes {
-			if matches(selected, node) {
+			if matcher.Matches(selected, node) {
 				indices = append(indices, index)
 			}
 		}
 		if len(indices) > 0 {
-			return indices
+			return indices, matcher.MatchedBy
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 func compareSelectorMaterializeStructureMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {

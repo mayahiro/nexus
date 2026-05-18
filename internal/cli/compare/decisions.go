@@ -192,10 +192,10 @@ func normalizeCompareDecisionsWithClusters(decisions []compareDecision, compareR
 	return normalizeCompareDecisions(materializeCompareClusterDecisions(decisions, compareReport, clusters))
 }
 
-func materializeCompareDecisionRefs(decisions []compareDecision, compareReport compareReport) ([]compareDecision, []compareDecisionValidationIssue, int) {
+func materializeCompareDecisionRefs(decisions []compareDecision, compareReport compareReport) ([]compareDecision, []compareDecisionValidationIssue, []compareDecisionMaterializedRef) {
 	materialized := make([]compareDecision, 0, len(decisions))
 	issues := []compareDecisionValidationIssue{}
-	materializedRefs := 0
+	materializedRefs := []compareDecisionMaterializedRef{}
 
 	addIssue := func(decision compareDecision, index int, field string, message string) {
 		issues = append(issues, compareDecisionValidationIssue{
@@ -213,35 +213,35 @@ func materializeCompareDecisionRefs(decisions []compareDecision, compareReport c
 
 		switch decision.Kind {
 		case "pair", "subtree_pair":
-			next, changed, err := materializeCompareDecisionSide(decision, compareReport.Old.Nodes, true)
+			next, detail, err := materializeCompareDecisionSide(decision, index, compareReport.Old.Nodes, true)
 			if err != nil {
 				addIssue(decision, index, "old_locator", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
-			next, changed, err = materializeCompareDecisionSide(decision, compareReport.New.Nodes, false)
+			next, detail, err = materializeCompareDecisionSide(decision, index, compareReport.New.Nodes, false)
 			if err != nil {
 				addIssue(decision, index, "new_locator", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		case "accepted_removed", "regression_removed":
-			next, changed, err := materializeCompareDecisionSide(decision, compareReport.Old.Nodes, true)
+			next, detail, err := materializeCompareDecisionSide(decision, index, compareReport.Old.Nodes, true)
 			if err != nil {
 				addIssue(decision, index, "old_locator", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		case "accepted_added", "unexpected_added":
-			next, changed, err := materializeCompareDecisionSide(decision, compareReport.New.Nodes, false)
+			next, detail, err := materializeCompareDecisionSide(decision, index, compareReport.New.Nodes, false)
 			if err != nil {
 				addIssue(decision, index, "new_locator", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		}
 		materialized = append(materialized, decision)
@@ -250,12 +250,17 @@ func materializeCompareDecisionRefs(decisions []compareDecision, compareReport c
 	return materialized, issues, materializedRefs
 }
 
-type compareDecisionSelectorResolver func(oldSide bool, selector string, nodes []compareSnapshotNode) (string, error)
+type compareDecisionRefResolution struct {
+	Ref       string
+	MatchedBy string
+}
 
-func materializeCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) ([]compareDecision, []compareDecisionValidationIssue, int) {
+type compareDecisionSelectorResolver func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error)
+
+func materializeCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) ([]compareDecision, []compareDecisionValidationIssue, []compareDecisionMaterializedRef) {
 	materialized := make([]compareDecision, 0, len(decisions))
 	issues := []compareDecisionValidationIssue{}
-	materializedRefs := 0
+	materializedRefs := []compareDecisionMaterializedRef{}
 
 	addIssue := func(decision compareDecision, index int, field string, message string) {
 		issues = append(issues, compareDecisionValidationIssue{
@@ -273,35 +278,35 @@ func materializeCompareDecisionSelectors(decisions []compareDecision, compareRep
 
 		switch decision.Kind {
 		case "pair", "subtree_pair":
-			next, changed, err := materializeCompareDecisionSelectorSide(decision, compareReport.Old.Nodes, true, resolver)
+			next, detail, err := materializeCompareDecisionSelectorSide(decision, index, compareReport.Old.Nodes, true, resolver)
 			if err != nil {
 				addIssue(decision, index, "old_selector", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
-			next, changed, err = materializeCompareDecisionSelectorSide(decision, compareReport.New.Nodes, false, resolver)
+			next, detail, err = materializeCompareDecisionSelectorSide(decision, index, compareReport.New.Nodes, false, resolver)
 			if err != nil {
 				addIssue(decision, index, "new_selector", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		case "accepted_removed", "regression_removed":
-			next, changed, err := materializeCompareDecisionSelectorSide(decision, compareReport.Old.Nodes, true, resolver)
+			next, detail, err := materializeCompareDecisionSelectorSide(decision, index, compareReport.Old.Nodes, true, resolver)
 			if err != nil {
 				addIssue(decision, index, "old_selector", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		case "accepted_added", "unexpected_added":
-			next, changed, err := materializeCompareDecisionSelectorSide(decision, compareReport.New.Nodes, false, resolver)
+			next, detail, err := materializeCompareDecisionSelectorSide(decision, index, compareReport.New.Nodes, false, resolver)
 			if err != nil {
 				addIssue(decision, index, "new_selector", err.Error())
-			} else if changed {
+			} else if detail != nil {
 				decision = next
-				materializedRefs++
+				materializedRefs = append(materializedRefs, *detail)
 			}
 		}
 		materialized = append(materialized, decision)
@@ -310,7 +315,7 @@ func materializeCompareDecisionSelectors(decisions []compareDecision, compareRep
 	return materialized, issues, materializedRefs
 }
 
-func materializeCompareDecisionSelectorSide(decision compareDecision, nodes []compareSnapshotNode, oldSide bool, resolver compareDecisionSelectorResolver) (compareDecision, bool, error) {
+func materializeCompareDecisionSelectorSide(decision compareDecision, index int, nodes []compareSnapshotNode, oldSide bool, resolver compareDecisionSelectorResolver) (compareDecision, *compareDecisionMaterializedRef, error) {
 	ref := decision.New
 	selector := decision.NewSelector
 	locator := decision.NewLocator
@@ -324,30 +329,38 @@ func materializeCompareDecisionSelectorSide(decision compareDecision, nodes []co
 		side = "old"
 	}
 	if !compareDecisionUnknownValue(ref) || strings.TrimSpace(selector) == "" {
-		return decision, false, nil
+		return decision, nil, nil
 	}
 	if strings.TrimSpace(locator) != "" || strings.TrimSpace(fingerprint) != "" {
-		return decision, false, nil
+		return decision, nil, nil
 	}
 	if resolver == nil {
-		return decision, false, fmt.Errorf("%s_selector requires --%s-session", side, side)
+		return decision, nil, fmt.Errorf("%s_selector requires --%s-session", side, side)
 	}
-	ref, err := resolver(oldSide, selector, nodes)
+	resolution, err := resolver(oldSide, selector, nodes)
 	if err != nil {
-		return decision, false, err
+		return decision, nil, err
 	}
-	if strings.TrimSpace(ref) == "" {
-		return decision, false, fmt.Errorf("%s selector %q resolved no ref", side, strings.TrimSpace(selector))
+	ref = strings.TrimSpace(resolution.Ref)
+	if ref == "" {
+		return decision, nil, fmt.Errorf("%s selector %q resolved no ref", side, strings.TrimSpace(selector))
 	}
 	if oldSide {
-		decision.Old = strings.TrimSpace(ref)
+		decision.Old = ref
 	} else {
-		decision.New = strings.TrimSpace(ref)
+		decision.New = ref
 	}
-	return decision, true, nil
+	return decision, &compareDecisionMaterializedRef{
+		Line:      compareDecisionLineNumber(decision, index),
+		Side:      side,
+		Source:    side + "_selector",
+		Value:     strings.TrimSpace(selector),
+		Ref:       ref,
+		MatchedBy: firstNonEmpty(strings.TrimSpace(resolution.MatchedBy), "selector"),
+	}, nil
 }
 
-func materializeCompareDecisionSide(decision compareDecision, nodes []compareSnapshotNode, oldSide bool) (compareDecision, bool, error) {
+func materializeCompareDecisionSide(decision compareDecision, index int, nodes []compareSnapshotNode, oldSide bool) (compareDecision, *compareDecisionMaterializedRef, error) {
 	ref := decision.New
 	locator := decision.NewLocator
 	side := "new"
@@ -357,18 +370,26 @@ func materializeCompareDecisionSide(decision compareDecision, nodes []compareSna
 		side = "old"
 	}
 	if !compareDecisionUnknownValue(ref) || strings.TrimSpace(locator) == "" {
-		return decision, false, nil
+		return decision, nil, nil
 	}
-	index, err := compareResolveDecisionLocator(nodes, side, locator)
+	nodeIndex, err := compareResolveDecisionLocator(nodes, side, locator)
 	if err != nil {
-		return decision, false, err
+		return decision, nil, err
 	}
+	ref = strings.TrimSpace(nodes[nodeIndex].Ref)
 	if oldSide {
-		decision.Old = strings.TrimSpace(nodes[index].Ref)
+		decision.Old = ref
 	} else {
-		decision.New = strings.TrimSpace(nodes[index].Ref)
+		decision.New = ref
 	}
-	return decision, true, nil
+	return decision, &compareDecisionMaterializedRef{
+		Line:      compareDecisionLineNumber(decision, index),
+		Side:      side,
+		Source:    side + "_locator",
+		Value:     strings.TrimSpace(locator),
+		Ref:       ref,
+		MatchedBy: "locator",
+	}, nil
 }
 
 func materializeCompareClusterDecisions(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) []compareDecision {
@@ -1742,12 +1763,12 @@ func compareRejectLocatorOnlyDecisionSide(side string, ref string, fingerprint s
 }
 
 func compareDecisionWithResolvedLocators(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) (compareDecision, error) {
-	next, _, err := materializeCompareDecisionSide(decision, oldNodes, true)
+	next, _, err := materializeCompareDecisionSide(decision, 0, oldNodes, true)
 	if err != nil {
 		return decision, err
 	}
 	decision = next
-	next, _, err = materializeCompareDecisionSide(decision, newNodes, false)
+	next, _, err = materializeCompareDecisionSide(decision, 0, newNodes, false)
 	if err != nil {
 		return decision, err
 	}

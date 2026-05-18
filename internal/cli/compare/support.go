@@ -60,6 +60,7 @@ func PrintMaterializeDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "resolves old_locator/new_locator fields against compare JSON nodes and old_selector/new_selector fields through live sessions, then writes concrete old/new refs")
 	fmt.Fprintln(w, "locator terms support @eN, role:button, name:Save, label:Save, text:Login, href:/jobs, testid:submit, fingerprint:<value>, and role=button&name=Save")
 	fmt.Fprintln(w, "selector materialization requires --old-session for old_selector and --new-session for new_selector; each selector must resolve to one live node that maps to one compare JSON node")
+	fmt.Fprintln(w, "--json includes materialized[] entries with line, side, source, value, ref, and matched_by for review")
 	fmt.Fprintln(w, "without --output, materialized JSONL is written to stdout unless --json is used")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)

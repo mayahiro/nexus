@@ -184,9 +184,19 @@ type compareDecisionMaterializeSummary struct {
 	CompareJSONUsed  bool   `json:"compare_json_used"`
 }
 
+type compareDecisionMaterializedRef struct {
+	Line      int    `json:"line"`
+	Side      string `json:"side"`
+	Source    string `json:"source"`
+	Value     string `json:"value"`
+	Ref       string `json:"ref"`
+	MatchedBy string `json:"matched_by"`
+}
+
 type compareDecisionMaterializeReport struct {
-	Summary compareDecisionMaterializeSummary `json:"summary"`
-	Issues  []compareDecisionValidationIssue  `json:"issues,omitempty"`
+	Summary      compareDecisionMaterializeSummary `json:"summary"`
+	Materialized []compareDecisionMaterializedRef  `json:"materialized,omitempty"`
+	Issues       []compareDecisionValidationIssue  `json:"issues,omitempty"`
 }
 
 type compareDecisionAuditSummary struct {
