@@ -1093,7 +1093,18 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		New:      []byte("new screenshot bytes"),
 		Warnings: []string{"new screenshot: test warning"},
 	}
-	if err := writeCompareReviewPacket(dir, report, screenshots); err != nil {
+	audit := compareDecisionAuditReport{
+		Summary: compareDecisionAuditSummary{
+			TotalDecisions:  4,
+			Applied:         2,
+			Pending:         1,
+			Stale:           1,
+			Conflicts:       1,
+			Warnings:        1,
+			CompareJSONUsed: true,
+		},
+	}
+	if err := writeCompareReviewPacket(dir, report, screenshots, compareReviewPacketOptions{DecisionAudit: &audit}); err != nil {
 		t.Fatalf("expected review packet to write: %v", err)
 	}
 	for _, name := range []string{
@@ -1139,6 +1150,9 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if summary.Files.ClusterDecisionsTemplate != filepath.Join(dir, compareReviewFileClusterDecisionsTemplate) || len(summary.FindingClusters) != 1 {
 		t.Fatalf("expected cluster decision template summary: %+v", summary)
 	}
+	if summary.DecisionAudit == nil || summary.DecisionAudit.Applied != 2 || summary.DecisionAudit.Pending != 1 || summary.DecisionAudit.Stale != 1 || summary.DecisionAudit.Conflicts != 1 {
+		t.Fatalf("expected decision audit summary: %+v", summary.DecisionAudit)
+	}
 	if len(summary.ScreenshotWarnings) != 1 {
 		t.Fatalf("expected screenshot warning in review summary: %+v", summary)
 	}
@@ -1153,7 +1167,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "cluster-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
+	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "cluster-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "Decision audit: 4 decisions, 2 applied, 3 unresolved") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
 		t.Fatalf("unexpected review guide:\n%s", string(reviewGuide))
 	}
 	clusterTemplate, err := os.ReadFile(filepath.Join(dir, compareReviewFileClusterDecisionsTemplate))
@@ -1188,7 +1202,7 @@ func TestCompareReviewPacketWritesFindingCrops(t *testing.T) {
 		},
 	}
 
-	if err := writeCompareReviewPacket(dir, report, compareReviewScreenshots{Old: testCompareReviewPNG(t, 80, 80), New: testCompareReviewPNG(t, 90, 90)}); err != nil {
+	if err := writeCompareReviewPacket(dir, report, compareReviewScreenshots{Old: testCompareReviewPNG(t, 80, 80), New: testCompareReviewPNG(t, 90, 90)}, compareReviewPacketOptions{}); err != nil {
 		t.Fatalf("expected review packet to write: %v", err)
 	}
 	for _, side := range []struct {
@@ -1312,6 +1326,15 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 				UnmatchedNew:        4,
 				SkippedDuplicateOld: 1,
 			},
+			DecisionAudit: &compareDecisionAuditSummary{
+				TotalDecisions:  4,
+				Applied:         2,
+				Pending:         1,
+				Stale:           1,
+				Conflicts:       1,
+				Warnings:        1,
+				CompareJSONUsed: true,
+			},
 			OldScreenshot: filepath.Join(dir, "001-dashboard", compareReviewFileOldScreenshot),
 			NewScreenshot: filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
 		},
@@ -1357,8 +1380,14 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if summary.PairDecisionTemplate == nil || summary.PairDecisionTemplate.Ambiguous != 2 || summary.PairDecisionTemplate.UnmatchedOld != 3 || summary.PairDecisionTemplate.UnmatchedNew != 4 || summary.PairDecisionTemplate.SkippedDuplicateOld != 1 {
 		t.Fatalf("expected aggregate pair decision counts: %+v", summary.PairDecisionTemplate)
 	}
+	if summary.DecisionAudit == nil || summary.DecisionAudit.TotalDecisions != 4 || summary.DecisionAudit.Applied != 2 || summary.DecisionAudit.Pending != 1 || summary.DecisionAudit.Stale != 1 || summary.DecisionAudit.Conflicts != 1 {
+		t.Fatalf("expected aggregate decision audit: %+v", summary.DecisionAudit)
+	}
 	if summary.Files.PageDirectories[0].PairDecisionTemplate == nil || summary.Files.PageDirectories[0].PairDecisionTemplate.UnmatchedNew != 4 {
 		t.Fatalf("expected page pair decision counts: %+v", summary.Files.PageDirectories[0])
+	}
+	if summary.Files.PageDirectories[0].DecisionAudit == nil || summary.Files.PageDirectories[0].DecisionAudit.Warnings != 1 {
+		t.Fatalf("expected page decision audit summary: %+v", summary.Files.PageDirectories[0])
 	}
 	if summary.Files.ReviewMarkdown != filepath.Join(dir, compareReviewFileReview) {
 		t.Fatalf("expected root review guide in summary: %+v", summary.Files)
@@ -1374,7 +1403,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	guide := string(guideBytes)
-	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "Pair decision workload: 9 total") || !strings.Contains(guide, "cluster-decisions.todo.jsonl") || !strings.Contains(guide, "validate-decisions") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
+	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "Pair decision workload: 9 total") || !strings.Contains(guide, "Decision audit: 4 decisions, 2 applied, 3 unresolved") || !strings.Contains(guide, "cluster-decisions.todo.jsonl") || !strings.Contains(guide, "validate-decisions") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
 		t.Fatalf("unexpected manifest review guide:\n%s", guide)
 	}
 	clusterTemplate, err := os.ReadFile(filepath.Join(dir, compareReviewFileClusterDecisionsTemplate))
@@ -1392,7 +1421,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(indexBytes)
-	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "Pair decisions") || !strings.Contains(index, "9 total") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "cluster-decisions.todo.jsonl") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
+	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "Pair decisions") || !strings.Contains(index, "Decision audit") || !strings.Contains(index, "3 unresolved") || !strings.Contains(index, "9 total") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "cluster-decisions.todo.jsonl") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
 		t.Fatalf("unexpected review index:\n%s", index)
 	}
 	htmlBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndexHTML))

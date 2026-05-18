@@ -45,7 +45,11 @@ type compareReviewScreenshots struct {
 	Warnings []string
 }
 
-func writeCompareReviewPacket(dir string, report compareReport, screenshots compareReviewScreenshots) error {
+type compareReviewPacketOptions struct {
+	DecisionAudit *compareDecisionAuditReport
+}
+
+func writeCompareReviewPacket(dir string, report compareReport, screenshots compareReviewScreenshots, options compareReviewPacketOptions) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -89,14 +93,14 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 	if err := writeCompareFindingClusterDecisionsTemplate(files.ClusterDecisionsTemplate, compareFindingClusters(report.Findings, "")); err != nil {
 		return err
 	}
-	summary := buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings)
+	summary := buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings, options.DecisionAudit)
 	if err := writeCompareReviewGuide(files.ReviewMarkdown, summary); err != nil {
 		return err
 	}
 	return writeIndentedJSONFile(files.ReviewSummary, summary)
 }
 
-func buildCompareReviewSummary(report compareReport, files compareReviewFiles, screenshotWarnings []string, cropWarnings []string) compareReviewSummary {
+func buildCompareReviewSummary(report compareReport, files compareReviewFiles, screenshotWarnings []string, cropWarnings []string, decisionAudit *compareDecisionAuditReport) compareReviewSummary {
 	summary := compareReviewSummary{
 		Old:                     firstNonEmpty(report.Old.URL, report.Old.SessionID),
 		New:                     firstNonEmpty(report.New.URL, report.New.SessionID),
@@ -111,6 +115,10 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		FindingClusters:         compareFindingClusters(report.Findings, ""),
 		ScreenshotWarnings:      append([]string(nil), screenshotWarnings...),
 		CropWarnings:            append([]string(nil), cropWarnings...),
+	}
+	if decisionAudit != nil {
+		auditSummary := decisionAudit.Summary
+		summary.DecisionAudit = &auditSummary
 	}
 	if report.Scope != nil {
 		summary.Scope = compareScopeLabel(report.Scope)
@@ -180,6 +188,9 @@ func renderCompareReviewGuide(summary compareReviewSummary) string {
 	}
 	if len(summary.FindingClusters) > 0 {
 		fmt.Fprintf(&builder, "- Repeated finding clusters: %d\n", len(summary.FindingClusters))
+	}
+	if summary.DecisionAudit != nil {
+		fmt.Fprintf(&builder, "- Decision audit: %s\n", compareDecisionAuditSummaryLabel(summary.DecisionAudit))
 	}
 	if len(summary.ScreenshotWarnings) > 0 || len(summary.CropWarnings) > 0 {
 		fmt.Fprintf(&builder, "- Capture warnings: %d screenshots, %d crops\n", len(summary.ScreenshotWarnings), len(summary.CropWarnings))
@@ -478,8 +489,8 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 	fmt.Fprintf(&builder, "- Cluster Decisions Template: %s\n", compareReviewMarkdownLink(rootDir, "cluster-decisions.todo.jsonl", files.ClusterDecisionsTemplate))
 	fmt.Fprintf(&builder, "- Review Summary: %s\n\n", compareReviewMarkdownLink(rootDir, "review-summary.json", files.ReviewSummary))
 
-	builder.WriteString("| Priority | Page | Findings | Pair decisions | Packet | Screenshots | Status |\n")
-	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- |\n")
+	builder.WriteString("| Priority | Page | Findings | Pair decisions | Decision audit | Packet | Screenshots | Status |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- | --- | --- |\n")
 	for i, page := range report.Pages {
 		directory := compareManifestReviewPageDirectory{Name: page.Name}
 		if i < len(files.PageDirectories) {
@@ -497,6 +508,7 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 		}
 		findings := compareManifestReviewFindingsLabel(directory, page)
 		pairDecisions := compareManifestReviewPairDecisionTemplateLabel(directory.PairDecisionTemplate)
+		decisionAudit := compareDecisionAuditSummaryLabel(directory.DecisionAudit)
 		packet := compareManifestReviewPacketLinks(rootDir, directory)
 		screenshots := compareManifestReviewScreenshotLinks(rootDir, directory)
 		status := "ok"
@@ -505,11 +517,12 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 		} else if directory.Error != "" {
 			status = directory.Error
 		}
-		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s | %s |\n",
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			compareReviewMarkdownCell(priority),
 			compareReviewMarkdownCell(firstNonEmpty(directory.Name, page.Name)),
 			compareReviewMarkdownCell(findings),
 			compareReviewMarkdownCell(pairDecisions),
+			compareReviewMarkdownCell(decisionAudit),
 			compareReviewMarkdownCell(packet),
 			compareReviewMarkdownCell(screenshots),
 			compareReviewMarkdownCell(status),
@@ -546,6 +559,7 @@ func buildCompareManifestReviewSummary(report compareManifestReport, files compa
 		WarningFindings:      report.Summary.Warning,
 		InfoFindings:         report.Summary.Info,
 		PairDecisionTemplate: compareManifestReviewPairDecisionTemplateCounts(files.PageDirectories),
+		DecisionAudit:        compareManifestReviewDecisionAuditSummary(files.PageDirectories),
 		Files:                files,
 		FindingClusters:      compareManifestFindingClusters(report),
 	}
@@ -577,6 +591,9 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 	if len(summary.FindingClusters) > 0 {
 		fmt.Fprintf(&builder, "- Repeated finding clusters: %d\n", len(summary.FindingClusters))
 	}
+	if summary.DecisionAudit != nil {
+		fmt.Fprintf(&builder, "- Decision audit: %s\n", compareDecisionAuditSummaryLabel(summary.DecisionAudit))
+	}
 
 	builder.WriteString("\n## Start Here\n\n")
 	writeCompareReviewGuideFile(&builder, summary.Files.ReviewMarkdown, "this guide")
@@ -598,6 +615,7 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 	builder.WriteString("\n## Priority\n\n")
 	builder.WriteString("- Start with failed pages; they need rerun or environment investigation before findings are trustworthy.\n")
 	builder.WriteString("- Review pages with critical findings next.\n")
+	builder.WriteString("- Revisit pages with pending, stale, or conflicting decisions before trusting the current findings.\n")
 	builder.WriteString("- Review pages with high pair decision workload when matching looks unstable, even if finding counts are lower.\n")
 	builder.WriteString("- Check repeated finding clusters before reviewing every page one by one.\n")
 	builder.WriteString("- Use warning-heavy pages to decide whether scope or decision templates need tightening.\n")
@@ -633,7 +651,11 @@ func writeCompareManifestReviewGuidePages(builder *strings.Builder, directories 
 		if pairDecisions != "" {
 			pairDecisions = "; " + pairDecisions
 		}
-		fmt.Fprintf(builder, "- `%s`: %s; %s%s; open `%s`\n", firstNonEmpty(directory.Name, filepath.Base(directory.Directory)), status, findings, pairDecisions, filepath.Join(compareReviewGuideDisplayPath(directory.Directory), compareReviewFileReview))
+		audit := compareDecisionAuditSummaryLabel(directory.DecisionAudit)
+		if audit != "" {
+			audit = "; " + audit
+		}
+		fmt.Fprintf(builder, "- `%s`: %s; %s%s%s; open `%s`\n", firstNonEmpty(directory.Name, filepath.Base(directory.Directory)), status, findings, pairDecisions, audit, filepath.Join(compareReviewGuideDisplayPath(directory.Directory), compareReviewFileReview))
 	}
 	if len(ordered) > limit {
 		fmt.Fprintf(builder, "- %d more page packets are listed in `%s`.\n", len(ordered)-limit, compareReviewGuideDisplayPath("review-index.md"))
@@ -656,6 +678,30 @@ func compareManifestReviewPairDecisionTemplateCounts(directories []compareManife
 		total.SkippedDuplicateNew += counts.SkippedDuplicateNew
 	}
 	if total.Ambiguous == 0 && total.UnmatchedOld == 0 && total.UnmatchedNew == 0 && total.TruncatedOld == 0 && total.TruncatedNew == 0 && total.SkippedDuplicateOld == 0 && total.SkippedDuplicateNew == 0 {
+		return nil
+	}
+	return &total
+}
+
+func compareManifestReviewDecisionAuditSummary(directories []compareManifestReviewPageDirectory) *compareDecisionAuditSummary {
+	total := compareDecisionAuditSummary{}
+	used := false
+	for _, directory := range directories {
+		if directory.DecisionAudit == nil {
+			continue
+		}
+		audit := directory.DecisionAudit
+		used = true
+		total.TotalDecisions += audit.TotalDecisions
+		total.Applied += audit.Applied
+		total.Pending += audit.Pending
+		total.Stale += audit.Stale
+		total.Conflicts += audit.Conflicts
+		total.Errors += audit.Errors
+		total.Warnings += audit.Warnings
+		total.CompareJSONUsed = total.CompareJSONUsed || audit.CompareJSONUsed
+	}
+	if !used {
 		return nil
 	}
 	return &total
@@ -684,6 +730,34 @@ func compareManifestReviewPairDecisionTemplateLabel(counts *compareDecisionTempl
 	}
 	if counts.SkippedDuplicateOld > 0 || counts.SkippedDuplicateNew > 0 {
 		values = append(values, fmt.Sprintf("%d duplicates skipped", counts.SkippedDuplicateOld+counts.SkippedDuplicateNew))
+	}
+	return strings.Join(values, ", ")
+}
+
+func compareDecisionAuditSummaryLabel(summary *compareDecisionAuditSummary) string {
+	if summary == nil {
+		return ""
+	}
+	unresolved := summary.Pending + summary.Stale + summary.Conflicts
+	values := []string{
+		fmt.Sprintf("%d decisions", summary.TotalDecisions),
+		fmt.Sprintf("%d applied", summary.Applied),
+		fmt.Sprintf("%d unresolved", unresolved),
+	}
+	if summary.Pending > 0 {
+		values = append(values, fmt.Sprintf("%d pending", summary.Pending))
+	}
+	if summary.Stale > 0 {
+		values = append(values, fmt.Sprintf("%d stale", summary.Stale))
+	}
+	if summary.Conflicts > 0 {
+		values = append(values, fmt.Sprintf("%d conflicts", summary.Conflicts))
+	}
+	if summary.Errors > 0 {
+		values = append(values, fmt.Sprintf("%d errors", summary.Errors))
+	}
+	if summary.Warnings > 0 {
+		values = append(values, fmt.Sprintf("%d warnings", summary.Warnings))
 	}
 	return strings.Join(values, ", ")
 }

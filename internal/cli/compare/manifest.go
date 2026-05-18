@@ -73,6 +73,12 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 			pageDirectory.WarningFindings = single.Summary.Warning
 			pageDirectory.InfoFindings = single.Summary.Info
 			pageDirectory.PairDecisionTemplate = compareDecisionTemplateCountsForDebug(single.MatchingDebug)
+			if audit, err := compareManifestReviewDecisionAudit(run.DecisionsFile, single); err != nil {
+				return compareManifestReport{}, err
+			} else if audit != nil {
+				auditSummary := audit.Summary
+				pageDirectory.DecisionAudit = &auditSummary
+			}
 			pageDirectory.OldScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileOldScreenshot))
 			pageDirectory.NewScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileNewScreenshot))
 			pageDirectories = append(pageDirectories, pageDirectory)
@@ -86,6 +92,17 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 		}
 	}
 	return report, nil
+}
+
+func compareManifestReviewDecisionAudit(decisionsFile string, report compareReport) (*compareDecisionAuditReport, error) {
+	if strings.TrimSpace(decisionsFile) == "" {
+		return nil, nil
+	}
+	decisions, err := loadCompareDecisions(decisionsFile)
+	if err != nil {
+		return nil, err
+	}
+	return compareDecisionAuditForReview(decisions, decisionsFile, report), nil
 }
 
 func loadCompareManifest(path string) (compareManifest, error) {

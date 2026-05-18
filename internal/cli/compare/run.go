@@ -711,12 +711,21 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		findingDecisionEffects,
 	)
 	if strings.TrimSpace(run.ReviewDir) != "" {
+		decisionAudit := compareDecisionAuditForReview(decisions, run.DecisionsFile, report)
 		screenshots := captureCompareReviewScreenshots(ctx, client, oldPrepared.SessionID, newPrepared.SessionID)
-		if err := writeCompareReviewPacket(strings.TrimSpace(run.ReviewDir), report, screenshots); err != nil {
+		if err := writeCompareReviewPacket(strings.TrimSpace(run.ReviewDir), report, screenshots, compareReviewPacketOptions{DecisionAudit: decisionAudit}); err != nil {
 			return compareReport{}, err
 		}
 	}
 	return report, nil
+}
+
+func compareDecisionAuditForReview(decisions []compareDecision, decisionsFile string, report compareReport) *compareDecisionAuditReport {
+	if strings.TrimSpace(decisionsFile) == "" {
+		return nil
+	}
+	audit := auditCompareDecisions(decisions, report)
+	return &audit
 }
 
 func resolveCompareScopeSelectors(scopeSelector string, oldScopeSelector string, newScopeSelector string) (string, string, error) {

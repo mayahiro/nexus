@@ -243,6 +243,7 @@ type compareReviewSummary struct {
 	UnmatchedOld            int                            `json:"unmatched_old,omitempty"`
 	UnmatchedNew            int                            `json:"unmatched_new,omitempty"`
 	PairDecisionTemplate    *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	DecisionAudit           *compareDecisionAuditSummary   `json:"decision_audit,omitempty"`
 	Files                   compareReviewFiles             `json:"files"`
 	FindingClusters         []compareFindingCluster        `json:"finding_clusters,omitempty"`
 	ScreenshotWarnings      []string                       `json:"screenshot_warnings,omitempty"`
@@ -277,6 +278,7 @@ type compareManifestReviewPageDirectory struct {
 	WarningFindings      int                            `json:"warning_findings,omitempty"`
 	InfoFindings         int                            `json:"info_findings,omitempty"`
 	PairDecisionTemplate *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	DecisionAudit        *compareDecisionAuditSummary   `json:"decision_audit,omitempty"`
 	OldScreenshot        string                         `json:"old_screenshot,omitempty"`
 	NewScreenshot        string                         `json:"new_screenshot,omitempty"`
 	Error                string                         `json:"error,omitempty"`
@@ -305,6 +307,7 @@ type compareManifestReviewSummary struct {
 	WarningFindings      int                            `json:"warning_findings"`
 	InfoFindings         int                            `json:"info_findings"`
 	PairDecisionTemplate *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
+	DecisionAudit        *compareDecisionAuditSummary   `json:"decision_audit,omitempty"`
 	Files                compareManifestReviewFiles     `json:"files"`
 	FindingClusters      []compareFindingCluster        `json:"finding_clusters,omitempty"`
 }
