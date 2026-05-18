@@ -26,7 +26,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
 	}
 	if len(args) > 0 && args[0] == "materialize-decisions" {
-		return runCompareMaterializeDecisions(args[1:], stdout, stderr)
+		return runCompareMaterializeDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
 	}
 	if len(args) > 0 && args[0] == "audit-decisions" {
 		return runCompareAuditDecisions(args[1:], stdout, stderr)
@@ -419,6 +419,10 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 }
 
 func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runCompareMaterializeDecisionsWithClient(context.Background(), args, stdout, stderr, nil)
+}
+
+func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
 	if isHelpArgs(args) {
 		PrintMaterializeDecisionsHelp(stdout)
 		return 0
@@ -428,6 +432,8 @@ func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.W
 
 	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to materialize")
 	compareJSON := fs.String("compare-json", "", "compare report JSON used to resolve locators")
+	oldSession := fs.String("old-session", "", "old browser session used to resolve old_selector")
+	newSession := fs.String("new-session", "", "new browser session used to resolve new_selector")
 	output := fs.String("output", "", "write materialized decisions JSONL to file")
 	asJSON := fs.Bool("json", false, "print materialization report as json")
 
@@ -458,7 +464,21 @@ func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.W
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	materialized, materializeIssues, materializedRefs := materializeCompareDecisionRefs(decisions, compareReport)
+	materialized := decisions
+	materializeIssues := []compareDecisionValidationIssue{}
+	materializedRefs := 0
+	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer closeSelectorResolver()
+	materialized, selectorIssues, selectorRefs := materializeCompareDecisionSelectors(materialized, compareReport, selectorResolver)
+	materializeIssues = append(materializeIssues, selectorIssues...)
+	materializedRefs += selectorRefs
+	materialized, locatorIssues, locatorRefs := materializeCompareDecisionRefs(materialized, compareReport)
+	materializeIssues = append(materializeIssues, locatorIssues...)
+	materializedRefs += locatorRefs
 	validation := compareDecisionValidationReport{}
 	if len(materializeIssues) == 0 {
 		validation = validateCompareDecisions(materialized, &compareReport)
@@ -513,6 +533,139 @@ func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 	return 0
+}
+
+func compareDecisionSelectorResolverForSessions(ctx context.Context, connectClient func(context.Context) (*rpc.Client, error), oldSession string, newSession string) (compareDecisionSelectorResolver, func(), error) {
+	if oldSession == "" && newSession == "" {
+		return nil, func() {}, nil
+	}
+	if connectClient == nil {
+		return nil, func() {}, errors.New("compare materialize-decisions needs a client to resolve old_selector or new_selector")
+	}
+	client, err := connectClient(ctx)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	cache := map[string]compareDecisionSelectorCacheEntry{}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (string, error) {
+		side := "new"
+		sessionID := newSession
+		if oldSide {
+			side = "old"
+			sessionID = oldSession
+		}
+		if sessionID == "" {
+			return "", fmt.Errorf("%s_selector requires --%s-session", side, side)
+		}
+		cacheKey := side + "\x00" + selector
+		if cached, ok := cache[cacheKey]; ok {
+			return cached.Ref, cached.Err
+		}
+		ref, err := compareMaterializeSelectorRef(ctx, client, sessionID, side, selector, nodes)
+		cache[cacheKey] = compareDecisionSelectorCacheEntry{Ref: ref, Err: err}
+		return ref, err
+	}
+	return resolver, func() { client.Close() }, nil
+}
+
+type compareDecisionSelectorCacheEntry struct {
+	Ref string
+	Err error
+}
+
+func compareMaterializeSelectorRef(ctx context.Context, client *rpc.Client, sessionID string, side string, selector string, nodes []compareSnapshotNode) (string, error) {
+	selector = strings.TrimSpace(selector)
+	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+		SessionID: sessionID,
+		Options: api.ObserveOptions{
+			WithTree:      true,
+			ScopeSelector: selector,
+			NodeScope:     compareNodeScopeAll,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s selector %q: %w", side, selector, err)
+	}
+	if len(res.Observation.Tree) == 0 {
+		return "", fmt.Errorf("%s selector %q returned no observed nodes", side, selector)
+	}
+	selected := buildCompareSnapshot(api.Observation{Tree: []api.Node{res.Observation.Tree[0]}}, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
+	if len(selected.Nodes) == 0 {
+		return "", fmt.Errorf("%s selector %q returned no comparable node", side, selector)
+	}
+	return compareResolveSelectorMaterializedRef(side, selector, selected.Nodes[0], nodes)
+}
+
+func compareResolveSelectorMaterializedRef(side string, selector string, selected compareSnapshotNode, nodes []compareSnapshotNode) (string, error) {
+	matches := compareSelectorMaterializeMatches(selected, nodes)
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("%s selector %q matched the live DOM but no compare JSON node", side, strings.TrimSpace(selector))
+	case 1:
+		ref := strings.TrimSpace(nodes[matches[0]].Ref)
+		if ref == "" {
+			return "", fmt.Errorf("%s selector %q matched a compare JSON node without ref", side, strings.TrimSpace(selector))
+		}
+		return ref, nil
+	default:
+		return "", fmt.Errorf("%s selector %q matched %d compare JSON nodes: %s", side, strings.TrimSpace(selector), len(matches), compareDecisionNodeHints(nodes, matches, 5))
+	}
+}
+
+func compareSelectorMaterializeMatches(selected compareSnapshotNode, nodes []compareSnapshotNode) []int {
+	matchers := []func(compareSnapshotNode, compareSnapshotNode) bool{
+		compareSelectorMaterializeStructureMatch,
+		compareSelectorMaterializeTestIDMatch,
+		compareSelectorMaterializeHrefMatch,
+		compareSelectorMaterializeFingerprintMatch,
+		compareSelectorMaterializeContentMatch,
+	}
+	for _, matches := range matchers {
+		indices := make([]int, 0, 1)
+		for index, node := range nodes {
+			if matches(selected, node) {
+				indices = append(indices, index)
+			}
+		}
+		if len(indices) > 0 {
+			return indices
+		}
+	}
+	return nil
+}
+
+func compareSelectorMaterializeStructureMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.StructureKey != "" && node.StructureKey != "" && selected.StructureKey == node.StructureKey
+}
+
+func compareSelectorMaterializeTestIDMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.TestID != "" && selected.TestID == node.TestID && compareSelectorMaterializeRoleCompatible(selected, node)
+}
+
+func compareSelectorMaterializeHrefMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.Href != "" && selected.Href == node.Href && compareSelectorMaterializeRoleCompatible(selected, node)
+}
+
+func compareSelectorMaterializeFingerprintMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.Fingerprint != "" && selected.Fingerprint == node.Fingerprint && compareSelectorMaterializeRoleCompatible(selected, node) && compareSelectorMaterializeLabelCompatible(selected, node)
+}
+
+func compareSelectorMaterializeContentMatch(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	if !compareSelectorMaterializeRoleCompatible(selected, node) || !compareSelectorMaterializeLabelCompatible(selected, node) {
+		return false
+	}
+	if selected.Label == "" && selected.Name == "" && selected.Text == "" && selected.Value == "" {
+		return false
+	}
+	return selected.Name == node.Name && selected.Text == node.Text && selected.Value == node.Value
+}
+
+func compareSelectorMaterializeRoleCompatible(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.Role == "" || node.Role == "" || selected.Role == node.Role
+}
+
+func compareSelectorMaterializeLabelCompatible(selected compareSnapshotNode, node compareSnapshotNode) bool {
+	return selected.Label == "" || node.Label == "" || selected.Label == node.Label
 }
 
 func runCompareAuditDecisions(args []string, stdout io.Writer, stderr io.Writer) int {

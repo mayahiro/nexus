@@ -40,6 +40,12 @@
     "new_locator": {
       "$ref": "#/$defs/nonEmptyString"
     },
+    "old_selector": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
+    "new_selector": {
+      "$ref": "#/$defs/nonEmptyString"
+    },
     "old_fingerprint": {
       "$ref": "#/$defs/nonEmptyString"
     },
@@ -130,6 +136,9 @@
               },
               {
                 "required": ["old_locator"]
+              },
+              {
+                "required": ["old_selector"]
               }
             ]
           },
@@ -148,6 +157,9 @@
               },
               {
                 "required": ["new_locator"]
+              },
+              {
+                "required": ["new_selector"]
               }
             ]
           }
@@ -181,6 +193,9 @@
               },
               {
                 "required": ["old_locator"]
+              },
+              {
+                "required": ["old_selector"]
               }
             ]
           },
@@ -199,6 +214,9 @@
               },
               {
                 "required": ["new_locator"]
+              },
+              {
+                "required": ["new_selector"]
               }
             ]
           }
@@ -234,6 +252,9 @@
               },
               {
                 "required": ["old_locator"]
+              },
+              {
+                "required": ["old_selector"]
               }
             ]
           },
@@ -252,6 +273,9 @@
               },
               {
                 "required": ["new_locator"]
+              },
+              {
+                "required": ["new_selector"]
               }
             ]
           }
@@ -287,6 +311,9 @@
               },
               {
                 "required": ["old_locator"]
+              },
+              {
+                "required": ["old_selector"]
               }
             ]
           },
@@ -305,6 +332,9 @@
               },
               {
                 "required": ["new_locator"]
+              },
+              {
+                "required": ["new_selector"]
               }
             ]
           }
@@ -335,6 +365,9 @@
           },
           {
             "required": ["old_locator"]
+          },
+          {
+            "required": ["old_selector"]
           }
         ]
       }
@@ -363,6 +396,9 @@
           },
           {
             "required": ["new_locator"]
+          },
+          {
+            "required": ["new_selector"]
           }
         ]
       }

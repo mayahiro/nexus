@@ -694,7 +694,7 @@ func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
 	outputPath := filepath.Join(dir, "decisions.materialized.jsonl")
 	input := strings.Join([]string{
 		`{"kind":"pair","old_locator":"role:button label:\"Save changes\"","new_locator":"href:/jobs","confidence":"high","reason":"same CTA"}`,
-		`{"kind":"accepted_removed","old_locator":"text \"Legacy only\"","reason":"intentional removal"}`,
+		`{"kind":"accepted_removed","old_locator":"text \"Legacy only\"","old_selector":"#legacy","reason":"intentional removal"}`,
 	}, "\n") + "\n"
 	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
 		t.Fatal(err)
@@ -746,8 +746,95 @@ func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
 		t.Fatalf("expected second materialized decision: %v\n%s", err, lines[1])
 	}
-	if second.Kind != "accepted_removed" || second.Old != "@e3" || second.OldLocator == "" {
+	if second.Kind != "accepted_removed" || second.Old != "@e3" || second.OldLocator == "" || second.OldSelector != "#legacy" {
 		t.Fatalf("unexpected second materialized decision: %+v", second)
+	}
+}
+
+func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
+	decisions := []compareDecision{
+		{Kind: "pair", OldSelector: "#save", NewSelector: "a.jobs", Confidence: "high", Reason: "same CTA"},
+	}
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save", TestID: "save"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-jobs", Ref: "@e2", Role: "link", Label: "Jobs", Name: "Jobs", Href: "/jobs"},
+			},
+		},
+	}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (string, error) {
+		if oldSide {
+			return compareResolveSelectorMaterializedRef("old", selector, compareSnapshotNode{Role: "button", Label: "Save", Name: "Save", TestID: "save"}, nodes)
+		}
+		return compareResolveSelectorMaterializedRef("new", selector, compareSnapshotNode{Role: "link", Label: "Jobs", Name: "Jobs", Href: "/jobs"}, nodes)
+	}
+
+	materialized, issues, refs := materializeCompareDecisionSelectors(decisions, report, resolver)
+	if len(issues) != 0 {
+		t.Fatalf("expected selector materialization without issues: %+v", issues)
+	}
+	if refs != 2 || len(materialized) != 1 || materialized[0].Old != "@e1" || materialized[0].New != "@e2" {
+		t.Fatalf("unexpected materialized decisions: refs=%d decisions=%+v", refs, materialized)
+	}
+	if materialized[0].OldSelector != "#save" || materialized[0].NewSelector != "a.jobs" {
+		t.Fatalf("expected selectors to remain as audit metadata: %+v", materialized[0])
+	}
+}
+
+func TestRunCompareMaterializeDecisionsRequiresSessionForSelector(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"accepted_removed","old_selector":"#legacy","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-legacy", Ref: "@e1", Role: "link", Label: "Legacy", Name: "Legacy"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareMaterializeDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected selector without session to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionMaterializeReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected materialize json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 1 || report.Issues[0].Field != "old_selector" || !strings.Contains(report.Issues[0].Message, "--old-session") {
+		t.Fatalf("expected old_selector session issue: %+v", report)
+	}
+}
+
+func TestValidateCompareDecisionsWarnsForSelectorOnly(t *testing.T) {
+	decisions := []compareDecision{
+		{Kind: "pair", OldSelector: "#save", New: "@e2", Confidence: "high"},
+	}
+	report := compareReport{
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+	}
+
+	validation := validateCompareDecisions(decisions, &report)
+	if validation.Summary.Errors != 0 || validation.Summary.Warnings != 1 || len(validation.Issues) != 1 {
+		t.Fatalf("expected one selector materialize warning: %+v", validation)
+	}
+	if validation.Issues[0].Field != "old_selector" || !strings.Contains(validation.Issues[0].Message, "materialize-decisions") {
+		t.Fatalf("unexpected selector warning: %+v", validation.Issues[0])
 	}
 }
 
