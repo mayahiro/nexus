@@ -818,7 +818,18 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 			Warning:        2,
 		},
 		Pages: []compareManifestPageReport{
-			{Name: "dashboard", Report: &compareReport{Summary: compareSummary{TotalFindings: 3}}},
+			{
+				Name: "dashboard",
+				Report: &compareReport{
+					Summary: compareSummary{TotalFindings: 4, Critical: 1, Warning: 2, Info: 1},
+					Findings: []compareFinding{
+						{Kind: "missing_node", FindingID: "missing_node:aaa111", Severity: "critical", Impact: "missing_primary_action", Locator: "role=button", Role: "button", Label: "Submit"},
+						{Kind: "layout_changed", FindingID: "layout_changed:bbb222", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+						{Kind: "css_changed", FindingID: "css_changed:ccc333", Severity: "info", Impact: "css_changed", Field: "color"},
+						{Kind: "text_changed", FindingID: "text_changed:ddd444", Severity: "warning", Impact: "text_changed", Role: "heading", Label: "Title"},
+					},
+				},
+			},
 			{Name: "settings", Error: "failed"},
 		},
 	}
@@ -883,8 +894,33 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(htmlBytes)
-	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "critical") {
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "missing_node:aaa111") || strings.Contains(html, "css_changed:ccc333") {
 		t.Fatalf("unexpected html review index:\n%s", html)
+	}
+}
+
+func TestCompareManifestReviewHTMLFindingsLimitsCriticalAndWarning(t *testing.T) {
+	report := &compareReport{
+		Findings: []compareFinding{
+			{FindingID: "critical-1", Severity: "critical"},
+			{FindingID: "warning-1", Severity: "warning"},
+			{FindingID: "info-1", Severity: "info"},
+			{FindingID: "critical-2", Severity: "critical"},
+			{FindingID: "warning-2", Severity: "warning"},
+			{FindingID: "critical-3", Severity: "critical"},
+			{FindingID: "warning-3", Severity: "warning"},
+		},
+	}
+
+	previews := compareManifestReviewHTMLFindings(report)
+	if len(previews) != 5 {
+		t.Fatalf("expected first five critical/warning previews, got %+v", previews)
+	}
+	if previews[0].FindingID != "critical-1" || previews[1].FindingID != "warning-1" || previews[2].FindingID != "critical-2" {
+		t.Fatalf("expected info finding to be skipped while preserving order: %+v", previews)
+	}
+	if overflow := compareManifestReviewHTMLFindingOverflow(report); overflow != 1 {
+		t.Fatalf("expected one hidden critical/warning finding, got %d", overflow)
 	}
 }
 

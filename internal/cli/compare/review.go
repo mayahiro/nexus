@@ -276,6 +276,8 @@ type compareManifestReviewHTMLPage struct {
 	Priority                 string
 	Findings                 string
 	Status                   string
+	FindingPreview           []compareManifestReviewHTMLFinding
+	FindingPreviewMore       int
 	CompareMarkdown          string
 	CompareJSON              string
 	PairDecisionsTemplate    string
@@ -284,6 +286,15 @@ type compareManifestReviewHTMLPage struct {
 	NewScreenshot            string
 	OldScreenshotMissing     bool
 	NewScreenshotMissing     bool
+}
+
+type compareManifestReviewHTMLFinding struct {
+	Severity  string
+	Kind      string
+	Impact    string
+	Target    string
+	Locator   string
+	FindingID string
 }
 
 func buildCompareManifestReviewHTMLData(rootDir string, report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewHTMLData {
@@ -335,10 +346,12 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 		status = directory.Error
 	}
 	htmlPage := compareManifestReviewHTMLPage{
-		Name:     firstNonEmpty(directory.Name, page.Name),
-		Priority: priority,
-		Findings: compareManifestReviewFindingsLabel(directory, page),
-		Status:   status,
+		Name:               firstNonEmpty(directory.Name, page.Name),
+		Priority:           priority,
+		Findings:           compareManifestReviewFindingsLabel(directory, page),
+		Status:             status,
+		FindingPreview:     compareManifestReviewHTMLFindings(page.Report),
+		FindingPreviewMore: compareManifestReviewHTMLFindingOverflow(page.Report),
 	}
 	if strings.TrimSpace(directory.Directory) == "" || directory.Error != "" {
 		return htmlPage
@@ -358,6 +371,67 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 		htmlPage.NewScreenshotMissing = true
 	}
 	return htmlPage
+}
+
+func compareManifestReviewHTMLFindings(report *compareReport) []compareManifestReviewHTMLFinding {
+	if report == nil {
+		return nil
+	}
+	previews := make([]compareManifestReviewHTMLFinding, 0, 5)
+	for _, finding := range report.Findings {
+		if !compareManifestReviewHTMLFindingIncluded(finding) {
+			continue
+		}
+		if len(previews) >= 5 {
+			break
+		}
+		previews = append(previews, compareManifestReviewHTMLFinding{
+			Severity:  finding.Severity,
+			Kind:      finding.Kind,
+			Impact:    finding.Impact,
+			Target:    compareManifestReviewFindingTarget(finding),
+			Locator:   finding.Locator,
+			FindingID: finding.FindingID,
+		})
+	}
+	return previews
+}
+
+func compareManifestReviewHTMLFindingOverflow(report *compareReport) int {
+	if report == nil {
+		return 0
+	}
+	total := 0
+	for _, finding := range report.Findings {
+		if compareManifestReviewHTMLFindingIncluded(finding) {
+			total++
+		}
+	}
+	if total <= 5 {
+		return 0
+	}
+	return total - 5
+}
+
+func compareManifestReviewHTMLFindingIncluded(finding compareFinding) bool {
+	return finding.Severity == "critical" || finding.Severity == "warning"
+}
+
+func compareManifestReviewFindingTarget(finding compareFinding) string {
+	parts := make([]string, 0, 3)
+	if finding.Role != "" {
+		parts = append(parts, finding.Role)
+	}
+	if finding.Label != "" {
+		parts = append(parts, finding.Label)
+	}
+	if finding.Field != "" {
+		parts = append(parts, finding.Field)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, " ")
+	}
+	return firstNonEmpty(finding.Locator, finding.Fingerprint, finding.StructureKey, finding.SubtreeSignature)
 }
 
 func compareManifestReviewPriorityRank(priority string) int {
@@ -497,6 +571,17 @@ main { padding:18px 28px 32px; }
 .priority-unknown .badge { background:#6e7781; }
 .page-body { padding:14px 16px 16px; }
 .packet-links { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+.findings-preview { margin:0 0 14px; border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+.findings-preview h3 { margin:0; padding:8px 10px; font-size:14px; border-bottom:1px solid var(--border); background:#f6f8fa; }
+.finding { padding:9px 10px; border-bottom:1px solid var(--border); }
+.finding:last-child { border-bottom:0; }
+.finding-head { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-bottom:4px; }
+.finding-severity { padding:2px 6px; border-radius:999px; color:#fff; font-size:12px; font-weight:600; }
+.severity-critical { background:var(--critical); }
+.severity-warning { background:var(--warning); }
+.finding-kind { font-weight:600; }
+.finding-impact, .finding-target, .finding-locator { color:var(--muted); }
+code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; word-break:break-all; }
 .shots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 figure { margin:0; border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
 figcaption { padding:8px 10px; border-top:1px solid var(--border); color:var(--muted); font-weight:600; }
@@ -542,6 +627,24 @@ img { display:block; width:100%; height:auto; background:#fff; }
 {{if .PairDecisionsTemplate}}<a href="{{.PairDecisionsTemplate}}">pair decisions</a>{{end}}
 {{if .FindingDecisionsTemplate}}<a href="{{.FindingDecisionsTemplate}}">finding decisions</a>{{end}}
 </nav>
+{{if .FindingPreview}}
+<div class="findings-preview">
+<h3>Critical and warning findings</h3>
+{{range .FindingPreview}}
+<div class="finding">
+<div class="finding-head">
+<span class="finding-severity severity-{{.Severity}}">{{.Severity}}</span>
+<span class="finding-kind">{{.Kind}}</span>
+{{if .Impact}}<span class="finding-impact">{{.Impact}}</span>{{end}}
+</div>
+{{if .Target}}<div class="finding-target">{{.Target}}</div>{{end}}
+{{if .Locator}}<div class="finding-locator">{{.Locator}}</div>{{end}}
+{{if .FindingID}}<code>{{.FindingID}}</code>{{end}}
+</div>
+{{end}}
+{{if .FindingPreviewMore}}<div class="finding finding-impact">+{{.FindingPreviewMore}} more critical or warning findings</div>{{end}}
+</div>
+{{end}}
 <div class="shots">
 <figure>
 {{if .OldScreenshot}}<a href="{{.OldScreenshot}}"><img src="{{.OldScreenshot}}" alt="{{.Name}} old screenshot"></a>{{else}}<div class="missing">old screenshot missing</div>{{end}}
