@@ -25,6 +25,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	if len(args) > 0 && args[0] == "normalize-decisions" {
 		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "audit-decisions" {
+		return runCompareAuditDecisions(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -393,6 +396,62 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 		}
 	}
 	if report.Summary.Errors > 0 {
+		return 1
+	}
+	return 0
+}
+
+func runCompareAuditDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		PrintAuditDecisionsHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("compare audit-decisions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to audit")
+	compareJSON := fs.String("compare-json", "", "compare report JSON used to audit decision application")
+	asJSON := fs.Bool("json", false, "print audit report as json")
+
+	if err := parseCommandFlags(fs, args, stderr, "compare audit-decisions"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "compare audit-decisions accepts only flags")
+		PrintAuditDecisionsHelp(stderr)
+		return 1
+	}
+	if strings.TrimSpace(*decisionsFile) == "" {
+		fmt.Fprintln(stderr, "compare audit-decisions requires --decisions-file")
+		return 1
+	}
+	if strings.TrimSpace(*compareJSON) == "" {
+		fmt.Fprintln(stderr, "compare audit-decisions requires --compare-json")
+		return 1
+	}
+
+	decisions, err := loadCompareDecisions(*decisionsFile)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	report, err := loadCompareReport(*compareJSON)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	audit := auditCompareDecisions(decisions, report)
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(audit); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else {
+		printCompareDecisionAuditReport(stdout, audit)
+	}
+	if audit.Summary.Errors > 0 {
 		return 1
 	}
 	return 0

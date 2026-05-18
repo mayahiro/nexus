@@ -564,6 +564,81 @@ func TestRunCompareNormalizeDecisionsReportsStaleFindingID(t *testing.T) {
 	}
 }
 
+func TestRunCompareAuditDecisionsReportsAppliedPendingStaleAndConflicts(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	input := strings.Join([]string{
+		`{"kind":"pair","old":"@e1","new":"@e2","confidence":"high"}`,
+		`{"kind":"pair","old":"@e3","new":"?","confidence":"unknown"}`,
+		`{"kind":"accepted_finding","finding_id":"text_changed:abc123","confidence":"high"}`,
+		`{"kind":"regression_finding","finding_id":"text_changed:abc123","confidence":"high"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save"},
+				{Fingerprint: "old-cancel", Ref: "@e3", Role: "button", Label: "Cancel"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save"},
+			},
+		},
+		Findings: []compareFinding{
+			{Kind: "text_changed", FindingID: "text_changed:abc123", DecisionKind: "accepted_finding"},
+		},
+		MatchingDebug: &compareMatchingDebug{
+			Matches: []compareMatchingDebugMatch{
+				{
+					Old:       compareMatchingDebugNode{Index: 0, Ref: "@e1"},
+					New:       compareMatchingDebugNode{Index: 0, Ref: "@e2"},
+					MatchedBy: "decision:pair",
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareAuditDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected conflicting decisions to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionAuditReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected audit json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.TotalDecisions != 4 || report.Summary.Applied != 2 || report.Summary.Pending != 1 || report.Summary.Stale != 1 || report.Summary.Conflicts != 1 {
+		t.Fatalf("unexpected audit summary: %+v", report.Summary)
+	}
+	if report.Summary.Errors != 1 || report.Summary.Warnings != 1 || !report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected audit issue counts: %+v issues=%+v", report.Summary, report.Issues)
+	}
+}
+
+func TestRunCompareAuditDecisionsRequiresCompareJSON(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"pair","old":"@e1","new":"@e2","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareAuditDecisions([]string{"--decisions-file", decisionsPath}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected audit to require compare-json:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "requires --compare-json") {
+		t.Fatalf("expected compare-json error, got:\n%s", stdout.String())
+	}
+}
+
 func TestValidateCompareDecisionsReportsUnknownKind(t *testing.T) {
 	validation := validateCompareDecisions([]compareDecision{
 		{Kind: "removed", Old: "@e1", Confidence: "high", Line: 1},

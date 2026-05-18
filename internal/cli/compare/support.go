@@ -16,6 +16,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--matching-debug] [--decisions-file <jsonl>] [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
 	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
 	fmt.Fprintln(w, "layout: --compare-layout reports significant viewport-relative bounds changes for matching nodes")
@@ -46,6 +47,14 @@ func PrintNormalizeDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "normalizes compare decision JSONL tokens, removes duplicate decisions, and validates current refs/fingerprints/finding_ids when --compare-json is provided")
 	fmt.Fprintln(w, "without --output, normalized JSONL is written to stdout unless --json is used")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "compare guide", aiCompareDocURL)
+}
+
+func PrintAuditDecisionsHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
+	fmt.Fprintln(w, "audits whether reviewed decisions are applied, pending, stale, or conflicting against a current compare report")
+	fmt.Fprintln(w, "pair and subtree application checks require compare json produced with --matching-debug")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }
