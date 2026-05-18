@@ -52,6 +52,7 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 				return compareManifestReport{}, fmt.Errorf("manifest %s failed: %w", name, err)
 			}
 			if reviewDir != "" {
+				pageDirectory.Priority = "error"
 				pageDirectory.Error = err.Error()
 				pageDirectories = append(pageDirectories, pageDirectory)
 			}
@@ -66,6 +67,13 @@ func executeCompareManifest(ctx context.Context, client *rpc.Client, paths confi
 			Report: &single,
 		})
 		if reviewDir != "" {
+			pageDirectory.Priority = compareManifestReviewPriority(single.Summary)
+			pageDirectory.TotalFindings = single.Summary.TotalFindings
+			pageDirectory.CriticalFindings = single.Summary.Critical
+			pageDirectory.WarningFindings = single.Summary.Warning
+			pageDirectory.InfoFindings = single.Summary.Info
+			pageDirectory.OldScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileOldScreenshot))
+			pageDirectory.NewScreenshot = compareReviewExistingPath(filepath.Join(pageDirectory.Directory, compareReviewFileNewScreenshot))
 			pageDirectories = append(pageDirectories, pageDirectory)
 		}
 	}
@@ -265,6 +273,13 @@ func compareManifestReviewDirName(name string, index int) string {
 		sanitized = fmt.Sprintf("page-%03d", index+1)
 	}
 	return fmt.Sprintf("%03d-%s", index+1, sanitized)
+}
+
+func compareReviewExistingPath(path string) string {
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return path
 }
 
 func summarizeCompareManifest(pages []compareManifestPageReport) compareManifestSummary {

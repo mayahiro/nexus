@@ -22,6 +22,7 @@ const (
 	compareReviewFileSummary                  = "review-summary.json"
 	compareReviewFileManifestJSON             = "manifest.json"
 	compareReviewFileManifestMarkdown         = "manifest.md"
+	compareReviewFileIndex                    = "review-index.md"
 )
 
 type compareReviewScreenshots struct {
@@ -139,6 +140,7 @@ func writeCompareManifestReviewPacket(dir string, report compareManifestReport, 
 	files := compareManifestReviewFiles{
 		ManifestJSON:     filepath.Join(dir, compareReviewFileManifestJSON),
 		ManifestMarkdown: filepath.Join(dir, compareReviewFileManifestMarkdown),
+		ReviewIndex:      filepath.Join(dir, compareReviewFileIndex),
 		ReviewSummary:    filepath.Join(dir, compareReviewFileSummary),
 		PageDirectories:  append([]compareManifestReviewPageDirectory(nil), pageDirectories...),
 	}
@@ -148,7 +150,70 @@ func writeCompareManifestReviewPacket(dir string, report compareManifestReport, 
 	if err := writeCompareManifestMarkdown(files.ManifestMarkdown, report); err != nil {
 		return err
 	}
+	if err := writeCompareManifestReviewIndex(files.ReviewIndex, dir, report, files); err != nil {
+		return err
+	}
 	return writeIndentedJSONFile(files.ReviewSummary, buildCompareManifestReviewSummary(report, files))
+}
+
+func writeCompareManifestReviewIndex(path string, rootDir string, report compareManifestReport, files compareManifestReviewFiles) error {
+	var builder strings.Builder
+	builder.WriteString("# Compare Review Index\n\n")
+	if strings.TrimSpace(report.Manifest) != "" {
+		builder.WriteString("Manifest: `")
+		builder.WriteString(report.Manifest)
+		builder.WriteString("`\n\n")
+	}
+	fmt.Fprintf(&builder, "Summary: %d pages, %d compared, %d failed, %d findings (critical %d, warning %d, info %d).\n\n",
+		report.Summary.TotalPages,
+		report.Summary.ComparedPages,
+		report.Summary.FailedPages,
+		report.Summary.TotalFindings,
+		report.Summary.Critical,
+		report.Summary.Warning,
+		report.Summary.Info,
+	)
+	fmt.Fprintf(&builder, "- Manifest JSON: %s\n", compareReviewMarkdownLink(rootDir, "manifest.json", files.ManifestJSON))
+	fmt.Fprintf(&builder, "- Manifest Markdown: %s\n", compareReviewMarkdownLink(rootDir, "manifest.md", files.ManifestMarkdown))
+	fmt.Fprintf(&builder, "- Review Summary: %s\n\n", compareReviewMarkdownLink(rootDir, "review-summary.json", files.ReviewSummary))
+
+	builder.WriteString("| Priority | Page | Findings | Packet | Screenshots | Status |\n")
+	builder.WriteString("| --- | --- | --- | --- | --- | --- |\n")
+	for i, page := range report.Pages {
+		directory := compareManifestReviewPageDirectory{Name: page.Name}
+		if i < len(files.PageDirectories) {
+			directory = files.PageDirectories[i]
+		}
+		priority := directory.Priority
+		if priority == "" && page.Error != "" {
+			priority = "error"
+		}
+		if priority == "" && page.Report != nil {
+			priority = compareManifestReviewPriority(page.Report.Summary)
+		}
+		if priority == "" {
+			priority = "unknown"
+		}
+		findings := compareManifestReviewFindingsLabel(directory, page)
+		packet := compareManifestReviewPacketLinks(rootDir, directory)
+		screenshots := compareManifestReviewScreenshotLinks(rootDir, directory)
+		status := "ok"
+		if page.Error != "" {
+			status = page.Error
+		} else if directory.Error != "" {
+			status = directory.Error
+		}
+		fmt.Fprintf(&builder, "| %s | %s | %s | %s | %s | %s |\n",
+			compareReviewMarkdownCell(priority),
+			compareReviewMarkdownCell(firstNonEmpty(directory.Name, page.Name)),
+			compareReviewMarkdownCell(findings),
+			compareReviewMarkdownCell(packet),
+			compareReviewMarkdownCell(screenshots),
+			compareReviewMarkdownCell(status),
+		)
+	}
+	builder.WriteString("\n")
+	return os.WriteFile(path, []byte(builder.String()), 0o644)
 }
 
 func buildCompareManifestReviewSummary(report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewSummary {
@@ -165,4 +230,90 @@ func buildCompareManifestReviewSummary(report compareManifestReport, files compa
 		InfoFindings:     report.Summary.Info,
 		Files:            files,
 	}
+}
+
+func compareManifestReviewPriority(summary compareSummary) string {
+	if summary.Critical > 0 {
+		return "critical"
+	}
+	if summary.Warning > 0 {
+		return "warning"
+	}
+	if summary.Info > 0 || summary.TotalFindings > 0 {
+		return "info"
+	}
+	return "clean"
+}
+
+func compareManifestReviewFindingsLabel(directory compareManifestReviewPageDirectory, page compareManifestPageReport) string {
+	if directory.Error != "" || page.Error != "" {
+		return "-"
+	}
+	total := directory.TotalFindings
+	critical := directory.CriticalFindings
+	warning := directory.WarningFindings
+	info := directory.InfoFindings
+	if page.Report != nil {
+		total = page.Report.Summary.TotalFindings
+		critical = page.Report.Summary.Critical
+		warning = page.Report.Summary.Warning
+		info = page.Report.Summary.Info
+	}
+	return fmt.Sprintf("%d (C%d/W%d/I%d)", total, critical, warning, info)
+}
+
+func compareManifestReviewPacketLinks(rootDir string, directory compareManifestReviewPageDirectory) string {
+	if strings.TrimSpace(directory.Directory) == "" || directory.Error != "" {
+		return "-"
+	}
+	links := []string{
+		compareReviewMarkdownLink(rootDir, "md", filepath.Join(directory.Directory, compareReviewFileMarkdown)),
+		compareReviewMarkdownLink(rootDir, "json", filepath.Join(directory.Directory, compareReviewFileJSON)),
+		compareReviewMarkdownLink(rootDir, "pairs", filepath.Join(directory.Directory, compareReviewFilePairDecisionsTemplate)),
+		compareReviewMarkdownLink(rootDir, "findings", filepath.Join(directory.Directory, compareReviewFileFindingDecisionsTemplate)),
+	}
+	return strings.Join(links, " / ")
+}
+
+func compareManifestReviewScreenshotLinks(rootDir string, directory compareManifestReviewPageDirectory) string {
+	if strings.TrimSpace(directory.Directory) == "" || directory.Error != "" {
+		return "-"
+	}
+	links := make([]string, 0, 2)
+	if directory.OldScreenshot != "" {
+		links = append(links, compareReviewMarkdownLink(rootDir, "old", directory.OldScreenshot))
+	} else {
+		links = append(links, "old missing")
+	}
+	if directory.NewScreenshot != "" {
+		links = append(links, compareReviewMarkdownLink(rootDir, "new", directory.NewScreenshot))
+	} else {
+		links = append(links, "new missing")
+	}
+	return strings.Join(links, " / ")
+}
+
+func compareReviewMarkdownLink(rootDir string, label string, target string) string {
+	if strings.TrimSpace(target) == "" {
+		return ""
+	}
+	return "[" + label + "](" + compareReviewMarkdownLinkTarget(rootDir, target) + ")"
+}
+
+func compareReviewMarkdownLinkTarget(rootDir string, target string) string {
+	rel, err := filepath.Rel(rootDir, target)
+	if err != nil {
+		rel = target
+	}
+	return strings.ReplaceAll(filepath.ToSlash(rel), " ", "%20")
+}
+
+func compareReviewMarkdownCell(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }

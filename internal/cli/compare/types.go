@@ -217,14 +217,22 @@ type compareReviewSummary struct {
 }
 
 type compareManifestReviewPageDirectory struct {
-	Name      string `json:"name"`
-	Directory string `json:"directory,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Name             string `json:"name"`
+	Directory        string `json:"directory,omitempty"`
+	Priority         string `json:"priority,omitempty"`
+	TotalFindings    int    `json:"total_findings,omitempty"`
+	CriticalFindings int    `json:"critical_findings,omitempty"`
+	WarningFindings  int    `json:"warning_findings,omitempty"`
+	InfoFindings     int    `json:"info_findings,omitempty"`
+	OldScreenshot    string `json:"old_screenshot,omitempty"`
+	NewScreenshot    string `json:"new_screenshot,omitempty"`
+	Error            string `json:"error,omitempty"`
 }
 
 type compareManifestReviewFiles struct {
 	ManifestJSON     string                               `json:"manifest_json"`
 	ManifestMarkdown string                               `json:"manifest_markdown"`
+	ReviewIndex      string                               `json:"review_index"`
 	ReviewSummary    string                               `json:"review_summary"`
 	PageDirectories  []compareManifestReviewPageDirectory `json:"page_directories,omitempty"`
 }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -275,6 +276,7 @@ func TestCompareManifestReviewDir(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(reviewDir, "manifest.json"),
 		filepath.Join(reviewDir, "manifest.md"),
+		filepath.Join(reviewDir, "review-index.md"),
 		filepath.Join(reviewDir, "review-summary.json"),
 		filepath.Join(pageDir, "compare.json"),
 		filepath.Join(pageDir, "compare.md"),
@@ -301,6 +303,14 @@ func TestCompareManifestReviewDir(t *testing.T) {
 	}
 	if string(newScreenshot) != "new-png" {
 		t.Fatalf("unexpected new screenshot bytes: %q", string(newScreenshot))
+	}
+	indexBytes, err := os.ReadFile(filepath.Join(reviewDir, "review-index.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexBytes)
+	if !strings.Contains(index, "dashboard page") || !strings.Contains(index, "[old](001-dashboard-page/old.png)") || !strings.Contains(index, "clean") {
+		t.Fatalf("unexpected review index:\n%s", index)
 	}
 
 	cancel()

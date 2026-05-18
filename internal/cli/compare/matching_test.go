@@ -833,6 +833,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	for _, name := range []string{
 		compareReviewFileManifestJSON,
 		compareReviewFileManifestMarkdown,
+		compareReviewFileIndex,
 		compareReviewFileSummary,
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -852,6 +853,17 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	}
 	if len(summary.Files.PageDirectories) != 2 || summary.Files.PageDirectories[1].Error != "failed" {
 		t.Fatalf("expected page directory summary: %+v", summary.Files.PageDirectories)
+	}
+	if summary.Files.ReviewIndex != filepath.Join(dir, compareReviewFileIndex) {
+		t.Fatalf("expected review index in summary: %+v", summary.Files)
+	}
+	indexBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndex))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := string(indexBytes)
+	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
+		t.Fatalf("unexpected review index:\n%s", index)
 	}
 }
 
