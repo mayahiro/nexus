@@ -3,6 +3,7 @@ package comparecmd
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"os"
@@ -289,12 +290,21 @@ type compareManifestReviewHTMLPage struct {
 }
 
 type compareManifestReviewHTMLFinding struct {
-	Severity  string
-	Kind      string
-	Impact    string
-	Target    string
-	Locator   string
-	FindingID string
+	Severity           string
+	Kind               string
+	Impact             string
+	Target             string
+	Locator            string
+	FindingID          string
+	AcceptedDecision   string
+	RegressionDecision string
+}
+
+type compareManifestReviewFindingDecision struct {
+	Kind       string `json:"kind"`
+	FindingID  string `json:"finding_id"`
+	Confidence string `json:"confidence"`
+	Reason     string `json:"reason"`
 }
 
 func buildCompareManifestReviewHTMLData(rootDir string, report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewHTMLData {
@@ -386,12 +396,14 @@ func compareManifestReviewHTMLFindings(report *compareReport) []compareManifestR
 			break
 		}
 		previews = append(previews, compareManifestReviewHTMLFinding{
-			Severity:  finding.Severity,
-			Kind:      finding.Kind,
-			Impact:    finding.Impact,
-			Target:    compareManifestReviewFindingTarget(finding),
-			Locator:   finding.Locator,
-			FindingID: finding.FindingID,
+			Severity:           finding.Severity,
+			Kind:               finding.Kind,
+			Impact:             finding.Impact,
+			Target:             compareManifestReviewFindingTarget(finding),
+			Locator:            finding.Locator,
+			FindingID:          finding.FindingID,
+			AcceptedDecision:   compareManifestReviewFindingDecisionJSONL("accepted_finding", finding.FindingID),
+			RegressionDecision: compareManifestReviewFindingDecisionJSONL("regression_finding", finding.FindingID),
 		})
 	}
 	return previews
@@ -432,6 +444,23 @@ func compareManifestReviewFindingTarget(finding compareFinding) string {
 		return strings.Join(parts, " ")
 	}
 	return firstNonEmpty(finding.Locator, finding.Fingerprint, finding.StructureKey, finding.SubtreeSignature)
+}
+
+func compareManifestReviewFindingDecisionJSONL(kind string, findingID string) string {
+	findingID = strings.TrimSpace(findingID)
+	if findingID == "" {
+		return ""
+	}
+	bytes, err := json.Marshal(compareManifestReviewFindingDecision{
+		Kind:       kind,
+		FindingID:  findingID,
+		Confidence: "high",
+		Reason:     "",
+	})
+	if err != nil {
+		return ""
+	}
+	return string(bytes)
 }
 
 func compareManifestReviewPriorityRank(priority string) int {
@@ -582,6 +611,9 @@ main { padding:18px 28px 32px; }
 .finding-kind { font-weight:600; }
 .finding-impact, .finding-target, .finding-locator { color:var(--muted); }
 code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; word-break:break-all; }
+.decision-stubs { margin-top:8px; }
+.decision-stubs summary { cursor:pointer; color:var(--info); font-weight:600; }
+.decision-stubs pre { margin:6px 0 0; padding:8px; overflow:auto; border:1px solid var(--border); border-radius:6px; background:#f6f8fa; }
 .shots { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
 figure { margin:0; border:1px solid var(--border); border-radius:6px; overflow:hidden; background:#fff; }
 figcaption { padding:8px 10px; border-top:1px solid var(--border); color:var(--muted); font-weight:600; }
@@ -640,6 +672,8 @@ img { display:block; width:100%; height:auto; background:#fff; }
 {{if .Target}}<div class="finding-target">{{.Target}}</div>{{end}}
 {{if .Locator}}<div class="finding-locator">{{.Locator}}</div>{{end}}
 {{if .FindingID}}<code>{{.FindingID}}</code>{{end}}
+{{if .AcceptedDecision}}<details class="decision-stubs"><summary>decision JSONL</summary><pre><code>{{.AcceptedDecision}}
+{{.RegressionDecision}}</code></pre></details>{{end}}
 </div>
 {{end}}
 {{if .FindingPreviewMore}}<div class="finding finding-impact">+{{.FindingPreviewMore}} more critical or warning findings</div>{{end}}

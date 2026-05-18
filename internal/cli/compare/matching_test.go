@@ -894,7 +894,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(htmlBytes)
-	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "missing_node:aaa111") || strings.Contains(html, "css_changed:ccc333") {
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
 		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 }
@@ -921,6 +921,17 @@ func TestCompareManifestReviewHTMLFindingsLimitsCriticalAndWarning(t *testing.T)
 	}
 	if overflow := compareManifestReviewHTMLFindingOverflow(report); overflow != 1 {
 		t.Fatalf("expected one hidden critical/warning finding, got %d", overflow)
+	}
+}
+
+func TestCompareManifestReviewFindingDecisionJSONL(t *testing.T) {
+	line := compareManifestReviewFindingDecisionJSONL("accepted_finding", " missing_node:aaa111 ")
+	expected := `{"kind":"accepted_finding","finding_id":"missing_node:aaa111","confidence":"high","reason":""}`
+	if line != expected {
+		t.Fatalf("unexpected decision jsonl:\n%s", line)
+	}
+	if line := compareManifestReviewFindingDecisionJSONL("accepted_finding", " "); line != "" {
+		t.Fatalf("expected empty finding id to produce no decision stub, got %q", line)
 	}
 }
 
