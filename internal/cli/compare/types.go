@@ -233,6 +233,7 @@ type compareManifestReviewFiles struct {
 	ManifestJSON     string                               `json:"manifest_json"`
 	ManifestMarkdown string                               `json:"manifest_markdown"`
 	ReviewIndex      string                               `json:"review_index"`
+	ReviewIndexHTML  string                               `json:"review_index_html"`
 	ReviewSummary    string                               `json:"review_summary"`
 	PageDirectories  []compareManifestReviewPageDirectory `json:"page_directories,omitempty"`
 }

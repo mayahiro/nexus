@@ -31,7 +31,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "scope selectors accept raw CSS selectors, must match exactly one element on their side, and may use positional selectors such as :nth-child()")
 	fmt.Fprintln(w, "scope selector multi-match errors include up to five matched candidate hints")
 	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, match_mode, node_scope, matching_debug, decisions_file, wait_*, scope_selector, old_scope_selector, new_scope_selector, compare_css, compare_layout, css_property, ignore_selector, and mask_selector")
-	fmt.Fprintln(w, "manifest review packet: --manifest with --review-dir writes manifest summaries, review-index.md, and one review packet directory per page")
+	fmt.Fprintln(w, "manifest review packet: --manifest with --review-dir writes manifest summaries, review-index.md/html, and one review packet directory per page")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 	printDocLink(w, "migration playbook", migrationPlaybookDocURL)

@@ -277,6 +277,7 @@ func TestCompareManifestReviewDir(t *testing.T) {
 		filepath.Join(reviewDir, "manifest.json"),
 		filepath.Join(reviewDir, "manifest.md"),
 		filepath.Join(reviewDir, "review-index.md"),
+		filepath.Join(reviewDir, "review-index.html"),
 		filepath.Join(reviewDir, "review-summary.json"),
 		filepath.Join(pageDir, "compare.json"),
 		filepath.Join(pageDir, "compare.md"),
@@ -311,6 +312,14 @@ func TestCompareManifestReviewDir(t *testing.T) {
 	index := string(indexBytes)
 	if !strings.Contains(index, "dashboard page") || !strings.Contains(index, "[old](001-dashboard-page/old.png)") || !strings.Contains(index, "clean") {
 		t.Fatalf("unexpected review index:\n%s", index)
+	}
+	htmlBytes, err := os.ReadFile(filepath.Join(reviewDir, "review-index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+	if !strings.Contains(html, `src="001-dashboard-page/old.png"`) || !strings.Contains(html, `src="001-dashboard-page/new.png"`) || !strings.Contains(html, "dashboard page") {
+		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 
 	cancel()

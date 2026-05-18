@@ -823,7 +823,16 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		},
 	}
 	pageDirectories := []compareManifestReviewPageDirectory{
-		{Name: "dashboard", Directory: filepath.Join(dir, "001-dashboard")},
+		{
+			Name:             "dashboard",
+			Directory:        filepath.Join(dir, "001-dashboard"),
+			Priority:         "critical",
+			TotalFindings:    3,
+			CriticalFindings: 1,
+			WarningFindings:  2,
+			OldScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileOldScreenshot),
+			NewScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
+		},
 		{Name: "settings", Directory: filepath.Join(dir, "002-settings"), Error: "failed"},
 	}
 
@@ -834,6 +843,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		compareReviewFileManifestJSON,
 		compareReviewFileManifestMarkdown,
 		compareReviewFileIndex,
+		compareReviewFileIndexHTML,
 		compareReviewFileSummary,
 	} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -857,6 +867,9 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if summary.Files.ReviewIndex != filepath.Join(dir, compareReviewFileIndex) {
 		t.Fatalf("expected review index in summary: %+v", summary.Files)
 	}
+	if summary.Files.ReviewIndexHTML != filepath.Join(dir, compareReviewFileIndexHTML) {
+		t.Fatalf("expected html review index in summary: %+v", summary.Files)
+	}
 	indexBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndex))
 	if err != nil {
 		t.Fatal(err)
@@ -864,6 +877,14 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	index := string(indexBytes)
 	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
 		t.Fatalf("unexpected review index:\n%s", index)
+	}
+	htmlBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndexHTML))
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(htmlBytes)
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "critical") {
+		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 }
 
