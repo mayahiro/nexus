@@ -77,6 +77,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --review-dir review/orders
 ```
 
 Session-to-session compare:
@@ -145,6 +146,7 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable `unknown` pair stubs from `matching_debug.ambiguous_candidates`.
 Use `--output-finding-decisions-template <jsonl>` to write editable `unknown`-confidence stubs for current `critical` and `warning` findings. Review those lines, then set `confidence:"high"` or remove `confidence` to apply the `accepted_finding` or `regression_finding` decision on the next compare run.
+Use `--review-dir <dir>` to write `compare.json`, `compare.md`, `pair-decisions.todo.jsonl`, `finding-decisions.todo.jsonl`, and `review-summary.json` in one pass. It enables matching debug automatically so pair decision review has the needed context.
 Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, supported kind names, duplicate high-confidence pairs/subtrees/finding decisions, and current refs/fingerprints/finding IDs before rerunning compare.
 Use `nxctl compare normalize-decisions --decisions-file <jsonl> --compare-json <file> --output <jsonl>` to canonicalize kind/confidence/match_kind values, remove duplicate decisions, and catch stale refs or `finding_id` values before committing a reviewed decision file.
 Use `nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file>` to check whether reviewed decisions were applied, are still pending, became stale, or conflict with another decision. Pair and subtree application audits require compare JSON produced with `--matching-debug`.

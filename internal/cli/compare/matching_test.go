@@ -724,6 +724,66 @@ func TestCompareFindingDecisionsTemplateWritesReviewStubs(t *testing.T) {
 	}
 }
 
+func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
+	dir := t.TempDir()
+	report := compareReport{
+		Old: compareSnapshot{URL: "https://old.example.test"},
+		New: compareSnapshot{URL: "https://new.example.test"},
+		Summary: compareSummary{
+			TotalFindings:           2,
+			Critical:                1,
+			Warning:                 1,
+			MatchedNodes:            3,
+			AmbiguousMatchesSkipped: 1,
+		},
+		Findings: []compareFinding{
+			{Kind: "missing_node", FindingID: "missing_node:aaa111", Severity: "critical", Role: "button", Label: "Submit"},
+			{Kind: "layout_changed", FindingID: "layout_changed:bbb222", Severity: "warning", Field: "bounds"},
+		},
+		MatchingDebug: &compareMatchingDebug{
+			AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
+				{
+					Old: compareMatchingDebugNode{Ref: "@e1", Fingerprint: "old-button"},
+					NewCandidates: []compareMatchingDebugCandidateOption{
+						{Node: compareMatchingDebugNode{Ref: "@e2"}},
+					},
+				},
+			},
+			UnmatchedOld: []compareMatchingDebugNode{{Ref: "@e3"}},
+			UnmatchedNew: []compareMatchingDebugNode{{Ref: "@e4"}},
+		},
+	}
+
+	if err := writeCompareReviewPacket(dir, report); err != nil {
+		t.Fatalf("expected review packet to write: %v", err)
+	}
+	for _, name := range []string{
+		compareReviewFileJSON,
+		compareReviewFileMarkdown,
+		compareReviewFilePairDecisionsTemplate,
+		compareReviewFileFindingDecisionsTemplate,
+		compareReviewFileSummary,
+	} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("expected %s to exist: %v", name, err)
+		}
+	}
+	var summary compareReviewSummary
+	bytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileSummary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bytes, &summary); err != nil {
+		t.Fatalf("expected review summary json: %v\n%s", err, string(bytes))
+	}
+	if summary.TotalFindings != 2 || summary.CriticalFindings != 1 || summary.WarningFindings != 1 || summary.AmbiguousCandidates != 1 || summary.UnmatchedOld != 1 || summary.UnmatchedNew != 1 {
+		t.Fatalf("unexpected review summary: %+v", summary)
+	}
+	if summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
+		t.Fatalf("expected review files and next commands: %+v", summary)
+	}
+}
+
 func TestAcceptedRemovedDecisionDowngradesMissingFinding(t *testing.T) {
 	report := buildCompareReportWithDecisions(
 		compareSnapshot{

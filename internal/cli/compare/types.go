@@ -187,6 +187,32 @@ type compareDecisionAuditReport struct {
 	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
 }
 
+type compareReviewFiles struct {
+	CompareJSON              string `json:"compare_json"`
+	CompareMarkdown          string `json:"compare_markdown"`
+	PairDecisionsTemplate    string `json:"pair_decisions_template"`
+	FindingDecisionsTemplate string `json:"finding_decisions_template"`
+	ReviewSummary            string `json:"review_summary"`
+}
+
+type compareReviewSummary struct {
+	Old                     string             `json:"old,omitempty"`
+	New                     string             `json:"new,omitempty"`
+	Scope                   string             `json:"scope,omitempty"`
+	Same                    bool               `json:"same"`
+	TotalFindings           int                `json:"total_findings"`
+	CriticalFindings        int                `json:"critical_findings"`
+	WarningFindings         int                `json:"warning_findings"`
+	InfoFindings            int                `json:"info_findings"`
+	MatchedNodes            int                `json:"matched_nodes,omitempty"`
+	AmbiguousMatchesSkipped int                `json:"ambiguous_matches_skipped,omitempty"`
+	AmbiguousCandidates     int                `json:"ambiguous_candidates,omitempty"`
+	UnmatchedOld            int                `json:"unmatched_old,omitempty"`
+	UnmatchedNew            int                `json:"unmatched_new,omitempty"`
+	Files                   compareReviewFiles `json:"files"`
+	NextCommands            []string           `json:"next_commands,omitempty"`
+}
+
 type compareMatchingDebug struct {
 	Mode                    string                                   `json:"mode"`
 	OldNodes                int                                      `json:"old_nodes"`

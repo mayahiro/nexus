@@ -132,6 +132,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --review-dir review/orders
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
@@ -190,6 +191,7 @@ Use `--match-mode exact|stable|heuristic|histogram` to control node pairing. `ex
 Use `--matching-debug` when collecting false positive or false negative examples. It adds `matching_debug` to JSON and markdown reports with accepted matches, selected anchors, region boundaries, ambiguous candidates, and unmatched nodes.
 Use `--output-decisions-template pair-decisions.todo.jsonl` to write editable JSONL stubs for ambiguous candidates.
 Use `--output-finding-decisions-template finding-decisions.todo.jsonl` to write editable `unknown`-confidence JSONL stubs for current critical and warning findings.
+Use `--review-dir review/orders` to write an AI review packet containing `compare.json`, `compare.md`, pair and finding decision templates, and `review-summary.json`.
 Use `nxctl compare normalize-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json --output pair-decisions.normalized.jsonl` to canonicalize decision tokens, remove duplicate decisions, and catch stale refs or `finding_id` values.
 Use `nxctl compare audit-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json` to check whether reviewed decisions were applied, are still pending, became stale, or conflict with another decision.
 Use `--decisions-file pair-decisions.jsonl` to feed reviewed pairing decisions back into compare. Nexus applies high-confidence `pair` entries as deterministic matches and high-confidence `subtree_pair` entries as ordered child matches before automatic matching; tentative or unknown entries remain review notes for future review flows. Findings include stable `finding_id` values, so `accepted_finding` can mark an existing finding as approved info and `regression_finding` can keep an existing finding critical with `decision_kind` metadata. `accepted_removed` and `accepted_added` decisions downgrade matching missing/new findings to info and stamp `decision_kind` on the finding. Validate decisions with `nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json`; each JSONL line also matches `docs/ai/compare-decisions.schema.json`.

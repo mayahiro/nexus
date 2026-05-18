@@ -65,6 +65,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	asJSON := fs.Bool("json", false, "print as json")
 	outputJSON := fs.String("output-json", "", "write compare report json to file")
 	outputMD := fs.String("output-md", "", "write compare report markdown to file")
+	reviewDir := fs.String("review-dir", "", "write an AI review packet directory")
 	var ignoreRegex compareStringValues
 	var cssProperty compareStringValues
 	var ignoreSelector compareStringValues
@@ -141,7 +142,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		Viewport:                *viewport,
 		MatchMode:               normalizedMatchMode,
 		NodeScope:               normalizedNodeScope,
-		MatchingDebug:           *matchingDebug || strings.TrimSpace(*outputDecisionsTemplate) != "",
+		MatchingDebug:           *matchingDebug || strings.TrimSpace(*outputDecisionsTemplate) != "" || strings.TrimSpace(*reviewDir) != "",
 		DecisionsFile:           *decisionsFile,
 		OutputDecisionsTemplate: strings.TrimSpace(*outputDecisionsTemplate),
 		WaitSelector:            *waitSelector,
@@ -166,6 +167,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		}
 		if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
 			fmt.Fprintln(stderr, "compare can not use --output-finding-decisions-template with --manifest")
+			return 1
+		}
+		if strings.TrimSpace(*reviewDir) != "" {
+			fmt.Fprintln(stderr, "compare can not use --review-dir with --manifest")
 			return 1
 		}
 		manifest, err := loadCompareManifest(*manifestPath)
@@ -238,6 +243,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 	if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
 		if err := writeCompareFindingDecisionsTemplate(*outputFindingDecisionsTemplate, report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if strings.TrimSpace(*reviewDir) != "" {
+		if err := writeCompareReviewPacket(strings.TrimSpace(*reviewDir), report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
