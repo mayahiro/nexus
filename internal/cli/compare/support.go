@@ -14,7 +14,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
@@ -24,6 +24,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "matching: --match-mode exact preserves fingerprint matching, stable uses unique identity keys, heuristic adds conservative fuzzy matching, histogram experimentally anchors low-occurrence semantic keys before local matching")
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
 	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
+	fmt.Fprintln(w, "decision validation: validate-decisions can preflight session-backed old_selector/new_selector fields with --old-session/--new-session before materialization")
 	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator and session-backed old_selector/new_selector fields to current refs before compare")
 	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs with locator and unique selector hints for ambiguous and unmatched old/new nodes")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
@@ -41,8 +42,9 @@ func PrintHelp(w io.Writer) {
 }
 
 func PrintValidateDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--json]")
-	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, and finding clusters from --review-summary")
+	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--json]")
+	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, finding clusters from --review-summary, and session-backed selector uniqueness when --old-session or --new-session is supplied")
+	fmt.Fprintln(w, "selector preflight requires --compare-json and checks that each old_selector/new_selector matches one live DOM node that maps uniquely to one compare JSON node")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }

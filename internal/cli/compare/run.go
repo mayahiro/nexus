@@ -20,7 +20,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return 0
 	}
 	if len(args) > 0 && args[0] == "validate-decisions" {
-		return runCompareValidateDecisions(args[1:], stdout, stderr)
+		return runCompareValidateDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
 	}
 	if len(args) > 0 && args[0] == "normalize-decisions" {
 		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
@@ -262,6 +262,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 }
 
 func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runCompareValidateDecisionsWithClient(context.Background(), args, stdout, stderr, nil)
+}
+
+func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
 	if isHelpArgs(args) {
 		PrintValidateDecisionsHelp(stdout)
 		return 0
@@ -272,6 +276,8 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to validate")
 	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs and fingerprints")
 	reviewSummary := fs.String("review-summary", "", "review-summary.json used to validate finding cluster decisions")
+	oldSession := fs.String("old-session", "", "old browser session used to preflight old_selector")
+	newSession := fs.String("new-session", "", "new browser session used to preflight new_selector")
 	asJSON := fs.Bool("json", false, "print validation report as json")
 
 	if err := parseCommandFlags(fs, args, stderr, "compare validate-decisions"); err != nil {
@@ -284,6 +290,11 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 	}
 	if strings.TrimSpace(*decisionsFile) == "" {
 		fmt.Fprintln(stderr, "compare validate-decisions requires --decisions-file")
+		return 1
+	}
+	selectorPreflightRequested := strings.TrimSpace(*oldSession) != "" || strings.TrimSpace(*newSession) != ""
+	if selectorPreflightRequested && strings.TrimSpace(*compareJSON) == "" {
+		fmt.Fprintln(stderr, "compare validate-decisions selector preflight requires --compare-json")
 		return 1
 	}
 
@@ -307,6 +318,16 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 		return 1
 	}
 	report := validateCompareDecisionsWithClusters(decisions, loadedCompareReport, reviewClusters)
+	if selectorPreflightRequested {
+		selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		defer closeSelectorResolver()
+		selectorPreflight := preflightCompareDecisionSelectors(decisions, *loadedCompareReport, selectorResolver)
+		applyCompareDecisionSelectorPreflightReport(&report, selectorPreflight)
+	}
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
@@ -541,7 +562,7 @@ func compareDecisionSelectorResolverForSessions(ctx context.Context, connectClie
 		return nil, func() {}, nil
 	}
 	if connectClient == nil {
-		return nil, func() {}, errors.New("compare materialize-decisions needs a client to resolve old_selector or new_selector")
+		return nil, func() {}, errors.New("compare selector resolution needs a client to resolve old_selector or new_selector")
 	}
 	client, err := connectClient(ctx)
 	if err != nil {

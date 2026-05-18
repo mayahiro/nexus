@@ -257,6 +257,12 @@ type compareDecisionRefResolution struct {
 
 type compareDecisionSelectorResolver func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error)
 
+type compareDecisionSelectorPreflightResult struct {
+	Issues           []compareDecisionValidationIssue
+	SuccessfulFields map[string]struct{}
+	Count            int
+}
+
 func materializeCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) ([]compareDecision, []compareDecisionValidationIssue, []compareDecisionMaterializedRef) {
 	materialized := make([]compareDecision, 0, len(decisions))
 	issues := []compareDecisionValidationIssue{}
@@ -358,6 +364,102 @@ func materializeCompareDecisionSelectorSide(decision compareDecision, index int,
 		Ref:       ref,
 		MatchedBy: firstNonEmpty(strings.TrimSpace(resolution.MatchedBy), "selector"),
 	}, nil
+}
+
+func preflightCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) compareDecisionSelectorPreflightResult {
+	result := compareDecisionSelectorPreflightResult{
+		SuccessfulFields: map[string]struct{}{},
+	}
+	addIssue := func(decision compareDecision, index int, field string, message string) {
+		result.Issues = append(result.Issues, compareDecisionValidationIssue{
+			Severity: "error",
+			Line:     compareDecisionLineNumber(decision, index),
+			Field:    field,
+			Message:  message,
+		})
+	}
+
+	for index, original := range decisions {
+		line := original.Line
+		decision := normalizeCompareDecision(original)
+		decision.Line = line
+
+		switch decision.Kind {
+		case "pair", "subtree_pair":
+			preflightCompareDecisionSelectorSide(decision, index, compareReport.Old.Nodes, true, resolver, &result, addIssue)
+			preflightCompareDecisionSelectorSide(decision, index, compareReport.New.Nodes, false, resolver, &result, addIssue)
+		case "accepted_removed", "regression_removed":
+			preflightCompareDecisionSelectorSide(decision, index, compareReport.Old.Nodes, true, resolver, &result, addIssue)
+		case "accepted_added", "unexpected_added":
+			preflightCompareDecisionSelectorSide(decision, index, compareReport.New.Nodes, false, resolver, &result, addIssue)
+		}
+	}
+
+	return result
+}
+
+func preflightCompareDecisionSelectorSide(decision compareDecision, index int, nodes []compareSnapshotNode, oldSide bool, resolver compareDecisionSelectorResolver, result *compareDecisionSelectorPreflightResult, addIssue func(compareDecision, int, string, string)) {
+	selector := decision.NewSelector
+	side := "new"
+	field := "new_selector"
+	if oldSide {
+		selector = decision.OldSelector
+		side = "old"
+		field = "old_selector"
+	}
+	if strings.TrimSpace(selector) == "" {
+		return
+	}
+	if resolver == nil {
+		addIssue(decision, index, field, fmt.Sprintf("%s_selector requires --%s-session", side, side))
+		return
+	}
+	if _, err := resolver(oldSide, selector, nodes); err != nil {
+		addIssue(decision, index, field, err.Error())
+		return
+	}
+	result.Count++
+	result.SuccessfulFields[compareDecisionValidationIssueKey(compareDecisionLineNumber(decision, index), field)] = struct{}{}
+}
+
+func applyCompareDecisionSelectorPreflightReport(report *compareDecisionValidationReport, result compareDecisionSelectorPreflightResult) {
+	report.Summary.SelectorPreflightUsed = true
+	report.Summary.SelectorPreflighted = result.Count
+	if len(result.SuccessfulFields) > 0 {
+		filtered := make([]compareDecisionValidationIssue, 0, len(report.Issues))
+		for _, issue := range report.Issues {
+			if compareDecisionSelectorMaterializeWarning(issue) {
+				if _, ok := result.SuccessfulFields[compareDecisionValidationIssueKey(issue.Line, issue.Field)]; ok {
+					report.Summary.Warnings--
+					continue
+				}
+			}
+			filtered = append(filtered, issue)
+		}
+		report.Issues = filtered
+	}
+	for _, issue := range result.Issues {
+		report.Issues = append(report.Issues, issue)
+		if issue.Severity == "error" {
+			report.Summary.Errors++
+			continue
+		}
+		report.Summary.Warnings++
+	}
+}
+
+func compareDecisionValidationIssueKey(line int, field string) string {
+	return strconv.Itoa(line) + "\x00" + field
+}
+
+func compareDecisionSelectorMaterializeWarning(issue compareDecisionValidationIssue) bool {
+	if issue.Severity != "warning" {
+		return false
+	}
+	if issue.Field != "old_selector" && issue.Field != "new_selector" {
+		return false
+	}
+	return strings.Contains(issue.Message, "selector-only decisions should be materialized")
 }
 
 func materializeCompareDecisionSide(decision compareDecision, index int, nodes []compareSnapshotNode, oldSide bool) (compareDecision, *compareDecisionMaterializedRef, error) {

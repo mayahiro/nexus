@@ -131,19 +131,21 @@ type compareFinding struct {
 }
 
 type compareDecisionValidationSummary struct {
-	TotalDecisions     int  `json:"total_decisions"`
-	HighPairs          int  `json:"high_pairs"`
-	TentativePairs     int  `json:"tentative_pairs"`
-	UnknownPairs       int  `json:"unknown_pairs"`
-	SubtreePairs       int  `json:"subtree_pairs"`
-	AcceptedRemoved    int  `json:"accepted_removed"`
-	AcceptedAdded      int  `json:"accepted_added"`
-	AcceptedFindings   int  `json:"accepted_findings"`
-	RegressionFindings int  `json:"regression_findings"`
-	Errors             int  `json:"errors"`
-	Warnings           int  `json:"warnings"`
-	CompareJSONUsed    bool `json:"compare_json_used"`
-	ReviewSummaryUsed  bool `json:"review_summary_used,omitempty"`
+	TotalDecisions        int  `json:"total_decisions"`
+	HighPairs             int  `json:"high_pairs"`
+	TentativePairs        int  `json:"tentative_pairs"`
+	UnknownPairs          int  `json:"unknown_pairs"`
+	SubtreePairs          int  `json:"subtree_pairs"`
+	AcceptedRemoved       int  `json:"accepted_removed"`
+	AcceptedAdded         int  `json:"accepted_added"`
+	AcceptedFindings      int  `json:"accepted_findings"`
+	RegressionFindings    int  `json:"regression_findings"`
+	SelectorPreflighted   int  `json:"selector_preflighted,omitempty"`
+	Errors                int  `json:"errors"`
+	Warnings              int  `json:"warnings"`
+	CompareJSONUsed       bool `json:"compare_json_used"`
+	ReviewSummaryUsed     bool `json:"review_summary_used,omitempty"`
+	SelectorPreflightUsed bool `json:"selector_preflight_used,omitempty"`
 }
 
 type compareDecisionValidationIssue struct {

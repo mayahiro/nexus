@@ -497,6 +497,82 @@ func TestRunCompareValidateDecisionsRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+func TestRunCompareValidateDecisionsSelectorPreflightRequiresCompareJSON(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "selector-decisions.jsonl")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"pair","old_selector":"#legacy","new":"@e2","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--old-session", "old"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected selector preflight to require compare json:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "selector preflight requires --compare-json") {
+		t.Fatalf("expected compare-json requirement, got:\n%s", stdout.String())
+	}
+}
+
+func TestPreflightCompareDecisionSelectorsFiltersMaterializeWarning(t *testing.T) {
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e1", Role: "button", Name: "Save", StructureKey: "body>main>button:nth(1)"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e2", Role: "button", Name: "Save", StructureKey: "body>main>button:nth(1)"},
+			},
+		},
+	}
+	decisions := []compareDecision{
+		{Kind: "pair", Old: "?", OldSelector: "#legacy-save", New: "@e2", Confidence: "high", Line: 7},
+	}
+	validation := validateCompareDecisions(decisions, &report)
+	if validation.Summary.Warnings != 1 {
+		t.Fatalf("expected selector materialize warning before preflight: %+v", validation)
+	}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
+		if !oldSide || selector != "#legacy-save" {
+			t.Fatalf("unexpected selector resolution request old=%v selector=%q", oldSide, selector)
+		}
+		return compareDecisionRefResolution{Ref: "@e1", MatchedBy: "structure_key"}, nil
+	}
+
+	preflight := preflightCompareDecisionSelectors(decisions, report, resolver)
+	if len(preflight.Issues) != 0 || preflight.Count != 1 {
+		t.Fatalf("unexpected preflight result: %+v", preflight)
+	}
+	applyCompareDecisionSelectorPreflightReport(&validation, preflight)
+	if validation.Summary.Errors != 0 || validation.Summary.Warnings != 0 || validation.Summary.SelectorPreflighted != 1 || !validation.Summary.SelectorPreflightUsed {
+		t.Fatalf("unexpected validation after preflight: %+v", validation)
+	}
+}
+
+func TestPreflightCompareDecisionSelectorsChecksNonHighSelectors(t *testing.T) {
+	report := compareReport{
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{{Ref: "@e2", Role: "link", Name: "Jobs"}},
+		},
+	}
+	decisions := []compareDecision{
+		{Kind: "accepted_added", NewSelector: "main a.jobs", Confidence: "unknown", Line: 3},
+	}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
+		if oldSide || selector != "main a.jobs" {
+			t.Fatalf("unexpected selector resolution request old=%v selector=%q", oldSide, selector)
+		}
+		return compareDecisionRefResolution{Ref: "@e2", MatchedBy: "content"}, nil
+	}
+
+	preflight := preflightCompareDecisionSelectors(decisions, report, resolver)
+	if len(preflight.Issues) != 0 || preflight.Count != 1 {
+		t.Fatalf("unexpected preflight result: %+v", preflight)
+	}
+}
+
 func TestRunCompareValidateDecisionsUsesReviewSummaryClusters(t *testing.T) {
 	dir := t.TempDir()
 	decisionsPath := filepath.Join(dir, "cluster-decisions.jsonl")
