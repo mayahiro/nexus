@@ -38,6 +38,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, heuristic, or histogram")
 	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
 	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
+	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -124,6 +125,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		MatchMode:        normalizedMatchMode,
 		NodeScope:        normalizedNodeScope,
 		MatchingDebug:    *matchingDebug,
+		DecisionsFile:    *decisionsFile,
 		WaitSelector:     *waitSelector,
 		ScopeSelector:    *scopeSelector,
 		OldScopeSelector: *oldScopeSelector,
@@ -310,26 +312,38 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 		return compareReport{}, fmt.Errorf("new side %w", err)
 	}
 
-	return buildCompareReportWithDebug(
-		buildCompareSnapshot(oldObservation, compareSnapshotOptions{
-			IgnoreText:    ignorePatterns,
-			IgnoreNode:    ignoreRules,
-			MaskNode:      maskRules,
-			CSSProperties: cssProperties,
-			CompareLayout: run.CompareLayout,
-			NodeScope:     nodeScope,
-		}),
-		buildCompareSnapshot(newObservation, compareSnapshotOptions{
-			IgnoreText:    ignorePatterns,
-			IgnoreNode:    ignoreRules,
-			MaskNode:      maskRules,
-			CSSProperties: cssProperties,
-			CompareLayout: run.CompareLayout,
-			NodeScope:     nodeScope,
-		}),
+	oldSnapshot := buildCompareSnapshot(oldObservation, compareSnapshotOptions{
+		IgnoreText:    ignorePatterns,
+		IgnoreNode:    ignoreRules,
+		MaskNode:      maskRules,
+		CSSProperties: cssProperties,
+		CompareLayout: run.CompareLayout,
+		NodeScope:     nodeScope,
+	})
+	newSnapshot := buildCompareSnapshot(newObservation, compareSnapshotOptions{
+		IgnoreText:    ignorePatterns,
+		IgnoreNode:    ignoreRules,
+		MaskNode:      maskRules,
+		CSSProperties: cssProperties,
+		CompareLayout: run.CompareLayout,
+		NodeScope:     nodeScope,
+	})
+	decisions, err := loadCompareDecisions(run.DecisionsFile)
+	if err != nil {
+		return compareReport{}, err
+	}
+	decisionMatches, err := compareResolvePairDecisionMatches(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
+	if err != nil {
+		return compareReport{}, err
+	}
+
+	return buildCompareReportWithDecisionMatches(
+		oldSnapshot,
+		newSnapshot,
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
 		matchMode,
 		run.MatchingDebug,
+		decisionMatches,
 	), nil
 }
 

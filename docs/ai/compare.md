@@ -73,6 +73,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ma
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable --scope-selector 'main'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 ```
 
 Session-to-session compare:
@@ -118,6 +119,19 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 
 JSON findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
 
+## Pair Decisions
+
+Use `--decisions-file <jsonl>` when an AI or human has reviewed ambiguous candidates and wants compare to reuse high-confidence pairings.
+
+Each line is one JSON object. Compare applies only high-confidence `pair` entries before automatic matching:
+
+```jsonl
+{"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"bbox and role/name match; aria-label changed as an a11y improvement"}
+{"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
+```
+
+`old_fingerprint` and `new_fingerprint` may be included to detect stale refs. Non-high entries are accepted as review notes but are not used as anchors or matches.
+
 ## Matching Debug
 
 Use `--matching-debug` when collecting false positive or false negative examples. It keeps plain terminal output unchanged and adds `matching_debug` to JSON and markdown reports.
@@ -128,6 +142,7 @@ Use `--matching-debug` when collecting false positive or false negative examples
 - accepted `matches` with `matched_by`, score, and reasons
 - selected low-occurrence `anchors`
 - anchored `regions` with old/new original index ranges and match counts
+- `ambiguous_candidates` with old node context, ranked new candidates, scores, shared keys, differing keys, and bounds
 - `ambiguous_matches_skipped`
 - `unmatched_old` and `unmatched_new`
 
@@ -138,7 +153,7 @@ Use `--matching-debug` when collecting false positive or false negative examples
 - `semantic` keeps actionable nodes plus named or content-bearing semantic nodes such as headings, landmarks, status, tables, images, and `data-testid` nodes
 - use `semantic` with `--scope-selector` and `--match-mode stable` first; move to `heuristic` or experimental `histogram` only when stable keys are incomplete
 
-JSON summaries include `matched_nodes`, `exact_matches`, `stable_matches`, `heuristic_matches`, `histogram_matches`, and `ambiguous_matches_skipped` when applicable.
+JSON summaries include `matched_nodes`, `exact_matches`, `stable_matches`, `heuristic_matches`, `histogram_matches`, `decision_matches`, and `ambiguous_matches_skipped` when applicable.
 
 ## Failure Triage
 

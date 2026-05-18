@@ -73,6 +73,8 @@ Avoid:
 ```text
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector '[data-testid="orders-loaded"]'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --old-scope-selector '#legacy-orders' --new-scope-selector 'main [data-testid="orders"]'
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 nxctl flow run --manifest migration-flow.json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
@@ -87,3 +89,16 @@ Assume timing first.
 2. confirm whether the target content is present
 3. strengthen readiness
 4. rerun compare before concluding there is a regression
+
+## AI-Assisted Pair Review
+
+When automatic matching leaves ambiguous or unmatched nodes, rerun compare with `--matching-debug --output-json compare-debug.json`.
+
+Review `matching_debug.ambiguous_candidates`, then append high-confidence decisions to a JSONL file:
+
+```jsonl
+{"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"same role/name and nearby bbox"}
+{"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs human review"}
+```
+
+Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` entries affect matching; other entries remain review notes.

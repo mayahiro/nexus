@@ -251,6 +251,107 @@ func TestCompareMatchingDebugIncludesHistogramDetails(t *testing.T) {
 	}
 }
 
+func TestCompareMatchingDebugIncludesAmbiguousCandidates(t *testing.T) {
+	report := buildCompareReportWithDebug(
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{
+					Fingerprint:   "button|Save",
+					Role:          "button",
+					Label:         "Save",
+					Name:          "Save",
+					Visible:       true,
+					Enabled:       true,
+					Invokable:     true,
+					OriginalIndex: 0,
+					Tag:           "button",
+					MatchBounds:   &api.Rect{X: 100, Y: 100, W: 120, H: 40},
+				},
+			},
+		},
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{
+					Fingerprint:   "button|Save changes",
+					Ref:           "@e2",
+					Role:          "button",
+					Label:         "Save changes",
+					Name:          "Save changes",
+					Visible:       true,
+					Enabled:       true,
+					Invokable:     true,
+					OriginalIndex: 0,
+					Tag:           "button",
+					MatchBounds:   &api.Rect{X: 100, Y: 100, W: 120, H: 40},
+				},
+				{
+					Fingerprint:   "button|Save updates",
+					Ref:           "@e3",
+					Role:          "button",
+					Label:         "Save updates",
+					Name:          "Save updates",
+					Visible:       true,
+					Enabled:       true,
+					Invokable:     true,
+					OriginalIndex: 1,
+					Tag:           "button",
+					MatchBounds:   &api.Rect{X: 102, Y: 100, W: 120, H: 40},
+				},
+			},
+		},
+		nil,
+		compareMatchModeHeuristic,
+		true,
+	)
+
+	debug := report.MatchingDebug
+	if debug == nil || len(debug.AmbiguousCandidates) != 1 {
+		t.Fatalf("expected one ambiguous candidate entry: %+v", debug)
+	}
+	candidate := debug.AmbiguousCandidates[0]
+	if candidate.ReasonSkipped == "" || len(candidate.NewCandidates) != 2 {
+		t.Fatalf("expected candidate details: %+v", candidate)
+	}
+	if candidate.NewCandidates[0].Score == 0 || !slices.Contains(candidate.NewCandidates[0].SharedKeys, "bbox-near") {
+		t.Fatalf("expected scored candidate evidence: %+v", candidate.NewCandidates)
+	}
+}
+
+func TestCompareHighConfidenceDecisionPairsNodes(t *testing.T) {
+	oldSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{Fingerprint: "button|Save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+		},
+	}
+	newSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{Fingerprint: "button|Submit", Ref: "@e2", Role: "button", Label: "Submit", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+		},
+	}
+	decisionMatches, err := compareResolvePairDecisionMatches(
+		[]compareDecision{{Kind: "pair", Old: "@e1", New: "@e2", Confidence: "high"}},
+		oldSnapshot.Nodes,
+		newSnapshot.Nodes,
+	)
+	if err != nil {
+		t.Fatalf("expected decision to resolve: %v", err)
+	}
+	report := buildCompareReportWithDecisionMatches(oldSnapshot, newSnapshot, nil, compareMatchModeExact, true, decisionMatches)
+
+	if report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 || report.Summary.TextChanged != 1 {
+		t.Fatalf("decision pair should suppress missing/new and compare matched node: %+v", report.Summary)
+	}
+	if report.Summary.DecisionMatches != 1 {
+		t.Fatalf("expected decision match summary: %+v", report.Summary)
+	}
+	if report.Findings[0].MatchedBy != "decision:pair" {
+		t.Fatalf("expected decision metadata: %+v", report.Findings[0])
+	}
+	if report.MatchingDebug == nil || len(report.MatchingDebug.Matches) != 1 || report.MatchingDebug.Matches[0].MatchedBy != "decision:pair" {
+		t.Fatalf("expected decision in matching debug: %+v", report.MatchingDebug)
+	}
+}
+
 func TestNormalizeCompareMatchMode(t *testing.T) {
 	for _, value := range []string{"", "exact", "stable", "heuristic", "histogram", " STABLE "} {
 		if _, err := normalizeCompareMatchMode(value); err != nil {

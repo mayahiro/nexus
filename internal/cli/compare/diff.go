@@ -110,6 +110,10 @@ func buildCompareReport(oldSnapshot compareSnapshot, newSnapshot compareSnapshot
 }
 
 func buildCompareReportWithDebug(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool) compareReport {
+	return buildCompareReportWithDecisionMatches(oldSnapshot, newSnapshot, scope, matchMode, matchingDebug, nil)
+}
+
+func buildCompareReportWithDecisionMatches(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch) compareReport {
 	report := compareReport{
 		Old:   oldSnapshot,
 		New:   newSnapshot,
@@ -172,7 +176,7 @@ func buildCompareReportWithDebug(oldSnapshot compareSnapshot, newSnapshot compar
 		})
 	}
 
-	matchResult := compareMatchNodesWithDebug(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode, matchingDebug)
+	matchResult := compareMatchNodesWithDecisionMatches(oldSnapshot.Nodes, newSnapshot.Nodes, matchMode, matchingDebug, decisionMatches)
 	if matchingDebug {
 		report.MatchingDebug = matchResult.Debug
 	}
@@ -211,6 +215,8 @@ func buildCompareReportWithDebug(oldSnapshot compareSnapshot, newSnapshot compar
 func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {
 	summary.MatchedNodes++
 	switch {
+	case strings.HasPrefix(match.MatchedBy, "decision:"):
+		summary.DecisionMatches++
 	case strings.HasPrefix(match.MatchedBy, "stable:"):
 		summary.StableMatches++
 	case match.MatchedBy == "heuristic":

@@ -86,6 +86,7 @@ type compareSummary struct {
 	StableMatches           int  `json:"stable_matches,omitempty"`
 	HeuristicMatches        int  `json:"heuristic_matches,omitempty"`
 	HistogramMatches        int  `json:"histogram_matches,omitempty"`
+	DecisionMatches         int  `json:"decision_matches,omitempty"`
 	AmbiguousMatchesSkipped int  `json:"ambiguous_matches_skipped,omitempty"`
 	Critical                int  `json:"critical"`
 	Warning                 int  `json:"warning"`
@@ -121,26 +122,33 @@ type compareFinding struct {
 }
 
 type compareMatchingDebug struct {
-	Mode                    string                       `json:"mode"`
-	OldNodes                int                          `json:"old_nodes"`
-	NewNodes                int                          `json:"new_nodes"`
-	MatchedNodes            int                          `json:"matched_nodes"`
-	AmbiguousMatchesSkipped int                          `json:"ambiguous_matches_skipped,omitempty"`
-	Matches                 []compareMatchingDebugMatch  `json:"matches,omitempty"`
-	Anchors                 []compareMatchingDebugAnchor `json:"anchors,omitempty"`
-	Regions                 []compareMatchingDebugRegion `json:"regions,omitempty"`
-	UnmatchedOld            []compareMatchingDebugNode   `json:"unmatched_old,omitempty"`
-	UnmatchedNew            []compareMatchingDebugNode   `json:"unmatched_new,omitempty"`
+	Mode                    string                                   `json:"mode"`
+	OldNodes                int                                      `json:"old_nodes"`
+	NewNodes                int                                      `json:"new_nodes"`
+	MatchedNodes            int                                      `json:"matched_nodes"`
+	AmbiguousMatchesSkipped int                                      `json:"ambiguous_matches_skipped,omitempty"`
+	Matches                 []compareMatchingDebugMatch              `json:"matches,omitempty"`
+	Anchors                 []compareMatchingDebugAnchor             `json:"anchors,omitempty"`
+	Regions                 []compareMatchingDebugRegion             `json:"regions,omitempty"`
+	AmbiguousCandidates     []compareMatchingDebugAmbiguousCandidate `json:"ambiguous_candidates,omitempty"`
+	UnmatchedOld            []compareMatchingDebugNode               `json:"unmatched_old,omitempty"`
+	UnmatchedNew            []compareMatchingDebugNode               `json:"unmatched_new,omitempty"`
 }
 
 type compareMatchingDebugNode struct {
-	Index         int    `json:"index"`
-	OriginalIndex int    `json:"original_index"`
-	Ref           string `json:"ref,omitempty"`
-	Locator       string `json:"locator,omitempty"`
-	Role          string `json:"role,omitempty"`
-	Label         string `json:"label,omitempty"`
-	Fingerprint   string `json:"fingerprint,omitempty"`
+	Index         int       `json:"index"`
+	OriginalIndex int       `json:"original_index"`
+	Ref           string    `json:"ref,omitempty"`
+	Locator       string    `json:"locator,omitempty"`
+	Role          string    `json:"role,omitempty"`
+	Label         string    `json:"label,omitempty"`
+	Name          string    `json:"name,omitempty"`
+	Text          string    `json:"text,omitempty"`
+	Href          string    `json:"href,omitempty"`
+	TestID        string    `json:"testid,omitempty"`
+	AriaLabel     string    `json:"aria_label,omitempty"`
+	Fingerprint   string    `json:"fingerprint,omitempty"`
+	Bounds        *api.Rect `json:"bounds,omitempty"`
 }
 
 type compareMatchingDebugAnchor struct {
@@ -173,6 +181,23 @@ type compareMatchingDebugRegion struct {
 	AmbiguousSkipped      int `json:"ambiguous_skipped,omitempty"`
 }
 
+type compareMatchingDebugAmbiguousCandidate struct {
+	Old           compareMatchingDebugNode              `json:"old"`
+	NewCandidates []compareMatchingDebugCandidateOption `json:"new_candidates,omitempty"`
+	Source        string                                `json:"source,omitempty"`
+	KeyKind       string                                `json:"key_kind,omitempty"`
+	KeyValue      string                                `json:"key_value,omitempty"`
+	ReasonSkipped string                                `json:"reason_skipped,omitempty"`
+}
+
+type compareMatchingDebugCandidateOption struct {
+	Node          compareMatchingDebugNode `json:"node"`
+	Score         int                      `json:"score,omitempty"`
+	Reasons       []string                 `json:"reasons,omitempty"`
+	SharedKeys    []string                 `json:"shared_keys,omitempty"`
+	DifferingKeys []string                 `json:"differing_keys,omitempty"`
+}
+
 type compareReport struct {
 	Old           compareSnapshot       `json:"old"`
 	New           compareSnapshot       `json:"new"`
@@ -193,6 +218,7 @@ type compareManifestDefaults struct {
 	MatchMode        string   `json:"match_mode,omitempty"`
 	NodeScope        string   `json:"node_scope,omitempty"`
 	MatchingDebug    bool     `json:"matching_debug,omitempty"`
+	DecisionsFile    string   `json:"decisions_file,omitempty"`
 	WaitSelector     string   `json:"wait_selector,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
 	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
@@ -219,6 +245,7 @@ type compareManifestPage struct {
 	MatchMode        *string  `json:"match_mode,omitempty"`
 	NodeScope        *string  `json:"node_scope,omitempty"`
 	MatchingDebug    *bool    `json:"matching_debug,omitempty"`
+	DecisionsFile    *string  `json:"decisions_file,omitempty"`
 	WaitSelector     *string  `json:"wait_selector,omitempty"`
 	ScopeSelector    *string  `json:"scope_selector,omitempty"`
 	OldScopeSelector *string  `json:"old_scope_selector,omitempty"`
@@ -267,6 +294,7 @@ type compareRun struct {
 	MatchMode        string
 	NodeScope        string
 	MatchingDebug    bool
+	DecisionsFile    string
 	WaitSelector     string
 	ScopeSelector    string
 	OldScopeSelector string

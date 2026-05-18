@@ -15,6 +15,8 @@ const (
 	compareHeuristicMinimumScore  = 75
 	compareHeuristicMinimumMargin = 10
 	compareHistogramMaxOccurrence = 3
+	compareAmbiguousMaxEntries    = 50
+	compareAmbiguousMaxCandidates = 5
 )
 
 const (
@@ -37,11 +39,12 @@ type compareNodeMatch struct {
 }
 
 type compareNodeMatchResult struct {
-	Matches          []compareNodeMatch
-	UnmatchedOld     []int
-	UnmatchedNew     []int
-	AmbiguousSkipped int
-	Debug            *compareMatchingDebug
+	Matches             []compareNodeMatch
+	UnmatchedOld        []int
+	UnmatchedNew        []int
+	AmbiguousSkipped    int
+	AmbiguousCandidates []compareAmbiguousCandidate
+	Debug               *compareMatchingDebug
 }
 
 type compareStableIdentityKey struct {
@@ -75,6 +78,23 @@ type compareHistogramRegion struct {
 	NewIndices []int
 }
 
+type compareAmbiguousCandidate struct {
+	OldIndex      int
+	NewCandidates []compareAmbiguousCandidateOption
+	Source        string
+	KeyKind       string
+	KeyValue      string
+	ReasonSkipped string
+}
+
+type compareAmbiguousCandidateOption struct {
+	NewIndex      int
+	Score         int
+	Reasons       []string
+	SharedKeys    []string
+	DifferingKeys []string
+}
+
 func normalizeCompareMatchMode(value string) (string, error) {
 	normalized := strings.ToLower(strings.TrimSpace(value))
 	if normalized == "" {
@@ -93,24 +113,51 @@ func compareMatchNodes(oldNodes []compareSnapshotNode, newNodes []compareSnapsho
 }
 
 func compareMatchNodesWithDebug(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, mode string, debug bool) compareNodeMatchResult {
+	return compareMatchNodesWithDecisionMatches(oldNodes, newNodes, mode, debug, nil)
+}
+
+func compareMatchNodesWithDecisionMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, mode string, debug bool, decisionMatches []compareNodeMatch) compareNodeMatchResult {
 	normalized, err := normalizeCompareMatchMode(mode)
 	if err != nil {
 		normalized = defaultCompareMatchMode
 	}
 
-	oldIndices := compareAllNodeIndices(oldNodes)
-	newIndices := compareAllNodeIndices(newNodes)
+	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
+	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+	decisionAnchors := make([]compareHistogramAnchorCandidate, 0, len(decisionMatches))
+	for _, match := range decisionMatches {
+		delete(unmatchedOld, match.OldIndex)
+		delete(unmatchedNew, match.NewIndex)
+		decisionAnchors = append(decisionAnchors, compareHistogramAnchorCandidate{
+			OldIndex: match.OldIndex,
+			NewIndex: match.NewIndex,
+			Key: compareStableIdentityKey{
+				Priority: -1,
+				Kind:     "decision",
+				Value:    compareDecisionAnchorValue(oldNodes, newNodes, match),
+			},
+		})
+	}
+
 	var result compareNodeMatchResult
 	switch normalized {
 	case compareMatchModeStable:
-		result = compareStableNodeMatches(oldNodes, newNodes)
+		result = compareStableNodeMatchesWithSets(oldNodes, newNodes, unmatchedOld, unmatchedNew)
 	case compareMatchModeHeuristic:
-		stable := compareStableNodeMatches(oldNodes, newNodes)
+		stable := compareStableNodeMatchesWithSets(oldNodes, newNodes, unmatchedOld, unmatchedNew)
 		result = compareHeuristicNodeMatches(oldNodes, newNodes, stable)
 	case compareMatchModeHistogram:
-		result = compareHistogramNodeMatches(oldNodes, newNodes, debug)
+		result = compareHistogramNodeMatchesWithSets(oldNodes, newNodes, debug, unmatchedOld, unmatchedNew, decisionAnchors)
 	default:
-		result = compareExactNodeMatches(oldNodes, newNodes, oldIndices, newIndices, "", nil)
+		result = compareExactNodeMatches(oldNodes, newNodes, compareSortedNodeIndexSet(unmatchedOld), compareSortedNodeIndexSet(unmatchedNew), "", nil)
+	}
+	if len(decisionMatches) > 0 {
+		matches := append([]compareNodeMatch(nil), decisionMatches...)
+		result.Matches = append(matches, result.Matches...)
+		if debug && result.Debug != nil {
+			result.Debug.MatchedNodes = len(result.Matches)
+			result.Debug.Matches = buildCompareMatchingDebugMatches(oldNodes, newNodes, result.Matches)
+		}
 	}
 	if debug && result.Debug == nil {
 		result.Debug = buildCompareMatchingDebug(normalized, oldNodes, newNodes, result)
@@ -119,9 +166,22 @@ func compareMatchNodesWithDebug(oldNodes []compareSnapshotNode, newNodes []compa
 }
 
 func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, debug bool) compareNodeMatchResult {
-	anchors, ambiguous := compareHistogramAnchors(oldNodes, newNodes)
-	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
-	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+	return compareHistogramNodeMatchesWithSets(
+		oldNodes,
+		newNodes,
+		debug,
+		compareNodeIndexSet(compareAllNodeIndices(oldNodes)),
+		compareNodeIndexSet(compareAllNodeIndices(newNodes)),
+		nil,
+	)
+}
+
+func compareHistogramNodeMatchesWithSets(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, debug bool, unmatchedOld map[int]struct{}, unmatchedNew map[int]struct{}, decisionAnchors []compareHistogramAnchorCandidate) compareNodeMatchResult {
+	anchors, ambiguous, ambiguousCandidates := compareHistogramAnchorsForSets(oldNodes, newNodes, unmatchedOld, unmatchedNew)
+	anchors = append(append([]compareHistogramAnchorCandidate(nil), decisionAnchors...), anchors...)
+	compareSortHistogramAnchors(oldNodes, newNodes, anchors)
+	unmatchedOld = compareCloneNodeIndexSet(unmatchedOld)
+	unmatchedNew = compareCloneNodeIndexSet(unmatchedNew)
 	matches := make([]compareNodeMatch, 0, len(anchors))
 	regionsDebug := make([]compareMatchingDebugRegion, 0)
 
@@ -156,16 +216,18 @@ func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 		compareHistogramApplyMatches(heuristic.Matches, unmatchedOld, unmatchedNew)
 		matches = append(matches, heuristic.Matches...)
 		ambiguous += heuristic.AmbiguousSkipped
+		ambiguousCandidates = appendAmbiguousCandidates(ambiguousCandidates, heuristic.AmbiguousCandidates...)
 		if debug {
 			regionsDebug = append(regionsDebug, buildCompareMatchingDebugRegion(regionIndex, oldNodes, newNodes, region, len(exact.Matches), len(heuristic.Matches), exact.AmbiguousSkipped+heuristic.AmbiguousSkipped))
 		}
 	}
 
 	result := compareNodeMatchResult{
-		Matches:          matches,
-		UnmatchedOld:     compareSortedNodeIndexSet(unmatchedOld),
-		UnmatchedNew:     compareSortedNodeIndexSet(unmatchedNew),
-		AmbiguousSkipped: ambiguous,
+		Matches:             matches,
+		UnmatchedOld:        compareSortedNodeIndexSet(unmatchedOld),
+		UnmatchedNew:        compareSortedNodeIndexSet(unmatchedNew),
+		AmbiguousSkipped:    ambiguous,
+		AmbiguousCandidates: ambiguousCandidates,
 	}
 	if debug {
 		result.Debug = buildCompareMatchingDebug(compareMatchModeHistogram, oldNodes, newNodes, result)
@@ -176,17 +238,26 @@ func compareHistogramNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 }
 
 func compareHistogramAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareHistogramAnchorCandidate, int) {
-	candidates, ambiguous := compareHistogramAnchorCandidates(oldNodes, newNodes)
-	anchors := compareHistogramLongestIncreasingAnchors(oldNodes, newNodes, candidates)
-	compareSortHistogramAnchors(oldNodes, newNodes, anchors)
+	anchors, ambiguous, _ := compareHistogramAnchorsForSets(
+		oldNodes,
+		newNodes,
+		compareNodeIndexSet(compareAllNodeIndices(oldNodes)),
+		compareNodeIndexSet(compareAllNodeIndices(newNodes)),
+	)
 	return anchors, ambiguous
 }
 
-func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareHistogramAnchorCandidate, int) {
-	oldSet := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
-	newSet := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+func compareHistogramAnchorsForSets(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldSet map[int]struct{}, newSet map[int]struct{}) ([]compareHistogramAnchorCandidate, int, []compareAmbiguousCandidate) {
+	candidates, ambiguous, ambiguousCandidates := compareHistogramAnchorCandidates(oldNodes, newNodes, oldSet, newSet)
+	anchors := compareHistogramLongestIncreasingAnchors(oldNodes, newNodes, candidates)
+	compareSortHistogramAnchors(oldNodes, newNodes, anchors)
+	return anchors, ambiguous, ambiguousCandidates
+}
+
+func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldSet map[int]struct{}, newSet map[int]struct{}) ([]compareHistogramAnchorCandidate, int, []compareAmbiguousCandidate) {
 	pairKeys := map[[2]int]compareStableIdentityKey{}
 	ambiguous := 0
+	ambiguousCandidates := make([]compareAmbiguousCandidate, 0)
 
 	for priority := compareStablePriorityTestID; priority <= compareStablePriorityFingerprint; priority++ {
 		oldByKey := compareStableKeyIndex(oldNodes, oldSet, priority)
@@ -199,6 +270,10 @@ func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes [
 			compareSortNodeIndicesBySequence(newNodes, newIndexes)
 			if len(oldIndexes) != len(newIndexes) || len(oldIndexes) > compareHistogramMaxOccurrence {
 				ambiguous++
+				ambiguousCandidates = appendAmbiguousCandidates(
+					ambiguousCandidates,
+					compareBuildAmbiguousKeyCandidates(oldNodes, newNodes, oldIndexes, newIndexes, "histogram-anchor", key, "key occurrence mismatch or above histogram threshold")...,
+				)
 				continue
 			}
 			for i := range oldIndexes {
@@ -253,7 +328,7 @@ func compareHistogramAnchorCandidates(oldNodes []compareSnapshotNode, newNodes [
 		usedNew[candidate.NewIndex] = struct{}{}
 		selected = append(selected, candidate)
 	}
-	return selected, ambiguous
+	return selected, ambiguous, ambiguousCandidates
 }
 
 func compareHistogramLongestIncreasingAnchors(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, candidates []compareHistogramAnchorCandidate) []compareHistogramAnchorCandidate {
@@ -361,10 +436,20 @@ func compareSortHistogramAnchors(oldNodes []compareSnapshotNode, newNodes []comp
 }
 
 func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) compareNodeMatchResult {
-	unmatchedOld := compareNodeIndexSet(compareAllNodeIndices(oldNodes))
-	unmatchedNew := compareNodeIndexSet(compareAllNodeIndices(newNodes))
+	return compareStableNodeMatchesWithSets(
+		oldNodes,
+		newNodes,
+		compareNodeIndexSet(compareAllNodeIndices(oldNodes)),
+		compareNodeIndexSet(compareAllNodeIndices(newNodes)),
+	)
+}
+
+func compareStableNodeMatchesWithSets(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldSet map[int]struct{}, newSet map[int]struct{}) compareNodeMatchResult {
+	unmatchedOld := compareCloneNodeIndexSet(oldSet)
+	unmatchedNew := compareCloneNodeIndexSet(newSet)
 	matches := make([]compareNodeMatch, 0)
 	ambiguous := 0
+	ambiguousCandidates := make([]compareAmbiguousCandidate, 0)
 
 	for priority := compareStablePriorityTestID; priority <= compareStablePriorityFingerprint; priority++ {
 		oldByKey := compareStableKeyIndex(oldNodes, unmatchedOld, priority)
@@ -375,6 +460,10 @@ func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compare
 			newIndexes := newByKey[key]
 			if len(oldIndexes) != 1 || len(newIndexes) != 1 {
 				ambiguous++
+				ambiguousCandidates = appendAmbiguousCandidates(
+					ambiguousCandidates,
+					compareBuildAmbiguousKeyCandidates(oldNodes, newNodes, oldIndexes, newIndexes, "stable", key, "multiple candidates for stable key")...,
+				)
 				continue
 			}
 			oldIndex := oldIndexes[0]
@@ -406,10 +495,11 @@ func compareStableNodeMatches(oldNodes []compareSnapshotNode, newNodes []compare
 	)
 	matches = append(matches, exact.Matches...)
 	return compareNodeMatchResult{
-		Matches:          matches,
-		UnmatchedOld:     exact.UnmatchedOld,
-		UnmatchedNew:     exact.UnmatchedNew,
-		AmbiguousSkipped: ambiguous + exact.AmbiguousSkipped,
+		Matches:             matches,
+		UnmatchedOld:        exact.UnmatchedOld,
+		UnmatchedNew:        exact.UnmatchedNew,
+		AmbiguousSkipped:    ambiguous + exact.AmbiguousSkipped,
+		AmbiguousCandidates: ambiguousCandidates,
 	}
 }
 
@@ -418,10 +508,11 @@ func compareHeuristicNodeMatches(oldNodes []compareSnapshotNode, newNodes []comp
 	heuristic := compareHeuristicUnmatchedNodes(oldNodes, newNodes, base.UnmatchedOld, base.UnmatchedNew)
 	matches = append(matches, heuristic.Matches...)
 	return compareNodeMatchResult{
-		Matches:          matches,
-		UnmatchedOld:     heuristic.UnmatchedOld,
-		UnmatchedNew:     heuristic.UnmatchedNew,
-		AmbiguousSkipped: base.AmbiguousSkipped + heuristic.AmbiguousSkipped,
+		Matches:             matches,
+		UnmatchedOld:        heuristic.UnmatchedOld,
+		UnmatchedNew:        heuristic.UnmatchedNew,
+		AmbiguousSkipped:    base.AmbiguousSkipped + heuristic.AmbiguousSkipped,
+		AmbiguousCandidates: appendAmbiguousCandidates(append([]compareAmbiguousCandidate(nil), base.AmbiguousCandidates...), heuristic.AmbiguousCandidates...),
 	}
 }
 
@@ -617,11 +708,13 @@ func compareHeuristicUnmatchedNodes(oldNodes []compareSnapshotNode, newNodes []c
 	matchedNew := map[int]struct{}{}
 	matches := make([]compareNodeMatch, 0)
 	ambiguous := 0
+	ambiguousCandidates := make([]compareAmbiguousCandidate, 0)
 	for _, oldIndex := range oldIndices {
 		best, ok := oldBest[oldIndex]
 		if !ok || !compareBestCandidateMarginOK(best) {
 			if ok {
 				ambiguous++
+				ambiguousCandidates = appendHeuristicAmbiguousCandidate(ambiguousCandidates, oldNodes, newNodes, oldIndex, newIndices, scores, "candidate margin below threshold")
 			}
 			continue
 		}
@@ -629,6 +722,7 @@ func compareHeuristicUnmatchedNodes(oldNodes []compareSnapshotNode, newNodes []c
 		reverse, ok := newBest[newIndex]
 		if !ok || reverse.Index != oldIndex || !compareBestCandidateMarginOK(reverse) {
 			ambiguous++
+			ambiguousCandidates = appendHeuristicAmbiguousCandidate(ambiguousCandidates, oldNodes, newNodes, oldIndex, newIndices, scores, "candidate is not mutual best")
 			continue
 		}
 		if _, ok := matchedOld[oldIndex]; ok {
@@ -650,10 +744,11 @@ func compareHeuristicUnmatchedNodes(oldNodes []compareSnapshotNode, newNodes []c
 	}
 
 	return compareNodeMatchResult{
-		Matches:          matches,
-		UnmatchedOld:     compareUnmatchedNodeIndices(oldIndices, matchedOld),
-		UnmatchedNew:     compareUnmatchedNodeIndices(newIndices, matchedNew),
-		AmbiguousSkipped: ambiguous,
+		Matches:             matches,
+		UnmatchedOld:        compareUnmatchedNodeIndices(oldIndices, matchedOld),
+		UnmatchedNew:        compareUnmatchedNodeIndices(newIndices, matchedNew),
+		AmbiguousSkipped:    ambiguous,
+		AmbiguousCandidates: ambiguousCandidates,
 	}
 }
 
@@ -912,4 +1007,148 @@ func compareNodeSequenceBefore(nodes []compareSnapshotNode, left int, right int)
 		return leftOriginal < rightOriginal
 	}
 	return left < right
+}
+
+func compareCloneNodeIndexSet(values map[int]struct{}) map[int]struct{} {
+	cloned := make(map[int]struct{}, len(values))
+	for index := range values {
+		cloned[index] = struct{}{}
+	}
+	return cloned
+}
+
+func compareDecisionAnchorValue(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, match compareNodeMatch) string {
+	oldRef := ""
+	newRef := ""
+	if match.OldIndex >= 0 && match.OldIndex < len(oldNodes) {
+		oldRef = oldNodes[match.OldIndex].Ref
+	}
+	if match.NewIndex >= 0 && match.NewIndex < len(newNodes) {
+		newRef = newNodes[match.NewIndex].Ref
+	}
+	return strings.TrimSpace(oldRef + "->" + newRef)
+}
+
+func appendAmbiguousCandidates(current []compareAmbiguousCandidate, values ...compareAmbiguousCandidate) []compareAmbiguousCandidate {
+	for _, value := range values {
+		if len(current) >= compareAmbiguousMaxEntries {
+			return current
+		}
+		if len(value.NewCandidates) == 0 {
+			continue
+		}
+		current = append(current, value)
+	}
+	return current
+}
+
+func compareBuildAmbiguousKeyCandidates(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldIndexes []int, newIndexes []int, source string, key compareStableIdentityKey, reason string) []compareAmbiguousCandidate {
+	candidates := make([]compareAmbiguousCandidate, 0, len(oldIndexes))
+	for _, oldIndex := range oldIndexes {
+		candidate := compareAmbiguousCandidate{
+			OldIndex:      oldIndex,
+			Source:        source,
+			KeyKind:       key.Kind,
+			KeyValue:      key.Value,
+			ReasonSkipped: reason,
+			NewCandidates: compareAmbiguousOptionsForOld(oldNodes, newNodes, oldIndex, newIndexes, nil),
+		}
+		if len(candidate.NewCandidates) == 0 {
+			continue
+		}
+		candidates = append(candidates, candidate)
+		if len(candidates) >= compareAmbiguousMaxEntries {
+			break
+		}
+	}
+	return candidates
+}
+
+func appendHeuristicAmbiguousCandidate(current []compareAmbiguousCandidate, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldIndex int, newIndexes []int, scores map[[2]int]compareHeuristicScore, reason string) []compareAmbiguousCandidate {
+	if len(current) >= compareAmbiguousMaxEntries {
+		return current
+	}
+	candidate := compareAmbiguousCandidate{
+		OldIndex:      oldIndex,
+		Source:        "heuristic",
+		ReasonSkipped: reason,
+		NewCandidates: compareAmbiguousOptionsForOld(oldNodes, newNodes, oldIndex, newIndexes, scores),
+	}
+	return appendAmbiguousCandidates(current, candidate)
+}
+
+func compareAmbiguousOptionsForOld(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, oldIndex int, newIndexes []int, scores map[[2]int]compareHeuristicScore) []compareAmbiguousCandidateOption {
+	options := make([]compareAmbiguousCandidateOption, 0, len(newIndexes))
+	for _, newIndex := range newIndexes {
+		score, ok := scores[[2]int{oldIndex, newIndex}]
+		if scores != nil && !ok {
+			continue
+		}
+		if scores == nil {
+			score = compareHeuristicNodeScore(oldNodes[oldIndex], newNodes[newIndex])
+		}
+		shared, differing := compareAmbiguousEvidence(oldNodes[oldIndex], newNodes[newIndex])
+		options = append(options, compareAmbiguousCandidateOption{
+			NewIndex:      newIndex,
+			Score:         score.Score,
+			Reasons:       append([]string(nil), score.Reasons...),
+			SharedKeys:    shared,
+			DifferingKeys: differing,
+		})
+	}
+	slices.SortFunc(options, func(a compareAmbiguousCandidateOption, b compareAmbiguousCandidateOption) int {
+		switch {
+		case a.Score > b.Score:
+			return -1
+		case a.Score < b.Score:
+			return 1
+		case a.NewIndex < b.NewIndex:
+			return -1
+		case a.NewIndex > b.NewIndex:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if len(options) > compareAmbiguousMaxCandidates {
+		options = options[:compareAmbiguousMaxCandidates]
+	}
+	return options
+}
+
+func compareAmbiguousEvidence(oldNode compareSnapshotNode, newNode compareSnapshotNode) ([]string, []string) {
+	shared := make([]string, 0)
+	differing := make([]string, 0)
+	addField := func(key string, oldValue string, newValue string) {
+		oldValue = strings.TrimSpace(oldValue)
+		newValue = strings.TrimSpace(newValue)
+		if oldValue == "" && newValue == "" {
+			return
+		}
+		if oldValue != "" && newValue != "" && oldValue == newValue {
+			shared = append(shared, key)
+			return
+		}
+		differing = append(differing, key)
+	}
+
+	addField("role", oldNode.Role, newNode.Role)
+	addField("tag", oldNode.Tag, newNode.Tag)
+	addField("name", oldNode.Name, newNode.Name)
+	addField("text", oldNode.Text, newNode.Text)
+	addField("href", oldNode.Href, newNode.Href)
+	addField("testid", oldNode.TestID, newNode.TestID)
+	addField("id", oldNode.IDAttr, newNode.IDAttr)
+	addField("placeholder", oldNode.Placeholder, newNode.Placeholder)
+	addField("aria-label", oldNode.AriaLabel, newNode.AriaLabel)
+	addField("fingerprint", oldNode.Fingerprint, newNode.Fingerprint)
+	addField("state", compareNodeState(oldNode), compareNodeState(newNode))
+	if oldNode.MatchBounds != nil && newNode.MatchBounds != nil {
+		if compareLayoutCenterScore(oldNode, newNode) > 0 {
+			shared = append(shared, "bbox-near")
+		} else {
+			differing = append(differing, "bbox")
+		}
+	}
+	return shared, differing
 }

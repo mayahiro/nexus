@@ -10,6 +10,7 @@ func buildCompareMatchingDebug(mode string, oldNodes []compareSnapshotNode, newN
 		Matches:                 buildCompareMatchingDebugMatches(oldNodes, newNodes, result.Matches),
 		UnmatchedOld:            buildCompareMatchingDebugNodes(oldNodes, result.UnmatchedOld, true),
 		UnmatchedNew:            buildCompareMatchingDebugNodes(newNodes, result.UnmatchedNew, false),
+		AmbiguousCandidates:     buildCompareMatchingDebugAmbiguousCandidates(oldNodes, newNodes, result.AmbiguousCandidates),
 	}
 }
 
@@ -36,13 +37,19 @@ func buildCompareMatchingDebugAnchors(oldNodes []compareSnapshotNode, newNodes [
 	}
 	debug := make([]compareMatchingDebugAnchor, 0, len(anchors))
 	for _, anchor := range anchors {
+		matchedBy := "histogram:" + anchor.Key.Kind
+		reasons := []string{anchor.Key.Kind, "low-occurrence-anchor"}
+		if anchor.Key.Kind == "decision" {
+			matchedBy = "decision:pair"
+			reasons = []string{"decision"}
+		}
 		debug = append(debug, compareMatchingDebugAnchor{
 			Old:       buildCompareMatchingDebugNode(oldNodes, anchor.OldIndex, true),
 			New:       buildCompareMatchingDebugNode(newNodes, anchor.NewIndex, false),
 			KeyKind:   anchor.Key.Kind,
 			KeyValue:  anchor.Key.Value,
-			MatchedBy: "histogram:" + anchor.Key.Kind,
-			Reasons:   []string{anchor.Key.Kind, "low-occurrence-anchor"},
+			MatchedBy: matchedBy,
+			Reasons:   reasons,
 		})
 	}
 	return debug
@@ -78,6 +85,34 @@ func buildCompareMatchingDebugNodes(nodes []compareSnapshotNode, indices []int, 
 	return debug
 }
 
+func buildCompareMatchingDebugAmbiguousCandidates(oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode, candidates []compareAmbiguousCandidate) []compareMatchingDebugAmbiguousCandidate {
+	if len(candidates) == 0 {
+		return nil
+	}
+	debug := make([]compareMatchingDebugAmbiguousCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		options := make([]compareMatchingDebugCandidateOption, 0, len(candidate.NewCandidates))
+		for _, option := range candidate.NewCandidates {
+			options = append(options, compareMatchingDebugCandidateOption{
+				Node:          buildCompareMatchingDebugNode(newNodes, option.NewIndex, false),
+				Score:         option.Score,
+				Reasons:       append([]string(nil), option.Reasons...),
+				SharedKeys:    append([]string(nil), option.SharedKeys...),
+				DifferingKeys: append([]string(nil), option.DifferingKeys...),
+			})
+		}
+		debug = append(debug, compareMatchingDebugAmbiguousCandidate{
+			Old:           buildCompareMatchingDebugNode(oldNodes, candidate.OldIndex, true),
+			NewCandidates: options,
+			Source:        candidate.Source,
+			KeyKind:       candidate.KeyKind,
+			KeyValue:      candidate.KeyValue,
+			ReasonSkipped: candidate.ReasonSkipped,
+		})
+	}
+	return debug
+}
+
 func buildCompareMatchingDebugNode(nodes []compareSnapshotNode, index int, oldSide bool) compareMatchingDebugNode {
 	if index < 0 || index >= len(nodes) {
 		return compareMatchingDebugNode{Index: index, OriginalIndex: -1}
@@ -96,7 +131,13 @@ func buildCompareMatchingDebugNode(nodes []compareSnapshotNode, index int, oldSi
 		Locator:       locator,
 		Role:          node.Role,
 		Label:         node.Label,
+		Name:          node.Name,
+		Text:          node.Text,
+		Href:          node.Href,
+		TestID:        node.TestID,
+		AriaLabel:     node.AriaLabel,
 		Fingerprint:   node.Fingerprint,
+		Bounds:        node.MatchBounds,
 	}
 }
 

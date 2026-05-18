@@ -100,7 +100,7 @@ func printCompareReport(w io.Writer, report compareReport) {
 		fmt.Fprintf(w, "layout_changed: %d\n", report.Summary.LayoutChanged)
 	}
 	if report.Summary.MatchedNodes > 0 {
-		fmt.Fprintf(w, "matched_nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches)
+		fmt.Fprintf(w, "matched_nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d, decision: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches, report.Summary.DecisionMatches)
 	}
 	if report.Summary.AmbiguousMatchesSkipped > 0 {
 		fmt.Fprintf(w, "ambiguous_matches_skipped: %d\n", report.Summary.AmbiguousMatchesSkipped)
@@ -173,7 +173,7 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintf(w, "- Warning: %d\n", report.Summary.Warning)
 	fmt.Fprintf(w, "- Info: %d\n", report.Summary.Info)
 	if report.Summary.MatchedNodes > 0 {
-		fmt.Fprintf(w, "- Matched nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches)
+		fmt.Fprintf(w, "- Matched nodes: %d (exact: %d, stable: %d, heuristic: %d, histogram: %d, decision: %d)\n", report.Summary.MatchedNodes, report.Summary.ExactMatches, report.Summary.StableMatches, report.Summary.HeuristicMatches, report.Summary.HistogramMatches, report.Summary.DecisionMatches)
 	}
 	if report.Summary.AmbiguousMatchesSkipped > 0 {
 		fmt.Fprintf(w, "- Ambiguous matches skipped: %d\n", report.Summary.AmbiguousMatchesSkipped)
@@ -285,6 +285,7 @@ func printCompareMarkdownMatchingDebug(w io.Writer, debug *compareMatchingDebug,
 	fmt.Fprintf(w, "- Matches: %d\n", len(debug.Matches))
 	fmt.Fprintf(w, "- Anchors: %d\n", len(debug.Anchors))
 	fmt.Fprintf(w, "- Regions: %d\n", len(debug.Regions))
+	fmt.Fprintf(w, "- Ambiguous candidates: %d\n", len(debug.AmbiguousCandidates))
 	fmt.Fprintf(w, "- Unmatched: old %d / new %d\n", len(debug.UnmatchedOld), len(debug.UnmatchedNew))
 	if len(debug.Anchors) > 0 {
 		fmt.Fprintln(w)
@@ -300,6 +301,28 @@ func printCompareMarkdownMatchingDebug(w io.Writer, debug *compareMatchingDebug,
 		fmt.Fprintln(w)
 		for _, region := range debug.Regions {
 			fmt.Fprintf(w, "- #%d old[%d..%d] nodes=%d new[%d..%d] nodes=%d exact=%d heuristic=%d ambiguous=%d\n", region.Index, region.OldStartOriginalIndex, region.OldEndOriginalIndex, region.OldNodeCount, region.NewStartOriginalIndex, region.NewEndOriginalIndex, region.NewNodeCount, region.ExactMatches, region.HeuristicMatches, region.AmbiguousSkipped)
+		}
+	}
+	if len(debug.AmbiguousCandidates) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%s Ambiguous Candidates\n", childHeading)
+		fmt.Fprintln(w)
+		for _, candidate := range debug.AmbiguousCandidates {
+			fmt.Fprintf(w, "- old `%s` `%s`: %s", firstNonEmpty(candidate.Old.Ref, candidate.Old.Locator), candidate.Old.Label, candidate.ReasonSkipped)
+			if candidate.KeyKind != "" {
+				fmt.Fprintf(w, " (`%s` `%s`)", candidate.KeyKind, candidate.KeyValue)
+			}
+			fmt.Fprintln(w)
+			for _, option := range candidate.NewCandidates {
+				fmt.Fprintf(w, "  - new `%s` `%s` score=%d", firstNonEmpty(option.Node.Ref, option.Node.Locator), option.Node.Label, option.Score)
+				if len(option.SharedKeys) > 0 {
+					fmt.Fprintf(w, " shared=%s", strings.Join(option.SharedKeys, ","))
+				}
+				if len(option.DifferingKeys) > 0 {
+					fmt.Fprintf(w, " differing=%s", strings.Join(option.DifferingKeys, ","))
+				}
+				fmt.Fprintln(w)
+			}
 		}
 	}
 }
