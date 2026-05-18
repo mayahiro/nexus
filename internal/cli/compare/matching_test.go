@@ -1280,6 +1280,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatalf("expected manifest review packet to write: %v", err)
 	}
 	for _, name := range []string{
+		compareReviewFileReview,
 		compareReviewFileManifestJSON,
 		compareReviewFileManifestMarkdown,
 		compareReviewFileIndex,
@@ -1304,8 +1305,19 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if len(summary.Files.PageDirectories) != 2 || summary.Files.PageDirectories[1].Error != "failed" {
 		t.Fatalf("expected page directory summary: %+v", summary.Files.PageDirectories)
 	}
+	if summary.Files.ReviewMarkdown != filepath.Join(dir, compareReviewFileReview) {
+		t.Fatalf("expected root review guide in summary: %+v", summary.Files)
+	}
 	if summary.Files.ReviewIndex != filepath.Join(dir, compareReviewFileIndex) {
 		t.Fatalf("expected review index in summary: %+v", summary.Files)
+	}
+	guideBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileReview))
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := string(guideBytes)
+	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "accepted_finding_cluster") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
+		t.Fatalf("unexpected manifest review guide:\n%s", guide)
 	}
 	if summary.Files.ReviewIndexHTML != filepath.Join(dir, compareReviewFileIndexHTML) {
 		t.Fatalf("expected html review index in summary: %+v", summary.Files)
@@ -1315,7 +1327,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(indexBytes)
-	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
+	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
 		t.Fatalf("unexpected review index:\n%s", index)
 	}
 	htmlBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndexHTML))

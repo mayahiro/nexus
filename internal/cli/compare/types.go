@@ -280,6 +280,7 @@ type compareManifestReviewPageDirectory struct {
 }
 
 type compareManifestReviewFiles struct {
+	ReviewMarkdown   string                               `json:"review_markdown"`
 	ManifestJSON     string                               `json:"manifest_json"`
 	ManifestMarkdown string                               `json:"manifest_markdown"`
 	ReviewIndex      string                               `json:"review_index"`

@@ -415,6 +415,7 @@ func writeCompareManifestReviewPacket(dir string, report compareManifestReport, 
 		return err
 	}
 	files := compareManifestReviewFiles{
+		ReviewMarkdown:   filepath.Join(dir, compareReviewFileReview),
 		ManifestJSON:     filepath.Join(dir, compareReviewFileManifestJSON),
 		ManifestMarkdown: filepath.Join(dir, compareReviewFileManifestMarkdown),
 		ReviewIndex:      filepath.Join(dir, compareReviewFileIndex),
@@ -434,7 +435,11 @@ func writeCompareManifestReviewPacket(dir string, report compareManifestReport, 
 	if err := writeCompareManifestReviewHTMLIndex(files.ReviewIndexHTML, dir, report, files); err != nil {
 		return err
 	}
-	return writeIndentedJSONFile(files.ReviewSummary, buildCompareManifestReviewSummary(report, files))
+	summary := buildCompareManifestReviewSummary(report, files)
+	if err := writeCompareManifestReviewGuide(files.ReviewMarkdown, summary); err != nil {
+		return err
+	}
+	return writeIndentedJSONFile(files.ReviewSummary, summary)
 }
 
 func writeCompareManifestReviewIndex(path string, rootDir string, report compareManifestReport, files compareManifestReviewFiles) error {
@@ -454,6 +459,7 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 		report.Summary.Warning,
 		report.Summary.Info,
 	)
+	fmt.Fprintf(&builder, "- Review Guide: %s\n", compareReviewMarkdownLink(rootDir, "REVIEW.md", files.ReviewMarkdown))
 	fmt.Fprintf(&builder, "- Manifest JSON: %s\n", compareReviewMarkdownLink(rootDir, "manifest.json", files.ManifestJSON))
 	fmt.Fprintf(&builder, "- Manifest Markdown: %s\n", compareReviewMarkdownLink(rootDir, "manifest.md", files.ManifestMarkdown))
 	fmt.Fprintf(&builder, "- Review Summary: %s\n\n", compareReviewMarkdownLink(rootDir, "review-summary.json", files.ReviewSummary))
@@ -525,6 +531,83 @@ func buildCompareManifestReviewSummary(report compareManifestReport, files compa
 		InfoFindings:     report.Summary.Info,
 		Files:            files,
 		FindingClusters:  compareManifestFindingClusters(report),
+	}
+}
+
+func writeCompareManifestReviewGuide(path string, summary compareManifestReviewSummary) error {
+	return os.WriteFile(path, []byte(renderCompareManifestReviewGuide(summary)), 0o644)
+}
+
+func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) string {
+	var builder strings.Builder
+	builder.WriteString("# Nexus Manifest Review\n\n")
+	builder.WriteString("This directory is the entry point for a multi-page compare review.\n\n")
+
+	builder.WriteString("## Summary\n\n")
+	if strings.TrimSpace(summary.Manifest) != "" {
+		fmt.Fprintf(&builder, "- Manifest: %s\n", summary.Manifest)
+	}
+	fmt.Fprintf(&builder, "- Pages: %d total, %d compared, %d failed\n", summary.TotalPages, summary.ComparedPages, summary.FailedPages)
+	fmt.Fprintf(&builder, "- Page results: %d same, %d different\n", summary.SamePages, summary.DifferentPages)
+	fmt.Fprintf(&builder, "- Findings: %d total, %d critical, %d warning, %d info\n", summary.TotalFindings, summary.CriticalFindings, summary.WarningFindings, summary.InfoFindings)
+	if len(summary.FindingClusters) > 0 {
+		fmt.Fprintf(&builder, "- Repeated finding clusters: %d\n", len(summary.FindingClusters))
+	}
+
+	builder.WriteString("\n## Start Here\n\n")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewMarkdown, "this guide")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewIndexHTML, "static visual overview for the manifest")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewIndex, "markdown page priority index")
+	writeCompareReviewGuideFile(&builder, summary.Files.ReviewSummary, "machine-readable manifest review metadata")
+	writeCompareReviewGuideFile(&builder, summary.Files.ManifestMarkdown, "human-readable manifest compare report")
+	writeCompareReviewGuideFile(&builder, summary.Files.ManifestJSON, "full manifest compare data")
+
+	builder.WriteString("\n## Priority\n\n")
+	builder.WriteString("- Start with failed pages; they need rerun or environment investigation before findings are trustworthy.\n")
+	builder.WriteString("- Review pages with critical findings next.\n")
+	builder.WriteString("- Check repeated finding clusters before reviewing every page one by one.\n")
+	builder.WriteString("- Use warning-heavy pages to decide whether scope or decision templates need tightening.\n")
+	writeCompareManifestReviewGuidePages(&builder, summary.Files.PageDirectories)
+
+	if len(summary.FindingClusters) > 0 {
+		builder.WriteString("\n## Finding Clusters\n\n")
+		builder.WriteString("Use cluster decisions when repeated findings share one review decision:\n\n")
+		builder.WriteString("```jsonl\n")
+		builder.WriteString(compareManifestReviewClusterDecisionJSONL("accepted_finding_cluster", summary.FindingClusters[0].Key))
+		builder.WriteString("\n")
+		builder.WriteString(compareManifestReviewClusterDecisionJSONL("regression_finding_cluster", summary.FindingClusters[0].Key))
+		builder.WriteString("\n```\n\n")
+		builder.WriteString("Materialize cluster decisions before reuse:\n\n")
+		builder.WriteString("```sh\n")
+		fmt.Fprintf(&builder, "nxctl compare normalize-decisions --decisions-file cluster-decisions.jsonl --review-summary %s --output cluster-decisions.normalized.jsonl\n", compareReviewGuideDisplayPath(summary.Files.ReviewSummary))
+		builder.WriteString("```\n")
+	}
+
+	builder.WriteString("\n## Page Packets\n\n")
+	builder.WriteString("Open a page packet's `REVIEW.md` before editing its decision templates. Page packets contain screenshots, crops, compare output, and page-local next commands.\n")
+	return builder.String()
+}
+
+func writeCompareManifestReviewGuidePages(builder *strings.Builder, directories []compareManifestReviewPageDirectory) {
+	if len(directories) == 0 {
+		return
+	}
+	ordered := append([]compareManifestReviewPageDirectory(nil), directories...)
+	sort.SliceStable(ordered, func(i int, j int) bool {
+		return compareManifestReviewPriorityRank(ordered[i].Priority) < compareManifestReviewPriorityRank(ordered[j].Priority)
+	})
+	builder.WriteString("\nHigh-priority page packets:\n\n")
+	limit := min(len(ordered), 10)
+	for _, directory := range ordered[:limit] {
+		status := firstNonEmpty(directory.Error, directory.Priority, "unknown")
+		findings := fmt.Sprintf("%d findings, %d critical, %d warning", directory.TotalFindings, directory.CriticalFindings, directory.WarningFindings)
+		if directory.Error != "" {
+			findings = "not compared"
+		}
+		fmt.Fprintf(builder, "- `%s`: %s; %s; open `%s`\n", firstNonEmpty(directory.Name, filepath.Base(directory.Directory)), status, findings, filepath.Join(compareReviewGuideDisplayPath(directory.Directory), compareReviewFileReview))
+	}
+	if len(ordered) > limit {
+		fmt.Fprintf(builder, "- %d more page packets are listed in `%s`.\n", len(ordered)-limit, compareReviewGuideDisplayPath("review-index.md"))
 	}
 }
 
