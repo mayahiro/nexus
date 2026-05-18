@@ -109,4 +109,5 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 ```
 
 Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
+Use `--output-finding-decisions-template finding-decisions.todo.jsonl` after a compare run to produce `unknown`-confidence review stubs for current critical and warning findings.
 Use `--output-decisions-template pair-decisions.todo.jsonl` to generate editable unknown pair stubs from ambiguous candidates. Validate the reviewed file with `nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json`; each line also matches `docs/ai/compare-decisions.schema.json`.

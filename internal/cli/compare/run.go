@@ -43,6 +43,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
 	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
 	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous matching candidates")
+	outputFindingDecisionsTemplate := fs.String("output-finding-decisions-template", "", "write a JSONL decisions template from current findings")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -157,6 +158,10 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 			fmt.Fprintln(stderr, "compare can not use --output-decisions-template with --manifest")
 			return 1
 		}
+		if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
+			fmt.Fprintln(stderr, "compare can not use --output-finding-decisions-template with --manifest")
+			return 1
+		}
 		manifest, err := loadCompareManifest(*manifestPath)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -221,6 +226,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 	if strings.TrimSpace(*outputDecisionsTemplate) != "" {
 		if err := writeCompareDecisionsTemplate(*outputDecisionsTemplate, report.MatchingDebug); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+	if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
+		if err := writeCompareFindingDecisionsTemplate(*outputFindingDecisionsTemplate, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}

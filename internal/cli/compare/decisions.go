@@ -643,6 +643,15 @@ func writeCompareDecisionsTemplate(path string, debug *compareMatchingDebug) err
 	return printCompareDecisionsTemplate(file, debug)
 }
 
+func writeCompareFindingDecisionsTemplate(path string, report compareReport) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return printCompareFindingDecisionsTemplate(file, report)
+}
+
 func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) error {
 	if debug == nil {
 		return nil
@@ -667,6 +676,71 @@ func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) err
 		}
 	}
 	return nil
+}
+
+func printCompareFindingDecisionsTemplate(w io.Writer, report compareReport) error {
+	encoder := json.NewEncoder(w)
+	for _, finding := range report.Findings {
+		if !compareFindingNeedsDecisionTemplate(finding) {
+			continue
+		}
+		decision := compareDecision{
+			SchemaVersion: 1,
+			Kind:          compareFindingDecisionTemplateKind(finding),
+			FindingID:     strings.TrimSpace(finding.FindingID),
+			Confidence:    "unknown",
+			Reason:        "review finding",
+			Note:          compareFindingDecisionTemplateNote(finding),
+		}
+		if err := encoder.Encode(decision); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func compareFindingNeedsDecisionTemplate(finding compareFinding) bool {
+	if strings.TrimSpace(finding.FindingID) == "" {
+		return false
+	}
+	switch strings.TrimSpace(finding.Severity) {
+	case "critical", "warning":
+		return true
+	default:
+		return false
+	}
+}
+
+func compareFindingDecisionTemplateKind(finding compareFinding) string {
+	if strings.TrimSpace(finding.Severity) == "critical" {
+		return "regression_finding"
+	}
+	return "accepted_finding"
+}
+
+func compareFindingDecisionTemplateNote(finding compareFinding) string {
+	values := []string{
+		strings.TrimSpace(finding.Kind),
+		strings.TrimSpace(finding.Severity),
+		strings.TrimSpace(finding.Impact),
+		strings.TrimSpace(finding.Locator),
+		strings.TrimSpace(finding.Role),
+		strings.TrimSpace(finding.Label),
+		strings.TrimSpace(finding.Field),
+	}
+	return strings.Join(compactCompareDecisionTemplateValues(values), " | ")
+}
+
+func compactCompareDecisionTemplateValues(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.Join(strings.Fields(value), " ")
+		if value == "" {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func compareDecisionTemplateReason(candidate compareMatchingDebugAmbiguousCandidate) string {

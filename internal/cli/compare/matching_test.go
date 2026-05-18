@@ -544,6 +544,40 @@ func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
 	}
 }
 
+func TestCompareFindingDecisionsTemplateWritesReviewStubs(t *testing.T) {
+	report := compareReport{
+		Findings: []compareFinding{
+			{Kind: "missing_node", FindingID: "missing_node:aaa111", Severity: "critical", Impact: "missing_primary_action", Locator: "role=button", Role: "button", Label: "Submit"},
+			{Kind: "layout_changed", FindingID: "layout_changed:bbb222", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+			{Kind: "css_changed", FindingID: "css_changed:ccc333", Severity: "info", Impact: "css_changed"},
+			{Kind: "text_changed", Severity: "critical"},
+		},
+	}
+
+	var buffer bytes.Buffer
+	if err := printCompareFindingDecisionsTemplate(&buffer, report); err != nil {
+		t.Fatalf("expected finding template to render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected critical and warning templates, got %d lines:\n%s", len(lines), buffer.String())
+	}
+	var first compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("expected first jsonl line: %v\n%s", err, lines[0])
+	}
+	if first.Kind != "regression_finding" || first.FindingID != "missing_node:aaa111" || first.Confidence != "unknown" || !strings.Contains(first.Note, "Submit") {
+		t.Fatalf("unexpected first finding decision stub: %+v", first)
+	}
+	var second compareDecision
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("expected second jsonl line: %v\n%s", err, lines[1])
+	}
+	if second.Kind != "accepted_finding" || second.FindingID != "layout_changed:bbb222" || second.Confidence != "unknown" {
+		t.Fatalf("unexpected second finding decision stub: %+v", second)
+	}
+}
+
 func TestAcceptedRemovedDecisionDowngradesMissingFinding(t *testing.T) {
 	report := buildCompareReportWithDecisions(
 		compareSnapshot{
