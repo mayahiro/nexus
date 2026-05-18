@@ -114,6 +114,10 @@ func buildCompareReportWithDebug(oldSnapshot compareSnapshot, newSnapshot compar
 }
 
 func buildCompareReportWithDecisionMatches(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch) compareReport {
+	return buildCompareReportWithDecisions(oldSnapshot, newSnapshot, scope, matchMode, matchingDebug, decisionMatches, compareDecisionEffects{})
+}
+
+func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch, decisionEffects compareDecisionEffects) compareReport {
 	report := compareReport{
 		Old:   oldSnapshot,
 		New:   newSnapshot,
@@ -189,27 +193,45 @@ func buildCompareReportWithDecisionMatches(oldSnapshot compareSnapshot, newSnaps
 	}
 	for _, index := range matchResult.UnmatchedOld {
 		node := oldSnapshot.Nodes[index]
-		add(compareFinding{
+		finding := compareFinding{
 			Kind:        "missing_node",
 			Locator:     compareFindingLocator(&node, nil),
 			Fingerprint: node.Fingerprint,
 			Role:        node.Role,
 			Label:       node.Label,
-		})
+		}
+		applyCompareDecisionEffect(&finding, decisionEffects.Old[index])
+		add(finding)
 	}
 	for _, index := range matchResult.UnmatchedNew {
 		node := newSnapshot.Nodes[index]
-		add(compareFinding{
+		finding := compareFinding{
 			Kind:        "new_node",
 			Locator:     compareFindingLocator(nil, &node),
 			Fingerprint: node.Fingerprint,
 			Role:        node.Role,
 			Label:       node.Label,
-		})
+		}
+		applyCompareDecisionEffect(&finding, decisionEffects.New[index])
+		add(finding)
 	}
 
 	report.Summary.Same = report.Summary.TotalFindings == 0
 	return report
+}
+
+func applyCompareDecisionEffect(finding *compareFinding, effect compareDecisionEffect) {
+	if effect.Kind == "" {
+		return
+	}
+	finding.MatchedBy = effect.MatchedBy
+	finding.MatchReasons = append([]string(nil), effect.Reasons...)
+	if effect.Severity != "" {
+		finding.Severity = effect.Severity
+	}
+	if effect.Impact != "" {
+		finding.Impact = effect.Impact
+	}
 }
 
 func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {

@@ -19,6 +19,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		PrintHelp(stdout)
 		return 0
 	}
+	if len(args) > 0 && args[0] == "validate-decisions" {
+		return runCompareValidateDecisions(args[1:], stdout, stderr)
+	}
 	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -39,6 +42,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, or semantic")
 	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
 	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
+	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous matching candidates")
 	manifestPath := fs.String("manifest", "", "compare manifest json")
 	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
 	limit := fs.Int("limit", 0, "limit manifest pages")
@@ -119,29 +123,34 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 
 	base := compareRun{
-		Backend:          *backend,
-		TargetRef:        *targetRef,
-		Viewport:         *viewport,
-		MatchMode:        normalizedMatchMode,
-		NodeScope:        normalizedNodeScope,
-		MatchingDebug:    *matchingDebug,
-		DecisionsFile:    *decisionsFile,
-		WaitSelector:     *waitSelector,
-		ScopeSelector:    *scopeSelector,
-		OldScopeSelector: *oldScopeSelector,
-		NewScopeSelector: *newScopeSelector,
-		WaitFunction:     *waitFunction,
-		WaitNetworkIdle:  *waitNetworkIdle,
-		CompareCSS:       *compareCSS,
-		CompareLayout:    *compareLayout,
-		WaitTimeout:      *waitTimeout,
-		CSSProperties:    append([]string(nil), cssProperty...),
-		IgnoreTextRegex:  append([]string(nil), ignoreRegex...),
-		IgnoreSelector:   append([]string(nil), ignoreSelector...),
-		MaskSelector:     append([]string(nil), maskSelector...),
+		Backend:                 *backend,
+		TargetRef:               *targetRef,
+		Viewport:                *viewport,
+		MatchMode:               normalizedMatchMode,
+		NodeScope:               normalizedNodeScope,
+		MatchingDebug:           *matchingDebug || strings.TrimSpace(*outputDecisionsTemplate) != "",
+		DecisionsFile:           *decisionsFile,
+		OutputDecisionsTemplate: strings.TrimSpace(*outputDecisionsTemplate),
+		WaitSelector:            *waitSelector,
+		ScopeSelector:           *scopeSelector,
+		OldScopeSelector:        *oldScopeSelector,
+		NewScopeSelector:        *newScopeSelector,
+		WaitFunction:            *waitFunction,
+		WaitNetworkIdle:         *waitNetworkIdle,
+		CompareCSS:              *compareCSS,
+		CompareLayout:           *compareLayout,
+		WaitTimeout:             *waitTimeout,
+		CSSProperties:           append([]string(nil), cssProperty...),
+		IgnoreTextRegex:         append([]string(nil), ignoreRegex...),
+		IgnoreSelector:          append([]string(nil), ignoreSelector...),
+		MaskSelector:            append([]string(nil), maskSelector...),
 	}
 
 	if strings.TrimSpace(*manifestPath) != "" {
+		if strings.TrimSpace(*outputDecisionsTemplate) != "" {
+			fmt.Fprintln(stderr, "compare can not use --output-decisions-template with --manifest")
+			return 1
+		}
 		manifest, err := loadCompareManifest(*manifestPath)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -204,6 +213,12 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 			return 1
 		}
 	}
+	if strings.TrimSpace(*outputDecisionsTemplate) != "" {
+		if err := writeCompareDecisionsTemplate(*outputDecisionsTemplate, report.MatchingDebug); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
 
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
@@ -216,6 +231,62 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 
 	printCompareReport(stdout, report)
+	return 0
+}
+
+func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	if isHelpArgs(args) {
+		PrintValidateDecisionsHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("compare validate-decisions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to validate")
+	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs and fingerprints")
+	asJSON := fs.Bool("json", false, "print validation report as json")
+
+	if err := parseCommandFlags(fs, args, stderr, "compare validate-decisions"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "compare validate-decisions accepts only flags")
+		PrintValidateDecisionsHelp(stderr)
+		return 1
+	}
+	if strings.TrimSpace(*decisionsFile) == "" {
+		fmt.Fprintln(stderr, "compare validate-decisions requires --decisions-file")
+		return 1
+	}
+
+	decisions, err := loadCompareDecisions(*decisionsFile)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	var loadedCompareReport *compareReport
+	if strings.TrimSpace(*compareJSON) != "" {
+		report, err := loadCompareReport(*compareJSON)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		loadedCompareReport = &report
+	}
+	report := validateCompareDecisions(decisions, loadedCompareReport)
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else {
+		printCompareDecisionValidationReport(stdout, report)
+	}
+	if report.Summary.Errors > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -336,14 +407,19 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
+	decisionEffects, err := compareResolveDecisionEffects(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
+	if err != nil {
+		return compareReport{}, err
+	}
 
-	return buildCompareReportWithDecisionMatches(
+	return buildCompareReportWithDecisions(
 		oldSnapshot,
 		newSnapshot,
 		compareScopeFromObservations(oldScopeSelector, newScopeSelector, oldObservation, newObservation),
 		matchMode,
 		run.MatchingDebug,
 		decisionMatches,
+		decisionEffects,
 	), nil
 }
 

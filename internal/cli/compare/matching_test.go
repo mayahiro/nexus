@@ -1,6 +1,10 @@
 package comparecmd
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -349,6 +353,135 @@ func TestCompareHighConfidenceDecisionPairsNodes(t *testing.T) {
 	}
 	if report.MatchingDebug == nil || len(report.MatchingDebug.Matches) != 1 || report.MatchingDebug.Matches[0].MatchedBy != "decision:pair" {
 		t.Fatalf("expected decision in matching debug: %+v", report.MatchingDebug)
+	}
+}
+
+func TestValidateCompareDecisionsDetectsDuplicateHighPair(t *testing.T) {
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save", Name: "Save"},
+				{Fingerprint: "new-submit", Ref: "@e3", Role: "button", Label: "Submit", Name: "Submit"},
+			},
+		},
+	}
+	validation := validateCompareDecisions([]compareDecision{
+		{Kind: "pair", Old: "@e1", New: "@e2", Confidence: "high", Line: 1},
+		{Kind: "pair", Old: "@e1", New: "@e3", Confidence: "high", Line: 2},
+	}, &report)
+
+	if validation.Summary.Errors == 0 {
+		t.Fatalf("expected duplicate high pair error: %+v", validation)
+	}
+	if validation.Summary.HighPairs != 2 || !validation.Summary.CompareJSONUsed {
+		t.Fatalf("expected validation summary to count high pairs: %+v", validation.Summary)
+	}
+}
+
+func TestRunCompareValidateDecisions(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "pair-decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"pair","old":"@e1","new":"@e2","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected validation to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 0 || report.Summary.HighPairs != 1 || !report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected validation report: %+v", report)
+	}
+}
+
+func TestCompareDecisionsTemplateWritesAmbiguousCandidateStubs(t *testing.T) {
+	debug := &compareMatchingDebug{
+		AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
+			{
+				Old: compareMatchingDebugNode{
+					Ref:         "@e1",
+					Fingerprint: "old-save",
+				},
+				ReasonSkipped: "candidate margin below threshold",
+				NewCandidates: []compareMatchingDebugCandidateOption{
+					{Node: compareMatchingDebugNode{Ref: "@e2"}},
+					{Node: compareMatchingDebugNode{Ref: "@e3"}},
+				},
+			},
+		},
+	}
+
+	var buffer bytes.Buffer
+	if err := printCompareDecisionsTemplate(&buffer, debug); err != nil {
+		t.Fatalf("expected template to render: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(buffer.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one template line, got %q", buffer.String())
+	}
+	var decision compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &decision); err != nil {
+		t.Fatalf("expected jsonl template line: %v\n%s", err, lines[0])
+	}
+	if decision.Kind != "pair" || decision.Old != "@e1" || decision.New != "?" || decision.Confidence != "unknown" {
+		t.Fatalf("unexpected template decision: %+v", decision)
+	}
+	if !strings.Contains(decision.Note, "@e2") || !strings.Contains(decision.Note, "@e3") {
+		t.Fatalf("expected candidate refs in note: %+v", decision)
+	}
+}
+
+func TestAcceptedRemovedDecisionDowngradesMissingFinding(t *testing.T) {
+	report := buildCompareReportWithDecisions(
+		compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "button|Save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save", Visible: true, Enabled: true, Invokable: true},
+			},
+		},
+		compareSnapshot{},
+		nil,
+		compareMatchModeExact,
+		false,
+		nil,
+		compareDecisionEffects{
+			Old: map[int]compareDecisionEffect{0: compareDecisionEffectFor("accepted_removed")},
+		},
+	)
+
+	if report.Summary.MissingNodes != 1 || report.Summary.Info != 1 || report.Summary.Critical != 0 {
+		t.Fatalf("expected accepted removed to become info missing finding: %+v", report.Summary)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("expected one missing finding, got %+v", report.Findings)
+	}
+	finding := report.Findings[0]
+	if finding.MatchedBy != "decision:accepted_removed" || finding.Severity != "info" || finding.Impact != "accepted_removed" {
+		t.Fatalf("expected accepted removed metadata: %+v", finding)
 	}
 }
 

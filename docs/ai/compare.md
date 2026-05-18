@@ -73,7 +73,9 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ma
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode stable --scope-selector 'main'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
+nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
 ```
 
 Session-to-session compare:
@@ -128,9 +130,15 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 ```jsonl
 {"kind":"pair","old":"@e203","new":"@e222","confidence":"high","reason":"bbox and role/name match; aria-label changed as an a11y improvement"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
+{"kind":"accepted_removed","old":"@e45","reason":"legacy-only footer link intentionally removed"}
+{"kind":"accepted_added","new":"@e88","reason":"new skip-link"}
 ```
 
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. Non-high entries are accepted as review notes but are not used as anchors or matches.
+
+Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable `unknown` pair stubs from `matching_debug.ambiguous_candidates`.
+Use `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file>` to validate JSONL structure, duplicate high-confidence pairs, and current refs/fingerprints before rerunning compare.
+`accepted_removed` and `accepted_added` entries mark the corresponding missing/new finding as `info`; `regression_removed` and `unexpected_added` keep the finding explicit with decision metadata.
 
 ## Matching Debug
 

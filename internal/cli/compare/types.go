@@ -121,6 +121,30 @@ type compareFinding struct {
 	MatchReasons []string `json:"match_reasons,omitempty"`
 }
 
+type compareDecisionValidationSummary struct {
+	TotalDecisions  int  `json:"total_decisions"`
+	HighPairs       int  `json:"high_pairs"`
+	TentativePairs  int  `json:"tentative_pairs"`
+	UnknownPairs    int  `json:"unknown_pairs"`
+	AcceptedRemoved int  `json:"accepted_removed"`
+	AcceptedAdded   int  `json:"accepted_added"`
+	Errors          int  `json:"errors"`
+	Warnings        int  `json:"warnings"`
+	CompareJSONUsed bool `json:"compare_json_used"`
+}
+
+type compareDecisionValidationIssue struct {
+	Severity string `json:"severity"`
+	Line     int    `json:"line,omitempty"`
+	Field    string `json:"field,omitempty"`
+	Message  string `json:"message"`
+}
+
+type compareDecisionValidationReport struct {
+	Summary compareDecisionValidationSummary `json:"summary"`
+	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
+}
+
 type compareMatchingDebug struct {
 	Mode                    string                                   `json:"mode"`
 	OldNodes                int                                      `json:"old_nodes"`
@@ -286,28 +310,29 @@ type compareManifestReport struct {
 }
 
 type compareRun struct {
-	OldEndpoint      compareEndpoint
-	NewEndpoint      compareEndpoint
-	Backend          string
-	TargetRef        string
-	Viewport         string
-	MatchMode        string
-	NodeScope        string
-	MatchingDebug    bool
-	DecisionsFile    string
-	WaitSelector     string
-	ScopeSelector    string
-	OldScopeSelector string
-	NewScopeSelector string
-	WaitFunction     string
-	WaitNetworkIdle  bool
-	CompareCSS       bool
-	CompareLayout    bool
-	WaitTimeout      int
-	CSSProperties    []string
-	IgnoreTextRegex  []string
-	IgnoreSelector   []string
-	MaskSelector     []string
+	OldEndpoint             compareEndpoint
+	NewEndpoint             compareEndpoint
+	Backend                 string
+	TargetRef               string
+	Viewport                string
+	MatchMode               string
+	NodeScope               string
+	MatchingDebug           bool
+	DecisionsFile           string
+	OutputDecisionsTemplate string
+	WaitSelector            string
+	ScopeSelector           string
+	OldScopeSelector        string
+	NewScopeSelector        string
+	WaitFunction            string
+	WaitNetworkIdle         bool
+	CompareCSS              bool
+	CompareLayout           bool
+	WaitTimeout             int
+	CSSProperties           []string
+	IgnoreTextRegex         []string
+	IgnoreSelector          []string
+	MaskSelector            []string
 }
 
 type preparedCompareSession struct {

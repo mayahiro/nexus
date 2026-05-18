@@ -74,6 +74,8 @@ Avoid:
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector '[data-testid="orders-loaded"]'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --old-scope-selector '#legacy-orders' --new-scope-selector 'main [data-testid="orders"]'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
+nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 nxctl flow run --manifest migration-flow.json
@@ -102,4 +104,4 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 ```
 
 Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` entries affect matching; other entries remain review notes.
-Validate each JSONL line against `docs/ai/compare-decisions.schema.json` when generating or reviewing the file.
+Use `--output-decisions-template pair-decisions.todo.jsonl` to generate editable unknown pair stubs from ambiguous candidates. Validate the reviewed file with `nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json`; each line also matches `docs/ai/compare-decisions.schema.json`.

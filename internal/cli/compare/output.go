@@ -154,6 +154,34 @@ func printCompareManifestReport(w io.Writer, report compareManifestReport) {
 	}
 }
 
+func printCompareDecisionValidationReport(w io.Writer, report compareDecisionValidationReport) {
+	fmt.Fprintf(w, "decisions: %d\n", report.Summary.TotalDecisions)
+	fmt.Fprintf(w, "high_pairs: %d\n", report.Summary.HighPairs)
+	fmt.Fprintf(w, "tentative_pairs: %d\n", report.Summary.TentativePairs)
+	fmt.Fprintf(w, "unknown_pairs: %d\n", report.Summary.UnknownPairs)
+	fmt.Fprintf(w, "accepted_removed: %d\n", report.Summary.AcceptedRemoved)
+	fmt.Fprintf(w, "accepted_added: %d\n", report.Summary.AcceptedAdded)
+	fmt.Fprintf(w, "compare_json_used: %t\n", report.Summary.CompareJSONUsed)
+	fmt.Fprintf(w, "errors: %d\n", report.Summary.Errors)
+	fmt.Fprintf(w, "warnings: %d\n", report.Summary.Warnings)
+	if len(report.Issues) == 0 {
+		fmt.Fprintln(w, "no decision issues")
+		return
+	}
+	fmt.Fprintln(w)
+	for _, issue := range report.Issues {
+		if issue.Line > 0 && issue.Field != "" {
+			fmt.Fprintf(w, "[%s] line %d %s: %s\n", issue.Severity, issue.Line, issue.Field, issue.Message)
+			continue
+		}
+		if issue.Line > 0 {
+			fmt.Fprintf(w, "[%s] line %d: %s\n", issue.Severity, issue.Line, issue.Message)
+			continue
+		}
+		fmt.Fprintf(w, "[%s] %s\n", issue.Severity, issue.Message)
+	}
+}
+
 func printCompareMarkdown(w io.Writer, report compareReport) {
 	fmt.Fprintln(w, "# Compare Report")
 	fmt.Fprintln(w)
