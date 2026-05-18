@@ -27,13 +27,13 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator fields to current refs before compare")
 	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs for ambiguous candidates and unmatched old/new nodes")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
-	fmt.Fprintln(w, "review packet: --review-dir writes REVIEW.md, compare.json, compare.md, decision templates, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
+	fmt.Fprintln(w, "review packet: --review-dir writes REVIEW.md, compare.json, compare.md, pair/finding/cluster decision templates, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
 	fmt.Fprintln(w, "node scope: --node-scope current preserves existing candidates, actionable narrows to controls, semantic includes named/content semantic nodes, all observes every visible element inside an explicit scope")
 	fmt.Fprintln(w, "scope: --scope-selector applies to both sides; --old-scope-selector and --new-scope-selector override it per side")
 	fmt.Fprintln(w, "scope selectors accept raw CSS selectors, must match exactly one element on their side, and may use positional selectors such as :nth-child()")
 	fmt.Fprintln(w, "scope selector multi-match errors include up to five matched candidate hints")
 	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, match_mode, node_scope, matching_debug, decisions_file, wait_*, scope_selector, old_scope_selector, new_scope_selector, compare_css, compare_layout, css_property, ignore_selector, and mask_selector")
-	fmt.Fprintln(w, "manifest review packet: --manifest with --review-dir writes root REVIEW.md, manifest summaries, review-index.md/html, finding clusters, cropped finding previews, and one review packet directory per page")
+	fmt.Fprintln(w, "manifest review packet: --manifest with --review-dir writes root REVIEW.md, manifest summaries, cluster decisions, review-index.md/html, finding clusters, cropped finding previews, and one review packet directory per page")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
@@ -41,8 +41,8 @@ func PrintHelp(w io.Writer) {
 }
 
 func PrintValidateDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--json]")
-	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, and current refs/fingerprints/finding_ids when --compare-json is provided")
+	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--json]")
+	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, and finding clusters from --review-summary")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }

@@ -271,6 +271,7 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 
 	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to validate")
 	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs and fingerprints")
+	reviewSummary := fs.String("review-summary", "", "review-summary.json used to validate finding cluster decisions")
 	asJSON := fs.Bool("json", false, "print validation report as json")
 
 	if err := parseCommandFlags(fs, args, stderr, "compare validate-decisions"); err != nil {
@@ -300,7 +301,12 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 		}
 		loadedCompareReport = &report
 	}
-	report := validateCompareDecisions(decisions, loadedCompareReport)
+	reviewClusters, err := loadCompareFindingClusters(*reviewSummary)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	report := validateCompareDecisionsWithClusters(decisions, loadedCompareReport, reviewClusters)
 	if *asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")

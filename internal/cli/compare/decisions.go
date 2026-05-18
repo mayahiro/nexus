@@ -1311,8 +1311,9 @@ func validateCompareDecisions(decisions []compareDecision, compareReport *compar
 func validateCompareDecisionsWithClusters(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) compareDecisionValidationReport {
 	report := compareDecisionValidationReport{
 		Summary: compareDecisionValidationSummary{
-			TotalDecisions:  len(decisions),
-			CompareJSONUsed: compareReport != nil,
+			TotalDecisions:    len(decisions),
+			CompareJSONUsed:   compareReport != nil,
+			ReviewSummaryUsed: len(clusters) > 0,
 		},
 	}
 	addIssue := func(severity string, decision compareDecision, index int, field string, message string) {
@@ -1650,6 +1651,15 @@ func writeCompareFindingDecisionsTemplate(path string, report compareReport) err
 	return printCompareFindingDecisionsTemplate(file, report)
 }
 
+func writeCompareFindingClusterDecisionsTemplate(path string, clusters []compareFindingCluster) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return printCompareFindingClusterDecisionsTemplate(file, clusters)
+}
+
 func printCompareDecisionsTemplate(w io.Writer, debug *compareMatchingDebug) error {
 	if debug == nil {
 		return nil
@@ -1869,6 +1879,27 @@ func printCompareFindingDecisionsTemplate(w io.Writer, report compareReport) err
 	return nil
 }
 
+func printCompareFindingClusterDecisionsTemplate(w io.Writer, clusters []compareFindingCluster) error {
+	encoder := json.NewEncoder(w)
+	for _, cluster := range clusters {
+		if strings.TrimSpace(cluster.Key) == "" {
+			continue
+		}
+		decision := compareDecision{
+			SchemaVersion: 1,
+			Kind:          "accepted_finding_cluster",
+			ClusterKey:    strings.TrimSpace(cluster.Key),
+			Confidence:    "unknown",
+			Reason:        "review repeated finding cluster",
+			Note:          compareFindingClusterDecisionTemplateNote(cluster),
+		}
+		if err := encoder.Encode(decision); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func compareFindingNeedsDecisionTemplate(finding compareFinding) bool {
 	if strings.TrimSpace(finding.FindingID) == "" {
 		return false
@@ -1897,6 +1928,20 @@ func compareFindingDecisionTemplateNote(finding compareFinding) string {
 		strings.TrimSpace(finding.Role),
 		strings.TrimSpace(finding.Label),
 		strings.TrimSpace(finding.Field),
+	}
+	return strings.Join(compactCompareDecisionTemplateValues(values), " | ")
+}
+
+func compareFindingClusterDecisionTemplateNote(cluster compareFindingCluster) string {
+	values := []string{
+		fmt.Sprintf("%d similar", cluster.Count),
+		strings.TrimSpace(cluster.Severity),
+		strings.TrimSpace(cluster.Kind),
+		strings.TrimSpace(cluster.Impact),
+		strings.TrimSpace(compareFindingClusterTarget(cluster)),
+		strings.TrimSpace(cluster.Field),
+		strings.TrimSpace(strings.Join(cluster.Pages, ",")),
+		strings.TrimSpace(cluster.ExampleFindingID),
 	}
 	return strings.Join(compactCompareDecisionTemplateValues(values), " | ")
 }

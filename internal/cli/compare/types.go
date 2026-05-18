@@ -143,6 +143,7 @@ type compareDecisionValidationSummary struct {
 	Errors             int  `json:"errors"`
 	Warnings           int  `json:"warnings"`
 	CompareJSONUsed    bool `json:"compare_json_used"`
+	ReviewSummaryUsed  bool `json:"review_summary_used,omitempty"`
 }
 
 type compareDecisionValidationIssue struct {
@@ -220,6 +221,7 @@ type compareReviewFiles struct {
 	CompareMarkdown          string `json:"compare_markdown"`
 	PairDecisionsTemplate    string `json:"pair_decisions_template"`
 	FindingDecisionsTemplate string `json:"finding_decisions_template"`
+	ClusterDecisionsTemplate string `json:"cluster_decisions_template"`
 	OldScreenshot            string `json:"old_screenshot,omitempty"`
 	NewScreenshot            string `json:"new_screenshot,omitempty"`
 	FindingScreenshotsDir    string `json:"finding_screenshots_dir,omitempty"`
@@ -281,13 +283,14 @@ type compareManifestReviewPageDirectory struct {
 }
 
 type compareManifestReviewFiles struct {
-	ReviewMarkdown   string                               `json:"review_markdown"`
-	ManifestJSON     string                               `json:"manifest_json"`
-	ManifestMarkdown string                               `json:"manifest_markdown"`
-	ReviewIndex      string                               `json:"review_index"`
-	ReviewIndexHTML  string                               `json:"review_index_html"`
-	ReviewSummary    string                               `json:"review_summary"`
-	PageDirectories  []compareManifestReviewPageDirectory `json:"page_directories,omitempty"`
+	ReviewMarkdown           string                               `json:"review_markdown"`
+	ManifestJSON             string                               `json:"manifest_json"`
+	ManifestMarkdown         string                               `json:"manifest_markdown"`
+	ClusterDecisionsTemplate string                               `json:"cluster_decisions_template"`
+	ReviewIndex              string                               `json:"review_index"`
+	ReviewIndexHTML          string                               `json:"review_index_html"`
+	ReviewSummary            string                               `json:"review_summary"`
+	PageDirectories          []compareManifestReviewPageDirectory `json:"page_directories,omitempty"`
 }
 
 type compareManifestReviewSummary struct {

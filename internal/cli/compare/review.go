@@ -26,6 +26,7 @@ const (
 	compareReviewFileMarkdown                 = "compare.md"
 	compareReviewFilePairDecisionsTemplate    = "pair-decisions.todo.jsonl"
 	compareReviewFileFindingDecisionsTemplate = "finding-decisions.todo.jsonl"
+	compareReviewFileClusterDecisionsTemplate = "cluster-decisions.todo.jsonl"
 	compareReviewFileOldScreenshot            = "old.png"
 	compareReviewFileNewScreenshot            = "new.png"
 	compareReviewFileFindingsDir              = "findings"
@@ -54,6 +55,7 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 		CompareMarkdown:          filepath.Join(dir, compareReviewFileMarkdown),
 		PairDecisionsTemplate:    filepath.Join(dir, compareReviewFilePairDecisionsTemplate),
 		FindingDecisionsTemplate: filepath.Join(dir, compareReviewFileFindingDecisionsTemplate),
+		ClusterDecisionsTemplate: filepath.Join(dir, compareReviewFileClusterDecisionsTemplate),
 		ReviewSummary:            filepath.Join(dir, compareReviewFileSummary),
 	}
 	if len(screenshots.Old) > 0 {
@@ -82,6 +84,9 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 		return err
 	}
 	if err := writeCompareFindingDecisionsTemplate(files.FindingDecisionsTemplate, report); err != nil {
+		return err
+	}
+	if err := writeCompareFindingClusterDecisionsTemplate(files.ClusterDecisionsTemplate, compareFindingClusters(report.Findings, "")); err != nil {
 		return err
 	}
 	summary := buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings)
@@ -118,11 +123,14 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 	}
 	materializedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.materialized.jsonl")
 	normalizedPairDecisions := filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.normalized.jsonl")
+	normalizedClusterDecisions := filepath.Join(filepath.Dir(files.ClusterDecisionsTemplate), "cluster-decisions.normalized.jsonl")
 	summary.NextCommands = []string{
 		"nxctl compare validate-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON,
 		"nxctl compare materialize-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON + " --output " + materializedPairDecisions,
 		"nxctl compare normalize-decisions --decisions-file " + materializedPairDecisions + " --compare-json " + files.CompareJSON + " --output " + normalizedPairDecisions,
 		"nxctl compare validate-decisions --decisions-file " + files.FindingDecisionsTemplate + " --compare-json " + files.CompareJSON,
+		"nxctl compare validate-decisions --decisions-file " + files.ClusterDecisionsTemplate + " --compare-json " + files.CompareJSON,
+		"nxctl compare normalize-decisions --decisions-file " + files.ClusterDecisionsTemplate + " --compare-json " + files.CompareJSON + " --review-summary " + files.ReviewSummary + " --output " + normalizedClusterDecisions,
 	}
 	return summary
 }
@@ -184,6 +192,7 @@ func renderCompareReviewGuide(summary compareReviewSummary) string {
 	writeCompareReviewGuideFile(&builder, summary.Files.CompareJSON, "full compare data for AI review")
 	writeCompareReviewGuideFile(&builder, summary.Files.PairDecisionsTemplate, "editable pair, unmatched, and subtree decision stubs")
 	writeCompareReviewGuideFile(&builder, summary.Files.FindingDecisionsTemplate, "editable finding decision stubs")
+	writeCompareReviewGuideFile(&builder, summary.Files.ClusterDecisionsTemplate, "editable repeated finding cluster decision stubs")
 	writeCompareReviewGuideFile(&builder, summary.Files.OldScreenshot, "old full-page screenshot")
 	writeCompareReviewGuideFile(&builder, summary.Files.NewScreenshot, "new full-page screenshot")
 	writeCompareReviewGuideFile(&builder, summary.Files.FindingScreenshotsDir, "cropped finding screenshots")
@@ -415,18 +424,22 @@ func writeCompareManifestReviewPacket(dir string, report compareManifestReport, 
 		return err
 	}
 	files := compareManifestReviewFiles{
-		ReviewMarkdown:   filepath.Join(dir, compareReviewFileReview),
-		ManifestJSON:     filepath.Join(dir, compareReviewFileManifestJSON),
-		ManifestMarkdown: filepath.Join(dir, compareReviewFileManifestMarkdown),
-		ReviewIndex:      filepath.Join(dir, compareReviewFileIndex),
-		ReviewIndexHTML:  filepath.Join(dir, compareReviewFileIndexHTML),
-		ReviewSummary:    filepath.Join(dir, compareReviewFileSummary),
-		PageDirectories:  append([]compareManifestReviewPageDirectory(nil), pageDirectories...),
+		ReviewMarkdown:           filepath.Join(dir, compareReviewFileReview),
+		ManifestJSON:             filepath.Join(dir, compareReviewFileManifestJSON),
+		ManifestMarkdown:         filepath.Join(dir, compareReviewFileManifestMarkdown),
+		ReviewIndex:              filepath.Join(dir, compareReviewFileIndex),
+		ReviewIndexHTML:          filepath.Join(dir, compareReviewFileIndexHTML),
+		ClusterDecisionsTemplate: filepath.Join(dir, compareReviewFileClusterDecisionsTemplate),
+		ReviewSummary:            filepath.Join(dir, compareReviewFileSummary),
+		PageDirectories:          append([]compareManifestReviewPageDirectory(nil), pageDirectories...),
 	}
 	if err := writeIndentedJSONFile(files.ManifestJSON, report); err != nil {
 		return err
 	}
 	if err := writeCompareManifestMarkdown(files.ManifestMarkdown, report); err != nil {
+		return err
+	}
+	if err := writeCompareFindingClusterDecisionsTemplate(files.ClusterDecisionsTemplate, compareManifestFindingClusters(report)); err != nil {
 		return err
 	}
 	if err := writeCompareManifestReviewIndex(files.ReviewIndex, dir, report, files); err != nil {
@@ -462,6 +475,7 @@ func writeCompareManifestReviewIndex(path string, rootDir string, report compare
 	fmt.Fprintf(&builder, "- Review Guide: %s\n", compareReviewMarkdownLink(rootDir, "REVIEW.md", files.ReviewMarkdown))
 	fmt.Fprintf(&builder, "- Manifest JSON: %s\n", compareReviewMarkdownLink(rootDir, "manifest.json", files.ManifestJSON))
 	fmt.Fprintf(&builder, "- Manifest Markdown: %s\n", compareReviewMarkdownLink(rootDir, "manifest.md", files.ManifestMarkdown))
+	fmt.Fprintf(&builder, "- Cluster Decisions Template: %s\n", compareReviewMarkdownLink(rootDir, "cluster-decisions.todo.jsonl", files.ClusterDecisionsTemplate))
 	fmt.Fprintf(&builder, "- Review Summary: %s\n\n", compareReviewMarkdownLink(rootDir, "review-summary.json", files.ReviewSummary))
 
 	builder.WriteString("| Priority | Page | Findings | Pair decisions | Packet | Screenshots | Status |\n")
@@ -571,6 +585,15 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 	writeCompareReviewGuideFile(&builder, summary.Files.ReviewSummary, "machine-readable manifest review metadata")
 	writeCompareReviewGuideFile(&builder, summary.Files.ManifestMarkdown, "human-readable manifest compare report")
 	writeCompareReviewGuideFile(&builder, summary.Files.ManifestJSON, "full manifest compare data")
+	writeCompareReviewGuideFile(&builder, summary.Files.ClusterDecisionsTemplate, "editable manifest-level repeated finding cluster decision stubs")
+
+	if len(summary.FindingClusters) > 0 {
+		builder.WriteString("\n## Commands\n\n")
+		builder.WriteString("```sh\n")
+		fmt.Fprintf(&builder, "nxctl compare validate-decisions --decisions-file %s --review-summary %s\n", compareReviewGuideDisplayPath(summary.Files.ClusterDecisionsTemplate), compareReviewGuideDisplayPath(summary.Files.ReviewSummary))
+		fmt.Fprintf(&builder, "nxctl compare normalize-decisions --decisions-file %s --review-summary %s --output cluster-decisions.normalized.jsonl\n", compareReviewGuideDisplayPath(summary.Files.ClusterDecisionsTemplate), compareReviewGuideDisplayPath(summary.Files.ReviewSummary))
+		builder.WriteString("```\n")
+	}
 
 	builder.WriteString("\n## Priority\n\n")
 	builder.WriteString("- Start with failed pages; they need rerun or environment investigation before findings are trustworthy.\n")
@@ -582,16 +605,7 @@ func renderCompareManifestReviewGuide(summary compareManifestReviewSummary) stri
 
 	if len(summary.FindingClusters) > 0 {
 		builder.WriteString("\n## Finding Clusters\n\n")
-		builder.WriteString("Use cluster decisions when repeated findings share one review decision:\n\n")
-		builder.WriteString("```jsonl\n")
-		builder.WriteString(compareManifestReviewClusterDecisionJSONL("accepted_finding_cluster", summary.FindingClusters[0].Key))
-		builder.WriteString("\n")
-		builder.WriteString(compareManifestReviewClusterDecisionJSONL("regression_finding_cluster", summary.FindingClusters[0].Key))
-		builder.WriteString("\n```\n\n")
-		builder.WriteString("Materialize cluster decisions before reuse:\n\n")
-		builder.WriteString("```sh\n")
-		fmt.Fprintf(&builder, "nxctl compare normalize-decisions --decisions-file cluster-decisions.jsonl --review-summary %s --output cluster-decisions.normalized.jsonl\n", compareReviewGuideDisplayPath(summary.Files.ReviewSummary))
-		builder.WriteString("```\n")
+		builder.WriteString("Review `cluster-decisions.todo.jsonl` when repeated findings share one review decision.\n")
 	}
 
 	builder.WriteString("\n## Page Packets\n\n")
@@ -675,23 +689,24 @@ func compareManifestReviewPairDecisionTemplateLabel(counts *compareDecisionTempl
 }
 
 type compareManifestReviewHTMLData struct {
-	Manifest            string
-	TotalPages          int
-	ComparedPages       int
-	FailedPages         int
-	SamePages           int
-	DifferentPages      int
-	TotalFindings       int
-	CriticalFindings    int
-	WarningFindings     int
-	InfoFindings        int
-	ManifestJSON        string
-	ManifestMarkdown    string
-	ReviewSummary       string
-	ReviewIndex         string
-	FindingClusters     []compareManifestReviewHTMLCluster
-	FindingClustersMore int
-	Pages               []compareManifestReviewHTMLPage
+	Manifest                 string
+	TotalPages               int
+	ComparedPages            int
+	FailedPages              int
+	SamePages                int
+	DifferentPages           int
+	TotalFindings            int
+	CriticalFindings         int
+	WarningFindings          int
+	InfoFindings             int
+	ManifestJSON             string
+	ManifestMarkdown         string
+	ClusterDecisionsTemplate string
+	ReviewSummary            string
+	ReviewIndex              string
+	FindingClusters          []compareManifestReviewHTMLCluster
+	FindingClustersMore      int
+	Pages                    []compareManifestReviewHTMLPage
 }
 
 type compareManifestReviewHTMLPage struct {
@@ -707,6 +722,7 @@ type compareManifestReviewHTMLPage struct {
 	CompareJSON              string
 	PairDecisionsTemplate    string
 	FindingDecisionsTemplate string
+	ClusterDecisionsTemplate string
 	OldScreenshot            string
 	NewScreenshot            string
 	OldScreenshotMissing     bool
@@ -753,23 +769,24 @@ type compareManifestReviewFindingDecision struct {
 
 func buildCompareManifestReviewHTMLData(rootDir string, report compareManifestReport, files compareManifestReviewFiles) compareManifestReviewHTMLData {
 	data := compareManifestReviewHTMLData{
-		Manifest:            report.Manifest,
-		TotalPages:          report.Summary.TotalPages,
-		ComparedPages:       report.Summary.ComparedPages,
-		FailedPages:         report.Summary.FailedPages,
-		SamePages:           report.Summary.SamePages,
-		DifferentPages:      report.Summary.DifferentPages,
-		TotalFindings:       report.Summary.TotalFindings,
-		CriticalFindings:    report.Summary.Critical,
-		WarningFindings:     report.Summary.Warning,
-		InfoFindings:        report.Summary.Info,
-		ManifestJSON:        compareReviewMarkdownLinkTarget(rootDir, files.ManifestJSON),
-		ManifestMarkdown:    compareReviewMarkdownLinkTarget(rootDir, files.ManifestMarkdown),
-		ReviewSummary:       compareReviewMarkdownLinkTarget(rootDir, files.ReviewSummary),
-		ReviewIndex:         compareReviewMarkdownLinkTarget(rootDir, files.ReviewIndex),
-		FindingClusters:     compareManifestReviewHTMLGlobalClusters(rootDir, report, files),
-		FindingClustersMore: compareManifestReviewHTMLGlobalClusterOverflow(report),
-		Pages:               make([]compareManifestReviewHTMLPage, 0, len(report.Pages)),
+		Manifest:                 report.Manifest,
+		TotalPages:               report.Summary.TotalPages,
+		ComparedPages:            report.Summary.ComparedPages,
+		FailedPages:              report.Summary.FailedPages,
+		SamePages:                report.Summary.SamePages,
+		DifferentPages:           report.Summary.DifferentPages,
+		TotalFindings:            report.Summary.TotalFindings,
+		CriticalFindings:         report.Summary.Critical,
+		WarningFindings:          report.Summary.Warning,
+		InfoFindings:             report.Summary.Info,
+		ManifestJSON:             compareReviewMarkdownLinkTarget(rootDir, files.ManifestJSON),
+		ManifestMarkdown:         compareReviewMarkdownLinkTarget(rootDir, files.ManifestMarkdown),
+		ClusterDecisionsTemplate: compareReviewMarkdownLinkTarget(rootDir, files.ClusterDecisionsTemplate),
+		ReviewSummary:            compareReviewMarkdownLinkTarget(rootDir, files.ReviewSummary),
+		ReviewIndex:              compareReviewMarkdownLinkTarget(rootDir, files.ReviewIndex),
+		FindingClusters:          compareManifestReviewHTMLGlobalClusters(rootDir, report, files),
+		FindingClustersMore:      compareManifestReviewHTMLGlobalClusterOverflow(report),
+		Pages:                    make([]compareManifestReviewHTMLPage, 0, len(report.Pages)),
 	}
 	for i, page := range report.Pages {
 		directory := compareManifestReviewPageDirectory{Name: page.Name}
@@ -818,6 +835,7 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 	htmlPage.CompareJSON = compareReviewMarkdownLinkTarget(rootDir, filepath.Join(directory.Directory, compareReviewFileJSON))
 	htmlPage.PairDecisionsTemplate = compareReviewMarkdownLinkTarget(rootDir, filepath.Join(directory.Directory, compareReviewFilePairDecisionsTemplate))
 	htmlPage.FindingDecisionsTemplate = compareReviewMarkdownLinkTarget(rootDir, filepath.Join(directory.Directory, compareReviewFileFindingDecisionsTemplate))
+	htmlPage.ClusterDecisionsTemplate = compareReviewMarkdownLinkTarget(rootDir, filepath.Join(directory.Directory, compareReviewFileClusterDecisionsTemplate))
 	if directory.OldScreenshot != "" {
 		htmlPage.OldScreenshot = compareReviewMarkdownLinkTarget(rootDir, directory.OldScreenshot)
 	} else {
@@ -1232,6 +1250,7 @@ func compareManifestReviewPacketLinks(rootDir string, directory compareManifestR
 		compareReviewMarkdownLink(rootDir, "json", filepath.Join(directory.Directory, compareReviewFileJSON)),
 		compareReviewMarkdownLink(rootDir, "pairs", filepath.Join(directory.Directory, compareReviewFilePairDecisionsTemplate)),
 		compareReviewMarkdownLink(rootDir, "findings", filepath.Join(directory.Directory, compareReviewFileFindingDecisionsTemplate)),
+		compareReviewMarkdownLink(rootDir, "clusters", filepath.Join(directory.Directory, compareReviewFileClusterDecisionsTemplate)),
 	}
 	return strings.Join(links, " / ")
 }
@@ -1361,6 +1380,7 @@ img { display:block; width:100%; height:auto; background:#fff; }
 <nav class="top-links" aria-label="Review files">
 <a href="{{.ManifestJSON}}">manifest.json</a>
 <a href="{{.ManifestMarkdown}}">manifest.md</a>
+{{if .ClusterDecisionsTemplate}}<a href="{{.ClusterDecisionsTemplate}}">cluster decisions</a>{{end}}
 <a href="{{.ReviewSummary}}">review-summary.json</a>
 <a href="{{.ReviewIndex}}">review-index.md</a>
 </nav>
@@ -1409,6 +1429,7 @@ img { display:block; width:100%; height:auto; background:#fff; }
 {{if .CompareJSON}}<a href="{{.CompareJSON}}">compare.json</a>{{end}}
 {{if .PairDecisionsTemplate}}<a href="{{.PairDecisionsTemplate}}">pair decisions</a>{{end}}
 {{if .FindingDecisionsTemplate}}<a href="{{.FindingDecisionsTemplate}}">finding decisions</a>{{end}}
+{{if .ClusterDecisionsTemplate}}<a href="{{.ClusterDecisionsTemplate}}">cluster decisions</a>{{end}}
 </nav>
 {{if .FindingClusters}}
 <div class="clusters-preview">

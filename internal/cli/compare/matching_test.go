@@ -497,6 +497,37 @@ func TestRunCompareValidateDecisionsRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+func TestRunCompareValidateDecisionsUsesReviewSummaryClusters(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "cluster-decisions.jsonl")
+	summaryPath := filepath.Join(dir, "review-summary.json")
+	findings := []compareFinding{
+		{Kind: "layout_changed", FindingID: "layout_changed:a", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+		{Kind: "layout_changed", FindingID: "layout_changed:b", Severity: "warning", Impact: "layout_changed", Field: "bounds"},
+	}
+	clusters := compareFindingClusters(findings, "dashboard")
+	input := fmt.Sprintf(`{"kind":"accepted_finding_cluster","cluster_key":%q,"confidence":"high","reason":"ok"}`+"\n", clusters[0].Key)
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(summaryPath, compareReviewSummary{FindingClusters: clusters}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--review-summary", summaryPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected validation to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 0 || !report.Summary.ReviewSummaryUsed || report.Summary.AcceptedFindings != 1 {
+		t.Fatalf("unexpected validation report: %+v", report)
+	}
+}
+
 func TestRunCompareNormalizeDecisionsWritesOutput(t *testing.T) {
 	dir := t.TempDir()
 	decisionsPath := filepath.Join(dir, "decisions.jsonl")
@@ -1032,15 +1063,16 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		Old: compareSnapshot{URL: "https://old.example.test"},
 		New: compareSnapshot{URL: "https://new.example.test"},
 		Summary: compareSummary{
-			TotalFindings:           2,
+			TotalFindings:           3,
 			Critical:                1,
-			Warning:                 1,
+			Warning:                 2,
 			MatchedNodes:            3,
 			AmbiguousMatchesSkipped: 1,
 		},
 		Findings: []compareFinding{
 			{Kind: "missing_node", FindingID: "missing_node:aaa111", Severity: "critical", Role: "button", Label: "Submit"},
 			{Kind: "layout_changed", FindingID: "layout_changed:bbb222", Severity: "warning", Field: "bounds"},
+			{Kind: "layout_changed", FindingID: "layout_changed:ccc333", Severity: "warning", Field: "bounds"},
 		},
 		MatchingDebug: &compareMatchingDebug{
 			AmbiguousCandidates: []compareMatchingDebugAmbiguousCandidate{
@@ -1070,6 +1102,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 		compareReviewFileMarkdown,
 		compareReviewFilePairDecisionsTemplate,
 		compareReviewFileFindingDecisionsTemplate,
+		compareReviewFileClusterDecisionsTemplate,
 		compareReviewFileOldScreenshot,
 		compareReviewFileNewScreenshot,
 		compareReviewFileSummary,
@@ -1086,7 +1119,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if err := json.Unmarshal(bytes, &summary); err != nil {
 		t.Fatalf("expected review summary json: %v\n%s", err, string(bytes))
 	}
-	if summary.TotalFindings != 2 || summary.CriticalFindings != 1 || summary.WarningFindings != 1 || summary.AmbiguousCandidates != 1 || summary.UnmatchedOld != 1 || summary.UnmatchedNew != 1 {
+	if summary.TotalFindings != 3 || summary.CriticalFindings != 1 || summary.WarningFindings != 2 || summary.AmbiguousCandidates != 1 || summary.UnmatchedOld != 1 || summary.UnmatchedNew != 1 {
 		t.Fatalf("unexpected review summary: %+v", summary)
 	}
 	if summary.Files.ReviewMarkdown != filepath.Join(dir, compareReviewFileReview) || summary.Files.CompareJSON != filepath.Join(dir, compareReviewFileJSON) || len(summary.NextCommands) == 0 {
@@ -1103,6 +1136,9 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if summary.Files.OldScreenshot != filepath.Join(dir, compareReviewFileOldScreenshot) || summary.Files.NewScreenshot != filepath.Join(dir, compareReviewFileNewScreenshot) {
 		t.Fatalf("expected screenshot file references: %+v", summary.Files)
 	}
+	if summary.Files.ClusterDecisionsTemplate != filepath.Join(dir, compareReviewFileClusterDecisionsTemplate) || len(summary.FindingClusters) != 1 {
+		t.Fatalf("expected cluster decision template summary: %+v", summary)
+	}
 	if len(summary.ScreenshotWarnings) != 1 {
 		t.Fatalf("expected screenshot warning in review summary: %+v", summary)
 	}
@@ -1117,8 +1153,15 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
+	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "cluster-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
 		t.Fatalf("unexpected review guide:\n%s", string(reviewGuide))
+	}
+	clusterTemplate, err := os.ReadFile(filepath.Join(dir, compareReviewFileClusterDecisionsTemplate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(clusterTemplate), `"kind":"accepted_finding_cluster"`) || !strings.Contains(string(clusterTemplate), `"confidence":"unknown"`) || !strings.Contains(string(clusterTemplate), "2 similar") {
+		t.Fatalf("unexpected cluster decision template:\n%s", string(clusterTemplate))
 	}
 }
 
@@ -1323,13 +1366,23 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	if summary.Files.ReviewIndex != filepath.Join(dir, compareReviewFileIndex) {
 		t.Fatalf("expected review index in summary: %+v", summary.Files)
 	}
+	if summary.Files.ClusterDecisionsTemplate != filepath.Join(dir, compareReviewFileClusterDecisionsTemplate) {
+		t.Fatalf("expected cluster decision template in summary: %+v", summary.Files)
+	}
 	guideBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileReview))
 	if err != nil {
 		t.Fatal(err)
 	}
 	guide := string(guideBytes)
-	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "Pair decision workload: 9 total") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "accepted_finding_cluster") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
+	if !strings.Contains(guide, "Nexus Manifest Review") || !strings.Contains(guide, "Pair decision workload: 9 total") || !strings.Contains(guide, "cluster-decisions.todo.jsonl") || !strings.Contains(guide, "validate-decisions") || !strings.Contains(guide, "review-index.html") || !strings.Contains(guide, "001-dashboard/REVIEW.md") {
 		t.Fatalf("unexpected manifest review guide:\n%s", guide)
+	}
+	clusterTemplate, err := os.ReadFile(filepath.Join(dir, compareReviewFileClusterDecisionsTemplate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(clusterTemplate), `"kind":"accepted_finding_cluster"`) || !strings.Contains(string(clusterTemplate), `"confidence":"unknown"`) || !strings.Contains(string(clusterTemplate), "2 similar") {
+		t.Fatalf("unexpected manifest cluster decision template:\n%s", string(clusterTemplate))
 	}
 	if summary.Files.ReviewIndexHTML != filepath.Join(dir, compareReviewFileIndexHTML) {
 		t.Fatalf("expected html review index in summary: %+v", summary.Files)
@@ -1339,7 +1392,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	index := string(indexBytes)
-	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "Pair decisions") || !strings.Contains(index, "9 total") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
+	if !strings.Contains(index, "Compare Review Index") || !strings.Contains(index, "Pair decisions") || !strings.Contains(index, "9 total") || !strings.Contains(index, "[REVIEW.md](REVIEW.md)") || !strings.Contains(index, "cluster-decisions.todo.jsonl") || !strings.Contains(index, "[md](001-dashboard/compare.md)") || !strings.Contains(index, "failed") {
 		t.Fatalf("unexpected review index:\n%s", index)
 	}
 	htmlBytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileIndexHTML))
@@ -1347,7 +1400,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(htmlBytes)
-	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, `src="001-dashboard/findings/missing_node-aaa111-old.png"`) || !strings.Contains(html, "Repeated finding clusters") || !strings.Contains(html, "2 similar") || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, `src="001-dashboard/findings/missing_node-aaa111-old.png"`) || !strings.Contains(html, "cluster decisions") || !strings.Contains(html, "Repeated finding clusters") || !strings.Contains(html, "2 similar") || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
 		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 }
