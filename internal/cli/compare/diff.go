@@ -49,6 +49,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 		css := compareNodeCSS(node, options.CSSProperties)
 		bounds := compareNodeBounds(node, options.CompareLayout)
 		matchBounds := compareNodeMatchingBounds(node)
+		cropBounds := compareNodeCropBounds(node)
 		structureKey := ""
 		subtreeSignature := ""
 		if includeStructure {
@@ -85,6 +86,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Placeholder:      placeholder,
 			AriaLabel:        ariaLabel,
 			MatchBounds:      matchBounds,
+			CropBounds:       cropBounds,
 		}
 		if !compareNodeInScope(snapshotNode, options.NodeScope) {
 			continue
@@ -588,6 +590,14 @@ func compareNodeMatchingBounds(node api.Node) *api.Rect {
 	}
 	bounds := node.Bounds
 	return &bounds
+}
+
+func compareNodeCropBounds(node api.Node) *api.Rect {
+	if node.DocumentBounds != nil && compareRectValid(*node.DocumentBounds) {
+		bounds := *node.DocumentBounds
+		return &bounds
+	}
+	return compareNodeMatchingBounds(node)
 }
 
 func compareReferenceBounds(observation api.Observation, enabled bool) *api.Rect {

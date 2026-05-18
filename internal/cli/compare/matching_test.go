@@ -3,6 +3,9 @@ package comparecmd
 import (
 	"bytes"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"os"
 	"path/filepath"
 	"slices"
@@ -804,6 +807,89 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	}
 }
 
+func TestCompareReviewPacketWritesFindingCrops(t *testing.T) {
+	dir := t.TempDir()
+	oldBounds := api.Rect{X: 10, Y: 12, W: 20, H: 10}
+	newBounds := api.Rect{X: 30, Y: 18, W: 24, H: 12}
+	oldCropBounds := api.Rect{X: 11, Y: 52, W: 20, H: 10}
+	newCropBounds := api.Rect{X: 31, Y: 58, W: 24, H: 12}
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "cta", Ref: "@e1", Role: "button", Label: "Submit", MatchBounds: &oldBounds, CropBounds: &oldCropBounds},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "cta", Ref: "@e1", Role: "button", Label: "Submit", MatchBounds: &newBounds, CropBounds: &newCropBounds},
+			},
+		},
+		Summary: compareSummary{TotalFindings: 1, Warning: 1},
+		Findings: []compareFinding{
+			{Kind: "layout_changed", FindingID: "layout_changed:abc123", Severity: "warning", Fingerprint: "cta", Role: "button", Label: "Submit"},
+		},
+	}
+
+	if err := writeCompareReviewPacket(dir, report, compareReviewScreenshots{Old: testCompareReviewPNG(t, 80, 80), New: testCompareReviewPNG(t, 90, 90)}); err != nil {
+		t.Fatalf("expected review packet to write: %v", err)
+	}
+	for _, side := range []struct {
+		name string
+		w    int
+		h    int
+		x    int
+		y    int
+	}{
+		{name: "old", w: 20, h: 10, x: oldCropBounds.X, y: oldCropBounds.Y},
+		{name: "new", w: 24, h: 12, x: newCropBounds.X, y: newCropBounds.Y},
+	} {
+		path := filepath.Join(dir, compareReviewFileFindingsDir, compareReviewFindingCropFileName("layout_changed:abc123", side.name))
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatalf("expected %s crop to exist: %v", side.name, err)
+		}
+		img, err := png.Decode(file)
+		file.Close()
+		if err != nil {
+			t.Fatalf("expected %s crop png: %v", side.name, err)
+		}
+		if img.Bounds().Dx() != side.w || img.Bounds().Dy() != side.h {
+			t.Fatalf("unexpected %s crop size: %dx%d", side.name, img.Bounds().Dx(), img.Bounds().Dy())
+		}
+		pixel := color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA)
+		if pixel.R != uint8(side.x%255) || pixel.G != uint8(side.y%255) {
+			t.Fatalf("expected %s crop to use crop bounds, got first pixel %+v", side.name, pixel)
+		}
+	}
+
+	var summary compareReviewSummary
+	bytes, err := os.ReadFile(filepath.Join(dir, compareReviewFileSummary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(bytes, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Files.FindingScreenshotsDir != filepath.Join(dir, compareReviewFileFindingsDir) || len(summary.CropWarnings) != 0 {
+		t.Fatalf("unexpected crop summary: %+v", summary)
+	}
+}
+
+func testCompareReviewPNG(t *testing.T, width int, height int) []byte {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: uint8(x % 255), G: uint8(y % 255), B: 180, A: 255})
+		}
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, img); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
 func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 	dir := t.TempDir()
 	report := compareManifestReport{
@@ -845,6 +931,13 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 			NewScreenshot:    filepath.Join(dir, "001-dashboard", compareReviewFileNewScreenshot),
 		},
 		{Name: "settings", Directory: filepath.Join(dir, "002-settings"), Error: "failed"},
+	}
+	cropDir := filepath.Join(dir, "001-dashboard", compareReviewFileFindingsDir)
+	if err := os.MkdirAll(cropDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cropDir, compareReviewFindingCropFileName("missing_node:aaa111", "old")), testCompareReviewPNG(t, 20, 10), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := writeCompareManifestReviewPacket(dir, report, pageDirectories); err != nil {
@@ -894,7 +987,7 @@ func TestCompareManifestReviewPacketWritesManifestFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	html := string(htmlBytes)
-	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
+	if !strings.Contains(html, "<title>Compare Review Index</title>") || !strings.Contains(html, `src="001-dashboard/old.png"`) || !strings.Contains(html, `src="001-dashboard/findings/missing_node-aaa111-old.png"`) || !strings.Contains(html, "missing_node:aaa111") || !strings.Contains(html, "accepted_finding") || !strings.Contains(html, "regression_finding") || strings.Contains(html, "css_changed:ccc333") {
 		t.Fatalf("unexpected html review index:\n%s", html)
 	}
 }
@@ -912,7 +1005,7 @@ func TestCompareManifestReviewHTMLFindingsLimitsCriticalAndWarning(t *testing.T)
 		},
 	}
 
-	previews := compareManifestReviewHTMLFindings(report)
+	previews := compareManifestReviewHTMLFindings("", compareManifestReviewPageDirectory{}, report)
 	if len(previews) != 5 {
 		t.Fatalf("expected first five critical/warning previews, got %+v", previews)
 	}

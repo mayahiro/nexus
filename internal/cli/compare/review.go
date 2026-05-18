@@ -1,15 +1,20 @@
 package comparecmd
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"image"
+	"image/draw"
+	"image/png"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/rpc"
@@ -22,6 +27,7 @@ const (
 	compareReviewFileFindingDecisionsTemplate = "finding-decisions.todo.jsonl"
 	compareReviewFileOldScreenshot            = "old.png"
 	compareReviewFileNewScreenshot            = "new.png"
+	compareReviewFileFindingsDir              = "findings"
 	compareReviewFileSummary                  = "review-summary.json"
 	compareReviewFileManifestJSON             = "manifest.json"
 	compareReviewFileManifestMarkdown         = "manifest.md"
@@ -58,6 +64,10 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 			return err
 		}
 	}
+	cropWarnings, err := writeCompareReviewFindingScreenshots(dir, report, screenshots, &files)
+	if err != nil {
+		return err
+	}
 	if err := writeCompareJSON(files.CompareJSON, report); err != nil {
 		return err
 	}
@@ -70,10 +80,10 @@ func writeCompareReviewPacket(dir string, report compareReport, screenshots comp
 	if err := writeCompareFindingDecisionsTemplate(files.FindingDecisionsTemplate, report); err != nil {
 		return err
 	}
-	return writeIndentedJSONFile(files.ReviewSummary, buildCompareReviewSummary(report, files, screenshots.Warnings))
+	return writeIndentedJSONFile(files.ReviewSummary, buildCompareReviewSummary(report, files, screenshots.Warnings, cropWarnings))
 }
 
-func buildCompareReviewSummary(report compareReport, files compareReviewFiles, screenshotWarnings []string) compareReviewSummary {
+func buildCompareReviewSummary(report compareReport, files compareReviewFiles, screenshotWarnings []string, cropWarnings []string) compareReviewSummary {
 	summary := compareReviewSummary{
 		Old:                     firstNonEmpty(report.Old.URL, report.Old.SessionID),
 		New:                     firstNonEmpty(report.New.URL, report.New.SessionID),
@@ -86,6 +96,7 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		AmbiguousMatchesSkipped: report.Summary.AmbiguousMatchesSkipped,
 		Files:                   files,
 		ScreenshotWarnings:      append([]string(nil), screenshotWarnings...),
+		CropWarnings:            append([]string(nil), cropWarnings...),
 	}
 	if report.Scope != nil {
 		summary.Scope = compareScopeLabel(report.Scope)
@@ -101,6 +112,160 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 		"nxctl compare normalize-decisions --decisions-file " + files.PairDecisionsTemplate + " --compare-json " + files.CompareJSON + " --output " + filepath.Join(filepath.Dir(files.PairDecisionsTemplate), "pair-decisions.normalized.jsonl"),
 	}
 	return summary
+}
+
+func writeCompareReviewFindingScreenshots(dir string, report compareReport, screenshots compareReviewScreenshots, files *compareReviewFiles) ([]string, error) {
+	warnings := []string{}
+	findingDir := filepath.Join(dir, compareReviewFileFindingsDir)
+	wrote := false
+	for _, finding := range report.Findings {
+		if !compareReviewFindingCropsIncluded(finding) {
+			continue
+		}
+		for _, crop := range compareReviewFindingCrops(report, finding, screenshots) {
+			if crop.Rect == nil || len(crop.Screenshot) == 0 {
+				continue
+			}
+			data, err := cropCompareReviewScreenshot(crop.Screenshot, *crop.Rect)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("%s %s crop: %v", finding.FindingID, crop.Side, err))
+				continue
+			}
+			if !wrote {
+				if err := os.MkdirAll(findingDir, 0o755); err != nil {
+					return warnings, err
+				}
+				files.FindingScreenshotsDir = findingDir
+				wrote = true
+			}
+			path := filepath.Join(findingDir, compareReviewFindingCropFileName(finding.FindingID, crop.Side))
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				return warnings, err
+			}
+		}
+	}
+	return warnings, nil
+}
+
+type compareReviewFindingCrop struct {
+	Side       string
+	Screenshot []byte
+	Rect       *api.Rect
+}
+
+func compareReviewFindingCrops(report compareReport, finding compareFinding, screenshots compareReviewScreenshots) []compareReviewFindingCrop {
+	crops := make([]compareReviewFindingCrop, 0, 2)
+	if finding.Kind != "new_node" {
+		crops = append(crops, compareReviewFindingCrop{
+			Side:       "old",
+			Screenshot: screenshots.Old,
+			Rect:       compareReviewFindingCropRect(report.Old.Nodes, finding),
+		})
+	}
+	if finding.Kind != "missing_node" {
+		crops = append(crops, compareReviewFindingCrop{
+			Side:       "new",
+			Screenshot: screenshots.New,
+			Rect:       compareReviewFindingCropRect(report.New.Nodes, finding),
+		})
+	}
+	return crops
+}
+
+func compareReviewFindingCropsIncluded(finding compareFinding) bool {
+	if !compareManifestReviewHTMLFindingIncluded(finding) {
+		return false
+	}
+	return strings.TrimSpace(finding.FindingID) != ""
+}
+
+func compareReviewFindingCropRect(nodes []compareSnapshotNode, finding compareFinding) *api.Rect {
+	bestScore := 0
+	var best *api.Rect
+	for i := range nodes {
+		node := nodes[i]
+		rect := node.CropBounds
+		if rect == nil {
+			rect = node.MatchBounds
+		}
+		if rect == nil || !compareRectValid(*rect) {
+			continue
+		}
+		score := compareReviewFindingNodeScore(node, finding)
+		if score > bestScore {
+			bestScore = score
+			best = rect
+		}
+	}
+	return best
+}
+
+func compareReviewFindingNodeScore(node compareSnapshotNode, finding compareFinding) int {
+	score := 0
+	if finding.Fingerprint != "" && node.Fingerprint == finding.Fingerprint {
+		score += 6
+	}
+	if finding.StructureKey != "" && node.StructureKey == finding.StructureKey {
+		score += 4
+	}
+	if finding.SubtreeSignature != "" && node.SubtreeSignature == finding.SubtreeSignature {
+		score += 3
+	}
+	if finding.Locator != "" && compareNodeLocator(node) == finding.Locator {
+		score += 6
+	}
+	if finding.Role != "" && node.Role == finding.Role {
+		score += 2
+	}
+	if finding.Label != "" && node.Label == finding.Label {
+		score += 3
+	}
+	return score
+}
+
+func cropCompareReviewScreenshot(data []byte, rect api.Rect) ([]byte, error) {
+	source, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("decode screenshot: %w", err)
+	}
+	bounds := image.Rect(rect.X, rect.Y, rect.X+rect.W, rect.Y+rect.H).Intersect(source.Bounds())
+	if bounds.Dx() <= 0 || bounds.Dy() <= 0 {
+		return nil, fmt.Errorf("bbox is outside the captured screenshot")
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, bounds.Dx(), bounds.Dy()))
+	draw.Draw(canvas, canvas.Bounds(), source, bounds.Min, draw.Src)
+	var output bytes.Buffer
+	if err := png.Encode(&output, canvas); err != nil {
+		return nil, fmt.Errorf("encode crop: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func compareReviewFindingCropFileName(findingID string, side string) string {
+	name := compareReviewSafeFileToken(findingID)
+	if name == "" {
+		name = "finding"
+	}
+	return name + "-" + compareReviewSafeFileToken(side) + ".png"
+}
+
+func compareReviewSafeFileToken(value string) string {
+	value = strings.TrimSpace(value)
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		ok := unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' || r == '-'
+		if ok {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(builder.String(), ".-")
 }
 
 func captureCompareReviewScreenshots(ctx context.Context, client *rpc.Client, oldSessionID string, newSessionID string) compareReviewScreenshots {
@@ -125,6 +290,7 @@ func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, ses
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
 			WithScreenshot: true,
+			FullScreenshot: true,
 		},
 	})
 	if err != nil {
@@ -296,6 +462,8 @@ type compareManifestReviewHTMLFinding struct {
 	Target             string
 	Locator            string
 	FindingID          string
+	OldCrop            string
+	NewCrop            string
 	AcceptedDecision   string
 	RegressionDecision string
 }
@@ -360,7 +528,7 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 		Priority:           priority,
 		Findings:           compareManifestReviewFindingsLabel(directory, page),
 		Status:             status,
-		FindingPreview:     compareManifestReviewHTMLFindings(page.Report),
+		FindingPreview:     compareManifestReviewHTMLFindings(rootDir, directory, page.Report),
 		FindingPreviewMore: compareManifestReviewHTMLFindingOverflow(page.Report),
 	}
 	if strings.TrimSpace(directory.Directory) == "" || directory.Error != "" {
@@ -383,7 +551,7 @@ func buildCompareManifestReviewHTMLPage(rootDir string, page compareManifestPage
 	return htmlPage
 }
 
-func compareManifestReviewHTMLFindings(report *compareReport) []compareManifestReviewHTMLFinding {
+func compareManifestReviewHTMLFindings(rootDir string, directory compareManifestReviewPageDirectory, report *compareReport) []compareManifestReviewHTMLFinding {
 	if report == nil {
 		return nil
 	}
@@ -402,11 +570,24 @@ func compareManifestReviewHTMLFindings(report *compareReport) []compareManifestR
 			Target:             compareManifestReviewFindingTarget(finding),
 			Locator:            finding.Locator,
 			FindingID:          finding.FindingID,
+			OldCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, finding.FindingID, "old"),
+			NewCrop:            compareManifestReviewFindingCropLink(rootDir, directory.Directory, finding.FindingID, "new"),
 			AcceptedDecision:   compareManifestReviewFindingDecisionJSONL("accepted_finding", finding.FindingID),
 			RegressionDecision: compareManifestReviewFindingDecisionJSONL("regression_finding", finding.FindingID),
 		})
 	}
 	return previews
+}
+
+func compareManifestReviewFindingCropLink(rootDir string, pageDir string, findingID string, side string) string {
+	if strings.TrimSpace(pageDir) == "" || strings.TrimSpace(findingID) == "" {
+		return ""
+	}
+	path := filepath.Join(pageDir, compareReviewFileFindingsDir, compareReviewFindingCropFileName(findingID, side))
+	if _, err := os.Stat(path); err != nil {
+		return ""
+	}
+	return compareReviewMarkdownLinkTarget(rootDir, path)
 }
 
 func compareManifestReviewHTMLFindingOverflow(report *compareReport) int {
@@ -611,6 +792,9 @@ main { padding:18px 28px 32px; }
 .finding-kind { font-weight:600; }
 .finding-impact, .finding-target, .finding-locator { color:var(--muted); }
 code { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:12px; word-break:break-all; }
+.finding-crops { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:8px; }
+.finding-crops figure { border-radius:4px; }
+.finding-crops figcaption { padding:5px 7px; font-size:12px; }
 .decision-stubs { margin-top:8px; }
 .decision-stubs summary { cursor:pointer; color:var(--info); font-weight:600; }
 .decision-stubs pre { margin:6px 0 0; padding:8px; overflow:auto; border:1px solid var(--border); border-radius:6px; background:#f6f8fa; }
@@ -672,6 +856,12 @@ img { display:block; width:100%; height:auto; background:#fff; }
 {{if .Target}}<div class="finding-target">{{.Target}}</div>{{end}}
 {{if .Locator}}<div class="finding-locator">{{.Locator}}</div>{{end}}
 {{if .FindingID}}<code>{{.FindingID}}</code>{{end}}
+{{if or .OldCrop .NewCrop}}
+<div class="finding-crops">
+{{if .OldCrop}}<figure><a href="{{.OldCrop}}"><img src="{{.OldCrop}}" alt="{{.FindingID}} old crop"></a><figcaption>Old crop</figcaption></figure>{{end}}
+{{if .NewCrop}}<figure><a href="{{.NewCrop}}"><img src="{{.NewCrop}}" alt="{{.FindingID}} new crop"></a><figcaption>New crop</figcaption></figure>{{end}}
+</div>
+{{end}}
 {{if .AcceptedDecision}}<details class="decision-stubs"><summary>decision JSONL</summary><pre><code>{{.AcceptedDecision}}
 {{.RegressionDecision}}</code></pre></details>{{end}}
 </div>

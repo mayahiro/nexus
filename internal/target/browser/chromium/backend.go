@@ -428,6 +428,8 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 
   const nodes = candidates.map((el, index) => {
     const rect = el.getBoundingClientRect();
+    const documentX = rect.x + (window.scrollX || window.pageXOffset || 0);
+    const documentY = rect.y + (window.scrollY || window.pageYOffset || 0);
     const parentCandidate = candidates.find((candidate) => candidate !== el && candidate.contains(el) && !Array.from(candidates).some((other) => other !== candidate && other !== el && other.contains(el) && candidate.contains(other)));
     const children = candidates.filter((candidate) => candidate !== el && el.contains(candidate) && !Array.from(candidates).some((other) => other !== candidate && other !== el && el.contains(other) && other.contains(candidate))).map((child) => ids.get(child));
 
@@ -451,6 +453,12 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
       bounds: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height)
+      },
+      document_bounds: {
+        x: Math.round(documentX),
+        y: Math.round(documentY),
         w: Math.round(rect.width),
         h: Math.round(rect.height)
       },
@@ -2475,28 +2483,29 @@ func debugHTTPBaseURL(devtoolsURL string) (string, error) {
 }
 
 type rawNode struct {
-	ID            int                     `json:"id"`
-	Fingerprint   string                  `json:"fingerprint"`
-	StructurePath string                  `json:"structure_path"`
-	TextLength    int                     `json:"text_length"`
-	Descendants   int                     `json:"descendants"`
-	Role          string                  `json:"role"`
-	Name          string                  `json:"name"`
-	Text          string                  `json:"text"`
-	Value         string                  `json:"value"`
-	Styles        map[string]string       `json:"styles"`
-	LayoutContext []api.LayoutContextNode `json:"layout_context"`
-	Bounds        api.Rect                `json:"bounds"`
-	Visible       bool                    `json:"visible"`
-	Enabled       bool                    `json:"enabled"`
-	Focused       bool                    `json:"focused"`
-	Editable      bool                    `json:"editable"`
-	Selectable    bool                    `json:"selectable"`
-	Invokable     bool                    `json:"invokable"`
-	Scrollable    bool                    `json:"scrollable"`
-	Children      []int                   `json:"children"`
-	Attrs         map[string]string       `json:"attrs"`
-	ParentID      *int                    `json:"parent_id"`
+	ID             int                     `json:"id"`
+	Fingerprint    string                  `json:"fingerprint"`
+	StructurePath  string                  `json:"structure_path"`
+	TextLength     int                     `json:"text_length"`
+	Descendants    int                     `json:"descendants"`
+	Role           string                  `json:"role"`
+	Name           string                  `json:"name"`
+	Text           string                  `json:"text"`
+	Value          string                  `json:"value"`
+	Styles         map[string]string       `json:"styles"`
+	LayoutContext  []api.LayoutContextNode `json:"layout_context"`
+	Bounds         api.Rect                `json:"bounds"`
+	DocumentBounds *api.Rect               `json:"document_bounds"`
+	Visible        bool                    `json:"visible"`
+	Enabled        bool                    `json:"enabled"`
+	Focused        bool                    `json:"focused"`
+	Editable       bool                    `json:"editable"`
+	Selectable     bool                    `json:"selectable"`
+	Invokable      bool                    `json:"invokable"`
+	Scrollable     bool                    `json:"scrollable"`
+	Children       []int                   `json:"children"`
+	Attrs          map[string]string       `json:"attrs"`
+	ParentID       *int                    `json:"parent_id"`
 }
 
 func parseTreeJSON(treeJSON string) ([]api.Node, error) {
@@ -2512,28 +2521,29 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 	nodes := make([]api.Node, 0, len(raw))
 	for _, node := range raw {
 		parsed := api.Node{
-			ID:            node.ID,
-			Ref:           formatNodeRef(node.ID),
-			Fingerprint:   strings.TrimSpace(node.Fingerprint),
-			StructurePath: strings.TrimSpace(node.StructurePath),
-			TextLength:    node.TextLength,
-			Descendants:   node.Descendants,
-			Role:          node.Role,
-			Name:          strings.TrimSpace(node.Name),
-			Text:          strings.TrimSpace(node.Text),
-			Value:         strings.TrimSpace(node.Value),
-			Styles:        node.Styles,
-			LayoutContext: normalizeLayoutContext(node.LayoutContext),
-			Bounds:        node.Bounds,
-			Visible:       node.Visible,
-			Enabled:       node.Enabled,
-			Focused:       node.Focused,
-			Editable:      node.Editable,
-			Selectable:    node.Selectable,
-			Invokable:     node.Invokable,
-			Scrollable:    node.Scrollable,
-			Children:      node.Children,
-			Attrs:         node.Attrs,
+			ID:             node.ID,
+			Ref:            formatNodeRef(node.ID),
+			Fingerprint:    strings.TrimSpace(node.Fingerprint),
+			StructurePath:  strings.TrimSpace(node.StructurePath),
+			TextLength:     node.TextLength,
+			Descendants:    node.Descendants,
+			Role:           node.Role,
+			Name:           strings.TrimSpace(node.Name),
+			Text:           strings.TrimSpace(node.Text),
+			Value:          strings.TrimSpace(node.Value),
+			Styles:         node.Styles,
+			LayoutContext:  normalizeLayoutContext(node.LayoutContext),
+			Bounds:         node.Bounds,
+			DocumentBounds: node.DocumentBounds,
+			Visible:        node.Visible,
+			Enabled:        node.Enabled,
+			Focused:        node.Focused,
+			Editable:       node.Editable,
+			Selectable:     node.Selectable,
+			Invokable:      node.Invokable,
+			Scrollable:     node.Scrollable,
+			Children:       node.Children,
+			Attrs:          node.Attrs,
 		}
 		parsed.LocatorHints = buildLocatorHints(parsed)
 		nodes = append(nodes, parsed)

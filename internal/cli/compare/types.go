@@ -72,6 +72,7 @@ type compareSnapshotNode struct {
 	Placeholder      string            `json:"-"`
 	AriaLabel        string            `json:"-"`
 	MatchBounds      *api.Rect         `json:"-"`
+	CropBounds       *api.Rect         `json:"-"`
 }
 
 type compareSummary struct {
@@ -194,6 +195,7 @@ type compareReviewFiles struct {
 	FindingDecisionsTemplate string `json:"finding_decisions_template"`
 	OldScreenshot            string `json:"old_screenshot,omitempty"`
 	NewScreenshot            string `json:"new_screenshot,omitempty"`
+	FindingScreenshotsDir    string `json:"finding_screenshots_dir,omitempty"`
 	ReviewSummary            string `json:"review_summary"`
 }
 
@@ -213,6 +215,7 @@ type compareReviewSummary struct {
 	UnmatchedNew            int                `json:"unmatched_new,omitempty"`
 	Files                   compareReviewFiles `json:"files"`
 	ScreenshotWarnings      []string           `json:"screenshot_warnings,omitempty"`
+	CropWarnings            []string           `json:"crop_warnings,omitempty"`
 	NextCommands            []string           `json:"next_commands,omitempty"`
 }
 

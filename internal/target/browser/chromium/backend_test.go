@@ -192,6 +192,7 @@ func TestParseTreeJSON(t *testing.T) {
 				}
 			],
 			"bounds": {"x": 10, "y": 20, "w": 30, "h": 40},
+			"document_bounds": {"x": 10, "y": 120, "w": 30, "h": 40},
 			"visible": true,
 			"enabled": true,
 			"focused": false,
@@ -258,6 +259,9 @@ func TestParseTreeJSON(t *testing.T) {
 	}
 	if tree[0].Styles["color"] != "rgb(0, 0, 0)" || tree[1].Styles["pointer-events"] != "auto" {
 		t.Fatalf("unexpected node styles: %+v", tree)
+	}
+	if tree[0].DocumentBounds == nil || tree[0].DocumentBounds.Y != 120 {
+		t.Fatalf("expected document bounds: %+v", tree[0].DocumentBounds)
 	}
 	if len(tree[0].LayoutContext) != 1 || tree[0].LayoutContext[0].Selector != "form.actions" || tree[0].LayoutContext[0].Styles["display"] != "flex" {
 		t.Fatalf("unexpected layout context: %+v", tree[0].LayoutContext)

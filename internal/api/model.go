@@ -98,29 +98,30 @@ type Observation struct {
 }
 
 type Node struct {
-	ID            int                 `json:"id"`
-	Ref           string              `json:"ref,omitempty"`
-	Fingerprint   string              `json:"fingerprint,omitempty"`
-	LocatorHints  []LocatorHint       `json:"locator_hints,omitempty"`
-	StructurePath string              `json:"structure_path,omitempty"`
-	TextLength    int                 `json:"text_length,omitempty"`
-	Descendants   int                 `json:"descendants,omitempty"`
-	Role          string              `json:"role"`
-	Name          string              `json:"name,omitempty"`
-	Text          string              `json:"text,omitempty"`
-	Value         string              `json:"value,omitempty"`
-	Styles        map[string]string   `json:"styles,omitempty"`
-	LayoutContext []LayoutContextNode `json:"layout_context,omitempty"`
-	Bounds        Rect                `json:"bounds,omitempty"`
-	Visible       bool                `json:"visible"`
-	Enabled       bool                `json:"enabled"`
-	Focused       bool                `json:"focused"`
-	Editable      bool                `json:"editable"`
-	Selectable    bool                `json:"selectable"`
-	Invokable     bool                `json:"invokable"`
-	Scrollable    bool                `json:"scrollable"`
-	Children      []int               `json:"children,omitempty"`
-	Attrs         map[string]string   `json:"attrs,omitempty"`
+	ID             int                 `json:"id"`
+	Ref            string              `json:"ref,omitempty"`
+	Fingerprint    string              `json:"fingerprint,omitempty"`
+	LocatorHints   []LocatorHint       `json:"locator_hints,omitempty"`
+	StructurePath  string              `json:"structure_path,omitempty"`
+	TextLength     int                 `json:"text_length,omitempty"`
+	Descendants    int                 `json:"descendants,omitempty"`
+	Role           string              `json:"role"`
+	Name           string              `json:"name,omitempty"`
+	Text           string              `json:"text,omitempty"`
+	Value          string              `json:"value,omitempty"`
+	Styles         map[string]string   `json:"styles,omitempty"`
+	LayoutContext  []LayoutContextNode `json:"layout_context,omitempty"`
+	Bounds         Rect                `json:"bounds,omitempty"`
+	DocumentBounds *Rect               `json:"document_bounds,omitempty"`
+	Visible        bool                `json:"visible"`
+	Enabled        bool                `json:"enabled"`
+	Focused        bool                `json:"focused"`
+	Editable       bool                `json:"editable"`
+	Selectable     bool                `json:"selectable"`
+	Invokable      bool                `json:"invokable"`
+	Scrollable     bool                `json:"scrollable"`
+	Children       []int               `json:"children,omitempty"`
+	Attrs          map[string]string   `json:"attrs,omitempty"`
 }
 
 type LayoutContextNode struct {
