@@ -201,6 +201,33 @@ type compareDecisionMaterializeReport struct {
 	Issues       []compareDecisionValidationIssue  `json:"issues,omitempty"`
 }
 
+type compareDecisionRepairSummary struct {
+	InputDecisions  int    `json:"input_decisions"`
+	OutputDecisions int    `json:"output_decisions"`
+	RepairedRefs    int    `json:"repaired_refs"`
+	UnrepairedRefs  int    `json:"unrepaired_refs"`
+	Output          string `json:"output,omitempty"`
+	Errors          int    `json:"errors"`
+	Warnings        int    `json:"warnings"`
+	CompareJSONUsed bool   `json:"compare_json_used"`
+}
+
+type compareDecisionRepairedRef struct {
+	Line      int    `json:"line"`
+	Side      string `json:"side"`
+	Source    string `json:"source"`
+	Value     string `json:"value"`
+	OldRef    string `json:"old_ref"`
+	NewRef    string `json:"new_ref"`
+	MatchedBy string `json:"matched_by"`
+}
+
+type compareDecisionRepairReport struct {
+	Summary  compareDecisionRepairSummary     `json:"summary"`
+	Repaired []compareDecisionRepairedRef     `json:"repaired,omitempty"`
+	Issues   []compareDecisionValidationIssue `json:"issues,omitempty"`
+}
+
 type compareDecisionAuditSummary struct {
 	TotalDecisions  int  `json:"total_decisions"`
 	Applied         int  `json:"applied"`

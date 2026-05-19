@@ -833,6 +833,110 @@ func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
 	}
 }
 
+func TestRunCompareRepairDecisionsWritesRefs(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	outputPath := filepath.Join(dir, "decisions.repaired.jsonl")
+	input := strings.Join([]string{
+		`{"kind":"pair","old":"@e99","old_fingerprint":"old-save","new":"@e98","new_locator":"href:/jobs","confidence":"high","reason":"same CTA"}`,
+		`{"kind":"accepted_removed","old":"@e3","old_fingerprint":"old-legacy","reason":"current ref should stay"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save changes", Name: "Save changes"},
+				{Fingerprint: "old-legacy", Ref: "@e3", Role: "link", Text: "Legacy only"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "new-jobs", Ref: "@e2", Role: "link", Label: "Jobs", Name: "Jobs", Href: "/jobs"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareRepairDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--output", outputPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected repair to pass: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionRepairReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected repair json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.InputDecisions != 2 || report.Summary.OutputDecisions != 2 || report.Summary.RepairedRefs != 2 || report.Summary.UnrepairedRefs != 0 || report.Summary.Warnings != 0 || !report.Summary.CompareJSONUsed {
+		t.Fatalf("unexpected repair summary: %+v", report.Summary)
+	}
+	if len(report.Repaired) != 2 {
+		t.Fatalf("expected two repaired refs: %+v", report.Repaired)
+	}
+	if report.Repaired[0].Side != "old" || report.Repaired[0].Source != "old_fingerprint" || report.Repaired[0].OldRef != "@e99" || report.Repaired[0].NewRef != "@e1" || report.Repaired[0].MatchedBy != "fingerprint" {
+		t.Fatalf("unexpected first repair detail: %+v", report.Repaired[0])
+	}
+	if report.Repaired[1].Side != "new" || report.Repaired[1].Source != "new_locator" || report.Repaired[1].OldRef != "@e98" || report.Repaired[1].NewRef != "@e2" || report.Repaired[1].MatchedBy != "locator" {
+		t.Fatalf("unexpected second repair detail: %+v", report.Repaired[1])
+	}
+	outputBytes, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(outputBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected two repaired decisions, got %q", string(outputBytes))
+	}
+	var first compareDecision
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatalf("expected first repaired decision: %v\n%s", err, lines[0])
+	}
+	if first.Old != "@e1" || first.New != "@e2" || first.OldFingerprint != "old-save" || first.NewLocator == "" {
+		t.Fatalf("unexpected first repaired decision: %+v", first)
+	}
+	var second compareDecision
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatalf("expected second repaired decision: %v\n%s", err, lines[1])
+	}
+	if second.Old != "@e3" {
+		t.Fatalf("expected current ref to stay unchanged: %+v", second)
+	}
+}
+
+func TestRunCompareRepairDecisionsReportsUnrepairedRef(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"accepted_removed","old":"@e9","reason":"stale without metadata"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Fingerprint: "old-current", Ref: "@e1", Role: "link", Text: "Current"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareRepairDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected unresolved repair to warn without failing: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionRepairReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected repair json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.RepairedRefs != 0 || report.Summary.UnrepairedRefs != 1 || report.Summary.Warnings != 1 || len(report.Issues) != 1 || report.Issues[0].Field != "old" {
+		t.Fatalf("unexpected unrepaired report: %+v", report)
+	}
+}
+
 func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 	decisions := []compareDecision{
 		{Kind: "pair", OldSelector: "#save", NewSelector: "a.jobs", Confidence: "high", Reason: "same CTA"},

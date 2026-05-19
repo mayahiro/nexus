@@ -17,6 +17,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare repair-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
 	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
@@ -26,6 +27,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "decisions: --decisions-file reads JSONL entries and applies high-confidence pair/subtree_pair decisions before automatic matching, plus finding_id decisions after finding generation")
 	fmt.Fprintln(w, "decision validation: validate-decisions can preflight session-backed old_selector/new_selector fields with --old-session/--new-session before materialization")
 	fmt.Fprintln(w, "decision materialize: materialize-decisions resolves old_locator/new_locator and session-backed old_selector/new_selector fields to current refs before compare")
+	fmt.Fprintln(w, "decision repair: repair-decisions updates stale old/new refs from selector, locator, or fingerprint metadata when they still resolve uniquely")
 	fmt.Fprintln(w, "decisions template: --output-decisions-template writes editable JSONL stubs with locator and unique selector hints for ambiguous and unmatched old/new nodes")
 	fmt.Fprintln(w, "finding decisions template: --output-finding-decisions-template writes editable JSONL stubs for critical and warning findings")
 	fmt.Fprintln(w, "review packet: --review-dir writes REVIEW.md, compare.json, compare.md, pair/finding/cluster decision templates, decision audit counts, full-page screenshots, cropped finding screenshots, finding clusters, and review-summary.json")
@@ -64,6 +66,15 @@ func PrintMaterializeDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "selector materialization requires --old-session for old_selector and --new-session for new_selector; each selector must resolve to one live node that maps to one compare JSON node")
 	fmt.Fprintln(w, "--json includes materialized[] entries with line, side, source, value, ref, and matched_by for review")
 	fmt.Fprintln(w, "without --output, materialized JSONL is written to stdout unless --json is used")
+	fmt.Fprintln(w, "")
+	printDocLink(w, "compare guide", aiCompareDocURL)
+}
+
+func PrintRepairDecisionsHelp(w io.Writer) {
+	fmt.Fprintln(w, "usage: nxctl compare repair-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
+	fmt.Fprintln(w, "repairs stale old/new refs in compare decision JSONL when old_selector/new_selector, old_locator/new_locator, or old_fingerprint/new_fingerprint resolves uniquely against the current compare JSON")
+	fmt.Fprintln(w, "selector-backed repair uses --old-session for old_selector and --new-session for new_selector; unresolved or ambiguous stale refs are left unchanged and reported as warnings")
+	fmt.Fprintln(w, "without --output, repaired JSONL is written to stdout unless --json is used")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
 }

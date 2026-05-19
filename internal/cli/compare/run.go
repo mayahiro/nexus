@@ -28,6 +28,9 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	if len(args) > 0 && args[0] == "materialize-decisions" {
 		return runCompareMaterializeDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
 	}
+	if len(args) > 0 && args[0] == "repair-decisions" {
+		return runCompareRepairDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
+	}
 	if len(args) > 0 && args[0] == "audit-decisions" {
 		return runCompareAuditDecisions(args[1:], stdout, stderr)
 	}
@@ -549,6 +552,113 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 		if len(report.Issues) > 0 {
 			fmt.Fprintln(stderr)
 			printCompareDecisionMaterializeReport(stderr, report)
+		}
+	}
+	if report.Summary.Errors > 0 {
+		return 1
+	}
+	return 0
+}
+
+func runCompareRepairDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
+	return runCompareRepairDecisionsWithClient(context.Background(), args, stdout, stderr, nil)
+}
+
+func runCompareRepairDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
+	if isHelpArgs(args) {
+		PrintRepairDecisionsHelp(stdout)
+		return 0
+	}
+	fs := flag.NewFlagSet("compare repair-decisions", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to repair")
+	compareJSON := fs.String("compare-json", "", "compare report JSON used to repair stale refs")
+	oldSession := fs.String("old-session", "", "old browser session used to repair old_selector-backed stale refs")
+	newSession := fs.String("new-session", "", "new browser session used to repair new_selector-backed stale refs")
+	output := fs.String("output", "", "write repaired decisions JSONL to file")
+	asJSON := fs.Bool("json", false, "print repair report as json")
+
+	if err := parseCommandFlags(fs, args, stderr, "compare repair-decisions"); err != nil {
+		return 1
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(stderr, "compare repair-decisions accepts only flags")
+		PrintRepairDecisionsHelp(stderr)
+		return 1
+	}
+	if strings.TrimSpace(*decisionsFile) == "" {
+		fmt.Fprintln(stderr, "compare repair-decisions requires --decisions-file")
+		return 1
+	}
+	if strings.TrimSpace(*compareJSON) == "" {
+		fmt.Fprintln(stderr, "compare repair-decisions requires --compare-json")
+		return 1
+	}
+
+	decisions, err := loadCompareDecisions(*decisionsFile)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	compareReport, err := loadCompareReport(*compareJSON)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer closeSelectorResolver()
+	repaired, issues, repairedRefs := repairCompareDecisionRefs(decisions, compareReport, selectorResolver)
+	report := compareDecisionRepairReport{
+		Summary: compareDecisionRepairSummary{
+			InputDecisions:  len(decisions),
+			OutputDecisions: len(repaired),
+			RepairedRefs:    len(repairedRefs),
+			Output:          strings.TrimSpace(*output),
+			CompareJSONUsed: true,
+		},
+		Repaired: repairedRefs,
+		Issues:   issues,
+	}
+	for _, issue := range report.Issues {
+		if issue.Severity == "error" {
+			report.Summary.Errors++
+			continue
+		}
+		report.Summary.Warnings++
+		if strings.TrimSpace(issue.Field) == "old" || strings.TrimSpace(issue.Field) == "new" {
+			report.Summary.UnrepairedRefs++
+		}
+	}
+
+	if report.Summary.Output != "" {
+		if err := writeCompareDecisionJSONL(report.Summary.Output, repaired); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	}
+
+	if *asJSON {
+		encoder := json.NewEncoder(stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+	} else if report.Summary.Output != "" {
+		printCompareDecisionRepairReport(stdout, report)
+	} else {
+		if err := printCompareDecisionJSONL(stdout, repaired); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		if len(report.Issues) > 0 {
+			fmt.Fprintln(stderr)
+			printCompareDecisionRepairReport(stderr, report)
 		}
 	}
 	if report.Summary.Errors > 0 {

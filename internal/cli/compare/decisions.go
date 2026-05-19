@@ -366,6 +366,192 @@ func materializeCompareDecisionSelectorSide(decision compareDecision, index int,
 	}, nil
 }
 
+type compareDecisionRepairCandidate struct {
+	Ref       string
+	Source    string
+	Value     string
+	MatchedBy string
+}
+
+func repairCompareDecisionRefs(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) ([]compareDecision, []compareDecisionValidationIssue, []compareDecisionRepairedRef) {
+	repaired := make([]compareDecision, 0, len(decisions))
+	issues := []compareDecisionValidationIssue{}
+	repairedRefs := []compareDecisionRepairedRef{}
+
+	addWarning := func(decision compareDecision, index int, field string, message string) {
+		issues = append(issues, compareDecisionValidationIssue{
+			Severity: "warning",
+			Line:     compareDecisionLineNumber(decision, index),
+			Field:    field,
+			Message:  message,
+		})
+	}
+
+	for index, decision := range decisions {
+		line := decision.Line
+		decision = normalizeCompareDecision(decision)
+		decision.Line = line
+
+		switch decision.Kind {
+		case "pair", "subtree_pair":
+			next, detail := repairCompareDecisionSide(decision, index, compareReport.Old.Nodes, true, resolver, addWarning)
+			if detail != nil {
+				decision = next
+				repairedRefs = append(repairedRefs, *detail)
+			}
+			next, detail = repairCompareDecisionSide(decision, index, compareReport.New.Nodes, false, resolver, addWarning)
+			if detail != nil {
+				decision = next
+				repairedRefs = append(repairedRefs, *detail)
+			}
+		case "accepted_removed", "regression_removed":
+			next, detail := repairCompareDecisionSide(decision, index, compareReport.Old.Nodes, true, resolver, addWarning)
+			if detail != nil {
+				decision = next
+				repairedRefs = append(repairedRefs, *detail)
+			}
+		case "accepted_added", "unexpected_added":
+			next, detail := repairCompareDecisionSide(decision, index, compareReport.New.Nodes, false, resolver, addWarning)
+			if detail != nil {
+				decision = next
+				repairedRefs = append(repairedRefs, *detail)
+			}
+		}
+		repaired = append(repaired, decision)
+	}
+
+	return repaired, issues, repairedRefs
+}
+
+func repairCompareDecisionSide(decision compareDecision, index int, nodes []compareSnapshotNode, oldSide bool, resolver compareDecisionSelectorResolver, addWarning func(compareDecision, int, string, string)) (compareDecision, *compareDecisionRepairedRef) {
+	ref := decision.New
+	side := "new"
+	field := "new"
+	if oldSide {
+		ref = decision.Old
+		side = "old"
+		field = "old"
+	}
+	ref = strings.TrimSpace(ref)
+	if compareDecisionUnknownValue(ref) {
+		return decision, nil
+	}
+	staleReason := compareDecisionRefRepairReason(nodes, side, ref, compareDecisionSideFingerprint(decision, oldSide))
+	if staleReason == "" {
+		return decision, nil
+	}
+	candidate, messages := compareDecisionRepairCandidateForSide(decision, nodes, oldSide, resolver)
+	if strings.TrimSpace(candidate.Ref) == "" {
+		addWarning(decision, index, field, staleReason+"; no repair candidate: "+strings.Join(messages, "; "))
+		return decision, nil
+	}
+	if strings.TrimSpace(candidate.Ref) == ref {
+		addWarning(decision, index, field, staleReason+"; repair candidate resolved the same ref")
+		return decision, nil
+	}
+	if oldSide {
+		decision.Old = strings.TrimSpace(candidate.Ref)
+	} else {
+		decision.New = strings.TrimSpace(candidate.Ref)
+	}
+	return decision, &compareDecisionRepairedRef{
+		Line:      compareDecisionLineNumber(decision, index),
+		Side:      side,
+		Source:    side + "_" + candidate.Source,
+		Value:     candidate.Value,
+		OldRef:    ref,
+		NewRef:    strings.TrimSpace(candidate.Ref),
+		MatchedBy: candidate.MatchedBy,
+	}
+}
+
+func compareDecisionRefRepairReason(nodes []compareSnapshotNode, side string, ref string, fingerprint string) string {
+	if strings.TrimSpace(ref) == "" || compareDecisionUnknownValue(ref) {
+		return ""
+	}
+	fingerprint = strings.TrimSpace(fingerprint)
+	if compareDecisionUnknownValue(fingerprint) {
+		fingerprint = ""
+	}
+	for _, node := range nodes {
+		if strings.TrimSpace(node.Ref) != ref {
+			continue
+		}
+		if fingerprint != "" && strings.TrimSpace(node.Fingerprint) != fingerprint {
+			return fmt.Sprintf("%s decision %q fingerprint mismatch", side, ref)
+		}
+		return ""
+	}
+	return fmt.Sprintf("%s decision ref %q was not found", side, ref)
+}
+
+func compareDecisionSideFingerprint(decision compareDecision, oldSide bool) string {
+	if oldSide {
+		return decision.OldFingerprint
+	}
+	return decision.NewFingerprint
+}
+
+func compareDecisionRepairCandidateForSide(decision compareDecision, nodes []compareSnapshotNode, oldSide bool, resolver compareDecisionSelectorResolver) (compareDecisionRepairCandidate, []string) {
+	side := "new"
+	selector := decision.NewSelector
+	locator := decision.NewLocator
+	fingerprint := decision.NewFingerprint
+	if oldSide {
+		side = "old"
+		selector = decision.OldSelector
+		locator = decision.OldLocator
+		fingerprint = decision.OldFingerprint
+	}
+	messages := []string{}
+	if strings.TrimSpace(selector) != "" {
+		if resolver == nil {
+			messages = append(messages, fmt.Sprintf("%s_selector requires --%s-session", side, side))
+		} else if resolution, err := resolver(oldSide, selector, nodes); err != nil {
+			messages = append(messages, err.Error())
+		} else if strings.TrimSpace(resolution.Ref) == "" {
+			messages = append(messages, fmt.Sprintf("%s selector %q resolved no ref", side, strings.TrimSpace(selector)))
+		} else {
+			return compareDecisionRepairCandidate{
+				Ref:       strings.TrimSpace(resolution.Ref),
+				Source:    "selector",
+				Value:     strings.TrimSpace(selector),
+				MatchedBy: firstNonEmpty(strings.TrimSpace(resolution.MatchedBy), "selector"),
+			}, nil
+		}
+	}
+	if strings.TrimSpace(locator) != "" {
+		if nodeIndex, err := compareResolveDecisionLocator(nodes, side, locator); err != nil {
+			messages = append(messages, err.Error())
+		} else {
+			return compareDecisionRepairCandidate{
+				Ref:       strings.TrimSpace(nodes[nodeIndex].Ref),
+				Source:    "locator",
+				Value:     strings.TrimSpace(locator),
+				MatchedBy: "locator",
+			}, nil
+		}
+	}
+	if strings.TrimSpace(fingerprint) != "" {
+		if nodeIndex, err := compareResolveDecisionNode(nodes, side, "", fingerprint); err != nil {
+			messages = append(messages, err.Error())
+		} else if strings.TrimSpace(nodes[nodeIndex].Ref) == "" {
+			messages = append(messages, fmt.Sprintf("%s fingerprint matched a node without ref", side))
+		} else {
+			return compareDecisionRepairCandidate{
+				Ref:       strings.TrimSpace(nodes[nodeIndex].Ref),
+				Source:    "fingerprint",
+				Value:     strings.TrimSpace(fingerprint),
+				MatchedBy: "fingerprint",
+			}, nil
+		}
+	}
+	if len(messages) == 0 {
+		messages = append(messages, fmt.Sprintf("stale %s ref has no %s_selector, %s_locator, or %s_fingerprint", side, side, side, side))
+	}
+	return compareDecisionRepairCandidate{}, messages
+}
+
 func preflightCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) compareDecisionSelectorPreflightResult {
 	result := compareDecisionSelectorPreflightResult{
 		SuccessfulFields: map[string]struct{}{},
