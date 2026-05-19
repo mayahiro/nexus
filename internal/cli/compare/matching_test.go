@@ -1133,6 +1133,50 @@ func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 	}
 }
 
+func TestMaterializeCompareDecisionSelectorsSupportsSubtreePairRoots(t *testing.T) {
+	decisions := []compareDecision{
+		{Kind: "subtree_pair", OldSelector: "ul.linkList-2col", NewSelector: "div.grid", Confidence: "high", MatchKind: "ordered_children", Count: 2, Reason: "same link grid"},
+	}
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e10", Role: "list", Label: "Links", StructureKey: "main>ul.linkList-2col"},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e20", Role: "group", Label: "Links", StructureKey: "main>div.grid"},
+			},
+		},
+	}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
+		if oldSide {
+			if selector != "ul.linkList-2col" {
+				t.Fatalf("unexpected old selector %q", selector)
+			}
+			return compareResolveSelectorMaterializedRef("old", selector, compareSnapshotNode{Role: "list", Label: "Links", StructureKey: "main>ul.linkList-2col"}, nodes)
+		}
+		if selector != "div.grid" {
+			t.Fatalf("unexpected new selector %q", selector)
+		}
+		return compareResolveSelectorMaterializedRef("new", selector, compareSnapshotNode{Role: "group", Label: "Links", StructureKey: "main>div.grid"}, nodes)
+	}
+
+	materialized, issues, refs := materializeCompareDecisionSelectors(decisions, report, resolver)
+	if len(issues) != 0 {
+		t.Fatalf("expected subtree selector materialization without issues: %+v", issues)
+	}
+	if len(refs) != 2 || len(materialized) != 1 {
+		t.Fatalf("unexpected materialized subtree refs: refs=%+v decisions=%+v", refs, materialized)
+	}
+	if materialized[0].Old != "@e10" || materialized[0].New != "@e20" || materialized[0].Kind != "subtree_pair" || materialized[0].MatchKind != "ordered_children" || materialized[0].Count != 2 {
+		t.Fatalf("unexpected materialized subtree decision: %+v", materialized[0])
+	}
+	if refs[0].LiveNode == nil || refs[0].LiveNode.StructureKey != "main>ul.linkList-2col" || refs[1].LiveNode == nil || refs[1].LiveNode.StructureKey != "main>div.grid" {
+		t.Fatalf("expected subtree selector live node summaries: %+v", refs)
+	}
+}
+
 func TestRunCompareMaterializeDecisionsRequiresSessionForSelector(t *testing.T) {
 	dir := t.TempDir()
 	decisionsPath := filepath.Join(dir, "decisions.jsonl")
