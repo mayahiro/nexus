@@ -32,8 +32,12 @@ type flowDefaults struct {
 	TargetRef        string   `json:"target_ref,omitempty"`
 	Viewport         string   `json:"viewport,omitempty"`
 	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
+	MatchMode        string   `json:"match_mode,omitempty"`
+	NodeScope        string   `json:"node_scope,omitempty"`
+	MatchingDebug    bool     `json:"matching_debug,omitempty"`
 	CompareCSS       bool     `json:"compare_css,omitempty"`
 	CompareLayout    bool     `json:"compare_layout,omitempty"`
+	NoDefaultIgnores bool     `json:"no_default_ignores,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
 	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
 	NewScopeSelector string   `json:"new_scope_selector,omitempty"`
@@ -82,8 +86,12 @@ type flowStep struct {
 	ContinueOnError  bool     `json:"continue_on_error,omitempty"`
 	Full             bool     `json:"full,omitempty"`
 	Annotate         bool     `json:"annotate,omitempty"`
+	MatchMode        string   `json:"match_mode,omitempty"`
+	NodeScope        string   `json:"node_scope,omitempty"`
+	MatchingDebug    *bool    `json:"matching_debug,omitempty"`
 	CompareCSS       *bool    `json:"compare_css,omitempty"`
 	CompareLayout    *bool    `json:"compare_layout,omitempty"`
+	NoDefaultIgnores *bool    `json:"no_default_ignores,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
 	OldScopeSelector string   `json:"old_scope_selector,omitempty"`
 	NewScopeSelector string   `json:"new_scope_selector,omitempty"`
@@ -844,6 +852,27 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 		"--new-session", state.New.SessionID,
 		"--json",
 	}
+	matchMode := strings.TrimSpace(state.Defaults.MatchMode)
+	if strings.TrimSpace(step.MatchMode) != "" {
+		matchMode = strings.TrimSpace(step.MatchMode)
+	}
+	if matchMode != "" {
+		args = append(args, "--match-mode", matchMode)
+	}
+	nodeScope := strings.TrimSpace(state.Defaults.NodeScope)
+	if strings.TrimSpace(step.NodeScope) != "" {
+		nodeScope = strings.TrimSpace(step.NodeScope)
+	}
+	if nodeScope != "" {
+		args = append(args, "--node-scope", nodeScope)
+	}
+	matchingDebug := state.Defaults.MatchingDebug
+	if step.MatchingDebug != nil {
+		matchingDebug = *step.MatchingDebug
+	}
+	if matchingDebug {
+		args = append(args, "--matching-debug")
+	}
 	compareCSS := state.Defaults.CompareCSS
 	if step.CompareCSS != nil {
 		compareCSS = *step.CompareCSS
@@ -857,6 +886,13 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	}
 	if compareLayout {
 		args = append(args, "--compare-layout")
+	}
+	noDefaultIgnores := state.Defaults.NoDefaultIgnores
+	if step.NoDefaultIgnores != nil {
+		noDefaultIgnores = *step.NoDefaultIgnores
+	}
+	if noDefaultIgnores {
+		args = append(args, "--no-default-ignores")
 	}
 	scopeSelector := strings.TrimSpace(state.Defaults.ScopeSelector)
 	oldScopeSelector := strings.TrimSpace(state.Defaults.OldScopeSelector)

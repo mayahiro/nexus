@@ -2,6 +2,12 @@
 
 Use this playbook for migration projects such as legacy server-rendered systems moving to Rails, Next.js, or another modern stack.
 
+Related docs:
+
+- compare command behavior: [compare.md](../compare.md)
+- decision JSONL schema: [compare-decisions.schema.json](../compare-decisions.schema.json)
+- playbook index: [README.md](README.md)
+
 ## Main Idea
 
 Do not treat migration compare as one giant pass.
@@ -83,13 +89,24 @@ nxctl compare materialize-decisions --decisions-file pair-decisions.selectors.js
 nxctl compare repair-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json --output pair-decisions.repaired.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug --output-json compare-debug.json
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'svg.logo' --no-default-ignores --matching-debug --output-json compare-debug.json
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 nxctl flow run --manifest migration-flow.json
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect --old-scope-selector '#legacy-summary' --new-scope-selector '[data-testid="order-summary"]' --old-session old --new-session new --css-property width
 ```
 
-Use `--node-scope all` only with an explicit scope selector when wrappers or layout containers are part of the migration. It observes every visible element in that subtree and emits `structure_key` / `subtree_signature` metadata so histogram can anchor containers without changing the base fingerprint.
+Use `--node-scope all` only with an explicit common or side-specific scope selector when wrappers or layout containers are part of the migration. It observes every visible element in that subtree and emits `structure_key` / `subtree_signature` metadata so histogram can anchor containers without changing the base fingerprint. For full node-scope semantics, default ignores, and matching debug fields, see [../compare.md#node-scope-selection](../compare.md#node-scope-selection).
+
+Prefer this order when structural DOM differences matter:
+
+1. Start with `--node-scope semantic --match-mode histogram` to identify durable anchors and visible content regressions.
+2. Move to `--node-scope all --scope-selector <component-root>` only for the component whose wrappers, layout containers, or anonymous nodes need review.
+3. Keep the scope to one meaningful region such as a hero, filter sidebar, navigation block, card grid, or migrated component root.
+4. Add `--matching-debug --output-json compare-debug.json` and inspect unmatched nodes before writing decisions.
+5. Use `--output-decisions-template` when repeated unmatched or ambiguous nodes need a reviewed JSONL handoff.
+
+Treat `all` findings as structural evidence, not automatic regressions. Anonymous `div` and `span` nodes often need the surrounding `structure_key`, `subtree_signature`, text length, child shape, and screenshot context before they can be judged. SVG descendants, hidden nodes, and tool-specific skip markers are ignored by default in `all` mode. If the vector drawing internals are the migration target, rerun that focused scope with `--no-default-ignores`; otherwise compare the SVG root or accessible wrapper as the meaningful unit.
 
 ## If Next.js Or Another Modern Frontend Looks Incomplete
 
@@ -111,12 +128,14 @@ Review `matching_debug.ambiguous_candidates`, then append high-confidence decisi
 {"kind":"pair","old_locator":"role:button label:\"Save changes\"","new_locator":"href:/jobs","confidence":"high","reason":"same CTA"}
 {"kind":"pair","old_selector":"#legacy .save","new_selector":"main .save","confidence":"high","reason":"same CTA"}
 {"kind":"subtree_pair","old":"@e40","new":"@e72","confidence":"high","match_kind":"ordered_children","count":12,"reason":"same link list region"}
+{"kind":"subtree_pair","old":"@e90","new":"@e120","confidence":"high","match_kind":"ordered_descendants","count":18,"reason":"same nested logo asset order"}
+{"kind":"subtree_pair","old":"@e91","new":"@e121","confidence":"high","match_kind":"opaque_subtree","reason":"asset root is equivalent; internals intentionally differ"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs human review"}
 {"kind":"accepted_finding","finding_id":"text_changed:3fa21c9d4b2a","reason":"approved copy change"}
 ```
 
 When a decision uses `old_selector` or `new_selector`, first run `nxctl compare validate-decisions --decisions-file pair-decisions.selectors.jsonl --compare-json compare-debug.json --old-session old --new-session new --json` to preflight selector uniqueness and compare JSON mapping; successful selector fields are counted as `selector_preflighted`. When a decision uses `old_locator` or `new_locator`, run `nxctl compare materialize-decisions --decisions-file pair-decisions.locators.jsonl --compare-json compare-debug.json --output pair-decisions.jsonl --json`. Each locator must match exactly one compare JSON node, then the command writes the concrete `old` or `new` ref. When materializing selector decisions, include `--old-session` or `--new-session`; each selector must match one live DOM node that maps uniquely back to the compare JSON node. Inspect `materialized[]` in the JSON report to see each resolved line's source field, input value, ref, match strategy, current compare node summary, and selector-backed live node summary.
-Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
+Rerun compare with `--decisions-file pair-decisions.jsonl`. Only high-confidence `pair` and `subtree_pair` entries affect matching; other entries remain review notes. Use `match_kind:"ordered_children"` when only direct children should be paired, `match_kind:"ordered_descendants"` when grandchildren and deeper observed descendants should be paired in DOM order, and `match_kind:"opaque_subtree"` when the root is the meaningful unit and internal structure intentionally changed. Accepted missing/new decisions and finding-level decisions are stamped back onto findings with `decision_kind`.
 Use `--review-dir review/orders` when starting a review pass to produce `REVIEW.md`, `compare.json`, `compare.md`, pair/finding/cluster decision templates, full-page screenshots, cropped finding screenshots, repeated finding clusters, and `review-summary.json` together. Start with `REVIEW.md`; the pair template includes old locators/selectors and new candidate notes with refs, locators, selectors, scores, and shared/differing keys, suppresses ambiguous/unmatched duplicates, and records review volume in `pair_decision_template_counts`. Selector hints are included only when Nexus can derive a unique selector from observed compare nodes. When `--decisions-file` is supplied, `review-summary.json` also records `decision_audit` counts and unresolved examples for applied, pending, stale, and conflicting decisions.
 For a manifest run, use `nxctl compare --manifest migration-pages.json --review-dir review/migration` to produce a root `REVIEW.md`, manifest-level summaries, root `cluster-decisions.todo.jsonl`, `review-index.md`, `review-index.html`, and one review packet directory per page. Start with the root `REVIEW.md`, then use `review-index.md` to prioritize failed, critical, high pair-decision workload pages, or pages with pending/stale/conflicting decisions. Open `review-index.html` for a static side-by-side screenshot overview with repeated finding clusters, cropped finding screenshots, finding IDs, and copyable decision JSONL stubs visible. Review `cluster-decisions.todo.jsonl` when one decision applies to a repeated cluster. Each page packet has its own `REVIEW.md` so it can be reviewed independently.
 Use `--output-finding-decisions-template finding-decisions.todo.jsonl` after a compare run to produce `unknown`-confidence review stubs for current critical and warning findings.

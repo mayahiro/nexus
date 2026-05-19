@@ -1494,8 +1494,9 @@ func compareBuildPairDecisionMatches(decision compareDecision, oldNodes []compar
 }
 
 func compareBuildSubtreePairDecisionMatches(decision compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
-	if normalizeCompareDecisionMatchKind(decision.MatchKind) != "ordered_children" {
-		return nil, fmt.Errorf("subtree_pair decision requires match_kind ordered_children")
+	matchKind := normalizeCompareDecisionMatchKind(decision.MatchKind)
+	if !compareSubtreePairMatchKindSupported(matchKind) {
+		return nil, fmt.Errorf("subtree_pair decision requires match_kind ordered_children, ordered_descendants, or opaque_subtree")
 	}
 	if err := compareRejectLocatorOnlyDecisionSide("old", decision.Old, decision.OldFingerprint, decision.OldLocator, decision.OldSelector); err != nil {
 		return nil, err
@@ -1511,11 +1512,11 @@ func compareBuildSubtreePairDecisionMatches(decision compareDecision, oldNodes [
 	if err != nil {
 		return nil, err
 	}
-	oldChildren := compareDecisionChildNodeIndices(oldNodes, oldIndex)
-	newChildren := compareDecisionChildNodeIndices(newNodes, newIndex)
-	childPairs := min(len(oldChildren), len(newChildren))
-	if decision.Count > 0 && decision.Count != childPairs {
-		return nil, fmt.Errorf("subtree_pair count %d does not match %d ordered child pairs", decision.Count, childPairs)
+	oldSubtree := compareDecisionSubtreeNodeIndices(oldNodes, oldIndex, matchKind)
+	newSubtree := compareDecisionSubtreeNodeIndices(newNodes, newIndex, matchKind)
+	subtreePairs := min(len(oldSubtree), len(newSubtree))
+	if decision.Count > 0 && decision.Count != subtreePairs {
+		return nil, fmt.Errorf("subtree_pair count %d does not match %d %s pairs", decision.Count, subtreePairs, compareSubtreePairMatchKindLabel(matchKind))
 	}
 	matches := []compareNodeMatch{{
 		OldIndex:  oldIndex,
@@ -1524,16 +1525,53 @@ func compareBuildSubtreePairDecisionMatches(decision compareDecision, oldNodes [
 		Score:     100,
 		Reasons:   []string{"decision", "subtree-pair"},
 	}}
-	for i := 0; i < childPairs; i++ {
+	for i := 0; i < subtreePairs; i++ {
+		matchedBy := "decision:subtree_pair"
+		if matchKind == "opaque_subtree" {
+			matchedBy = "decision:opaque_subtree"
+		}
 		matches = append(matches, compareNodeMatch{
-			OldIndex:  oldChildren[i],
-			NewIndex:  newChildren[i],
-			MatchedBy: "decision:subtree_pair",
+			OldIndex:  oldSubtree[i],
+			NewIndex:  newSubtree[i],
+			MatchedBy: matchedBy,
 			Score:     100,
-			Reasons:   []string{"decision", "subtree-pair", "ordered-children"},
+			Reasons:   []string{"decision", "subtree-pair", compareSubtreePairMatchKindReason(matchKind)},
 		})
 	}
 	return matches, nil
+}
+
+func compareSubtreePairMatchKindSupported(value string) bool {
+	switch normalizeCompareDecisionMatchKind(value) {
+	case "ordered_children", "ordered_descendants", "opaque_subtree":
+		return true
+	default:
+		return false
+	}
+}
+
+func compareSubtreePairMatchKindReason(value string) string {
+	return strings.ReplaceAll(normalizeCompareDecisionMatchKind(value), "_", "-")
+}
+
+func compareSubtreePairMatchKindLabel(value string) string {
+	switch normalizeCompareDecisionMatchKind(value) {
+	case "ordered_descendants":
+		return "ordered descendant"
+	case "opaque_subtree":
+		return "opaque descendant"
+	default:
+		return "ordered child"
+	}
+}
+
+func compareDecisionSubtreeNodeIndices(nodes []compareSnapshotNode, rootIndex int, matchKind string) []int {
+	switch normalizeCompareDecisionMatchKind(matchKind) {
+	case "ordered_descendants", "opaque_subtree":
+		return compareDecisionDescendantNodeIndices(nodes, rootIndex)
+	default:
+		return compareDecisionChildNodeIndices(nodes, rootIndex)
+	}
 }
 
 func compareDecisionChildNodeIndices(nodes []compareSnapshotNode, rootIndex int) []int {
@@ -1555,6 +1593,42 @@ func compareDecisionChildNodeIndices(nodes []compareSnapshotNode, rootIndex int)
 		}
 		indices = append(indices, childIndex)
 	}
+	compareSortNodeIndicesBySequence(nodes, indices)
+	return indices
+}
+
+func compareDecisionDescendantNodeIndices(nodes []compareSnapshotNode, rootIndex int) []int {
+	if rootIndex < 0 || rootIndex >= len(nodes) {
+		return nil
+	}
+	byID := map[int]int{}
+	for index, node := range nodes {
+		if node.ID <= 0 {
+			continue
+		}
+		byID[node.ID] = index
+	}
+	seen := map[int]struct{}{}
+	indices := make([]int, 0)
+	var walk func(int)
+	walk = func(index int) {
+		if index < 0 || index >= len(nodes) {
+			return
+		}
+		for _, childID := range nodes[index].Children {
+			childIndex, ok := byID[childID]
+			if !ok {
+				continue
+			}
+			if _, ok := seen[childIndex]; ok {
+				continue
+			}
+			seen[childIndex] = struct{}{}
+			indices = append(indices, childIndex)
+			walk(childIndex)
+		}
+	}
+	walk(rootIndex)
 	compareSortNodeIndicesBySequence(nodes, indices)
 	return indices
 }
@@ -1594,6 +1668,37 @@ func compareResolveDecisionEffects(decisions []compareDecision, oldNodes []compa
 				return compareDecisionEffects{}, fmt.Errorf("decision line %d: new node %q already has a decision effect", lineNumber, decision.New)
 			}
 			effects.New[newIndex] = compareDecisionEffectFor(decision.Kind)
+		case "subtree_pair":
+			if decision.Confidence != "high" || normalizeCompareDecisionMatchKind(decision.MatchKind) != "opaque_subtree" {
+				continue
+			}
+			if err := compareRejectLocatorOnlyDecisionSide("old", decision.Old, decision.OldFingerprint, decision.OldLocator, decision.OldSelector); err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
+			if err := compareRejectLocatorOnlyDecisionSide("new", decision.New, decision.NewFingerprint, decision.NewLocator, decision.NewSelector); err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
+			oldIndex, err := compareResolveDecisionNode(oldNodes, "old", decision.Old, decision.OldFingerprint)
+			if err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
+			newIndex, err := compareResolveDecisionNode(newNodes, "new", decision.New, decision.NewFingerprint)
+			if err != nil {
+				return compareDecisionEffects{}, fmt.Errorf("decision line %d: %w", lineNumber, err)
+			}
+			effect := compareOpaqueSubtreeDecisionEffect()
+			for _, oldDescendant := range compareDecisionDescendantNodeIndices(oldNodes, oldIndex) {
+				if _, ok := effects.Old[oldDescendant]; ok {
+					return compareDecisionEffects{}, fmt.Errorf("decision line %d: old node %q already has a decision effect", lineNumber, oldNodes[oldDescendant].Ref)
+				}
+				effects.Old[oldDescendant] = effect
+			}
+			for _, newDescendant := range compareDecisionDescendantNodeIndices(newNodes, newIndex) {
+				if _, ok := effects.New[newDescendant]; ok {
+					return compareDecisionEffects{}, fmt.Errorf("decision line %d: new node %q already has a decision effect", lineNumber, newNodes[newDescendant].Ref)
+				}
+				effects.New[newDescendant] = effect
+			}
 		}
 	}
 	return effects, nil
@@ -1652,6 +1757,16 @@ func compareDecisionEffectFor(kind string) compareDecisionEffect {
 		effect.Impact = "regression_finding"
 	}
 	return effect
+}
+
+func compareOpaqueSubtreeDecisionEffect() compareDecisionEffect {
+	return compareDecisionEffect{
+		Kind:      "opaque_subtree",
+		MatchedBy: "decision:opaque_subtree",
+		Reasons:   []string{"decision", "subtree-pair", "opaque-subtree"},
+		Severity:  "info",
+		Impact:    "opaque_subtree",
+	}
 }
 
 func compareDecisionApplies(decision compareDecision) bool {
@@ -2292,8 +2407,8 @@ func validateCompareSubtreePairDecision(report *compareDecisionValidationReport,
 	default:
 		addIssue("error", decision, index, "confidence", "subtree_pair decisions require confidence high, tentative, or unknown")
 	}
-	if decision.MatchKind != "ordered_children" {
-		addIssue("error", decision, index, "match_kind", "subtree_pair decisions require match_kind ordered_children")
+	if !compareSubtreePairMatchKindSupported(decision.MatchKind) {
+		addIssue("error", decision, index, "match_kind", "subtree_pair decisions require match_kind ordered_children or ordered_descendants")
 	}
 	if decision.Count < 0 {
 		addIssue("error", decision, index, "count", "subtree_pair count must be non-negative")

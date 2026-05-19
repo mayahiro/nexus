@@ -68,18 +68,25 @@ func parseCompareSelectorRule(value string) (compareSelectorRule, error) {
 func parseCompareSelectorTerm(value string, rawInput string) (compareSelectorTerm, error) {
 	kind, raw, ok := strings.Cut(strings.TrimSpace(value), "=")
 	if !ok {
-		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: use @eN or role/name/text/testid/href=<value>[&...]", rawInput)
+		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: use @eN or role/name/text/testid/href/tag/attr:<name>=<value>[&...]", rawInput)
 	}
 	kind = strings.TrimSpace(kind)
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: value must not be empty", rawInput)
 	}
+	if strings.HasPrefix(kind, "attr:") {
+		attrName := strings.TrimSpace(strings.TrimPrefix(kind, "attr:"))
+		if attrName == "" {
+			return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: attr name must not be empty", rawInput)
+		}
+		return compareSelectorTerm{Kind: "attr", Value: attrName + "=" + raw}, nil
+	}
 	switch kind {
-	case "role", "name", "text", "testid", "href":
+	case "role", "name", "text", "testid", "href", "tag":
 		return compareSelectorTerm{Kind: kind, Value: raw}, nil
 	default:
-		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: supported kinds are role, name, text, testid, href, or @eN", rawInput)
+		return compareSelectorTerm{}, fmt.Errorf("invalid compare selector %q: supported kinds are role, name, text, testid, href, tag, attr:<name>, or @eN", rawInput)
 	}
 }
 
@@ -110,6 +117,15 @@ func matchesCompareSelectorRule(node api.Node, rules []compareSelectorRule) bool
 				}
 			case "href":
 				if !compareSelectorContains(node.Attrs["href"], term.Value) {
+					matched = false
+				}
+			case "tag":
+				if normalizeFindValue(node.Attrs["tag"]) != normalizeFindValue(term.Value) {
+					matched = false
+				}
+			case "attr":
+				attrName, attrValue, ok := strings.Cut(term.Value, "=")
+				if !ok || !compareSelectorContains(node.Attrs[attrName], attrValue) {
 					matched = false
 				}
 			}

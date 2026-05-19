@@ -308,6 +308,16 @@ func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
 	}
 }
 
+func TestObserveTreeExpressionIncludesDefaultIgnoreAttrs(t *testing.T) {
+	script := observeTreeExpression(nil, "", nil, "all")
+
+	for _, value := range []string{"aria-hidden", "hidden", "data-nxctl-skip"} {
+		if !strings.Contains(script, value) {
+			t.Fatalf("expected %s attr in script: %s", value, script)
+		}
+	}
+}
+
 func TestObserveCandidateSelectorNodeScopes(t *testing.T) {
 	current := observeCandidateSelector("")
 	if !strings.Contains(current, "button") || strings.Contains(current, "h1") {

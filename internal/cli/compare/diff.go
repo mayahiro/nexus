@@ -13,7 +13,16 @@ import (
 func buildCompareSnapshot(observation api.Observation, options compareSnapshotOptions) compareSnapshot {
 	nodes := make([]compareSnapshotNode, 0, len(observation.Tree))
 	includeStructure := compareNodeScopeIncludesStructure(options.NodeScope)
+	byID := map[int]api.Node{}
+	for _, node := range observation.Tree {
+		if node.ID > 0 {
+			byID[node.ID] = node
+		}
+	}
 	for originalIndex, node := range observation.Tree {
+		if matchesCompareDefaultIgnore(node, options) {
+			continue
+		}
 		if matchesCompareSelectorRule(node, options.IgnoreNode) {
 			continue
 		}
@@ -54,7 +63,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 		subtreeSignature := ""
 		if includeStructure {
 			structureKey = compareNodeStructureKey(node)
-			subtreeSignature = compareNodeSubtreeSignature(node, strings.TrimSpace(node.Role))
+			subtreeSignature = compareNodeSubtreeSignature(node, strings.TrimSpace(node.Role), byID)
 		}
 
 		snapshotNode := compareSnapshotNode{
@@ -354,6 +363,9 @@ func addCompareMatchSummary(summary *compareSummary, match compareNodeMatch) {
 }
 
 func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compareSnapshot, newSnapshot compareSnapshot, oldNode compareSnapshotNode, newNode compareSnapshotNode, match compareNodeMatch) {
+	if compareMatchSuppressesFindings(match) {
+		return
+	}
 	locator := compareFindingLocator(&oldNode, &newNode)
 	if oldNode.Name != newNode.Name {
 		add(compareFindingWithMatch(compareFinding{
@@ -445,6 +457,10 @@ func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compare
 	}
 }
 
+func compareMatchSuppressesFindings(match compareNodeMatch) bool {
+	return strings.TrimSpace(match.MatchedBy) == "decision:opaque_subtree"
+}
+
 func compareFindingWithMatch(finding compareFinding, match compareNodeMatch) compareFinding {
 	if strings.TrimSpace(match.MatchedBy) == "" {
 		return finding
@@ -511,7 +527,7 @@ func compareNodeStructureKey(node api.Node) string {
 	return strings.TrimSpace(node.StructurePath)
 }
 
-func compareNodeSubtreeSignature(node api.Node, role string) string {
+func compareNodeSubtreeSignature(node api.Node, role string, byID map[int]api.Node) string {
 	textLength := node.TextLength
 	if textLength <= 0 {
 		textLength = len([]rune(strings.Join(strings.Fields(firstNonEmpty(node.Text, node.Name, node.Value)), " ")))
@@ -527,11 +543,60 @@ func compareNodeSubtreeSignature(node api.Node, role string) string {
 	if role == "" {
 		return ""
 	}
+	firstChildRole := compareFirstChildRole(node, byID)
 	return strings.Join([]string{
 		role,
 		"text:" + compareTextLengthBucket(textLength),
 		"desc:" + compareDescendantCountBucket(descendants),
+		"children:" + compareDescendantCountBucket(len(node.Children)),
+		"first:" + firstChildRole,
+		"w:" + compareDimensionBucket(node.Bounds.W),
 	}, "|")
+}
+
+func matchesCompareDefaultIgnore(node api.Node, options compareSnapshotOptions) bool {
+	if options.NoDefaultIgnores {
+		return false
+	}
+	normalized, err := normalizeCompareNodeScope(options.NodeScope)
+	if err != nil || normalized != compareNodeScopeAll {
+		return false
+	}
+	tag := strings.ToLower(strings.TrimSpace(node.Attrs["tag"]))
+	switch tag {
+	case "script", "style", "link", "meta", "noscript":
+		return true
+	}
+	if tag != "" && tag != "svg" && strings.Contains(strings.ToLower(strings.TrimSpace(node.StructurePath)), ">svg:") {
+		return true
+	}
+	if _, ok := node.Attrs["hidden"]; ok {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(node.Attrs["aria-hidden"]), "true") {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(node.Attrs["data-nxctl-skip"]), "true") {
+		return true
+	}
+	return false
+}
+
+func compareFirstChildRole(node api.Node, byID map[int]api.Node) string {
+	for _, childID := range node.Children {
+		child, ok := byID[childID]
+		if !ok {
+			continue
+		}
+		role := strings.TrimSpace(child.Role)
+		if role == "" {
+			role = strings.TrimSpace(child.Attrs["tag"])
+		}
+		if role != "" {
+			return role
+		}
+	}
+	return "none"
 }
 
 func compareTextLengthBucket(value int) string {
@@ -561,6 +626,23 @@ func compareDescendantCountBucket(value int) string {
 		return "11-30"
 	default:
 		return "31+"
+	}
+}
+
+func compareDimensionBucket(value int) string {
+	switch {
+	case value <= 0:
+		return "0"
+	case value <= 80:
+		return "1-80"
+	case value <= 320:
+		return "81-320"
+	case value <= 768:
+		return "321-768"
+	case value <= 1280:
+		return "769-1280"
+	default:
+		return "1281+"
 	}
 }
 

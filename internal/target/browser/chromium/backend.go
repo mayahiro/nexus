@@ -231,8 +231,11 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
     if (el.getAttribute('alt')) attrs.alt = el.getAttribute('alt');
     if (el.getAttribute('aria-label')) attrs['aria-label'] = el.getAttribute('aria-label');
     if (el.getAttribute('aria-labelledby')) attrs['aria-labelledby'] = el.getAttribute('aria-labelledby');
+    if (el.getAttribute('aria-hidden')) attrs['aria-hidden'] = el.getAttribute('aria-hidden');
+    if (el.hasAttribute('hidden')) attrs.hidden = el.getAttribute('hidden') || 'true';
     if (el.getAttribute('data-testid')) attrs['data-testid'] = el.getAttribute('data-testid');
     if (el.getAttribute('data-test')) attrs['data-test'] = el.getAttribute('data-test');
+    if (el.getAttribute('data-nxctl-skip')) attrs['data-nxctl-skip'] = el.getAttribute('data-nxctl-skip');
     return attrs;
   };
 

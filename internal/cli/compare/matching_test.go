@@ -393,6 +393,74 @@ func TestCompareHighConfidenceSubtreePairMatchesOrderedChildren(t *testing.T) {
 	}
 }
 
+func TestCompareHighConfidenceSubtreePairMatchesOrderedDescendants(t *testing.T) {
+	oldSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 1, Children: []int{2}, Fingerprint: "old-logo", Ref: "@e1", Role: "img", Label: "Logo", OriginalIndex: 0, Visible: true},
+			{ID: 2, Children: []int{3}, Fingerprint: "old-group", Ref: "@e2", Role: "g", OriginalIndex: 1, Visible: true},
+			{ID: 3, Fingerprint: "old-path", Ref: "@e3", Role: "path", OriginalIndex: 2, Visible: true},
+		},
+	}
+	newSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 10, Children: []int{11}, Fingerprint: "new-logo", Ref: "@e10", Role: "img", Label: "Logo", OriginalIndex: 0, Visible: true},
+			{ID: 11, Children: []int{12}, Fingerprint: "new-group", Ref: "@e11", Role: "g", OriginalIndex: 1, Visible: true},
+			{ID: 12, Fingerprint: "new-path", Ref: "@e12", Role: "path", OriginalIndex: 2, Visible: true},
+		},
+	}
+	decisionMatches, err := compareResolveDecisionMatches(
+		[]compareDecision{{Kind: "subtree_pair", Old: "@e1", New: "@e10", Confidence: "high", MatchKind: "ordered_descendants", Count: 2}},
+		oldSnapshot.Nodes,
+		newSnapshot.Nodes,
+	)
+	if err != nil {
+		t.Fatalf("expected subtree decision to resolve: %v", err)
+	}
+	report := buildCompareReportWithDecisionMatches(oldSnapshot, newSnapshot, nil, compareMatchModeExact, true, decisionMatches)
+
+	if len(decisionMatches) != 3 || report.Summary.DecisionMatches != 3 || report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 {
+		t.Fatalf("expected root and ordered descendants to be decision matched: matches=%+v summary=%+v", decisionMatches, report.Summary)
+	}
+	if decisionMatches[2].OldIndex != 2 || decisionMatches[2].NewIndex != 2 || !slices.Contains(decisionMatches[2].Reasons, "ordered-descendants") {
+		t.Fatalf("expected grandchild descendant match: %+v", decisionMatches)
+	}
+}
+
+func TestCompareHighConfidenceSubtreePairOpaqueSubtreeSuppressesInternalFindings(t *testing.T) {
+	oldSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 1, Children: []int{2}, Fingerprint: "old-logo", Ref: "@e1", Role: "img", Label: "Logo", OriginalIndex: 0, Visible: true},
+			{ID: 2, Children: []int{3}, Fingerprint: "old-group", Ref: "@e2", Role: "g", Text: "old group", OriginalIndex: 1, Visible: true},
+			{ID: 3, Fingerprint: "old-path", Ref: "@e3", Role: "path", Text: "old path", OriginalIndex: 2, Visible: true},
+		},
+	}
+	newSnapshot := compareSnapshot{
+		Nodes: []compareSnapshotNode{
+			{ID: 10, Children: []int{11, 13}, Fingerprint: "new-logo", Ref: "@e10", Role: "img", Label: "Logo", OriginalIndex: 0, Visible: true},
+			{ID: 11, Children: []int{12}, Fingerprint: "new-group", Ref: "@e11", Role: "g", Text: "new group", OriginalIndex: 1, Visible: true},
+			{ID: 12, Fingerprint: "new-path", Ref: "@e12", Role: "path", Text: "new path", OriginalIndex: 2, Visible: true},
+			{ID: 13, Fingerprint: "new-extra", Ref: "@e13", Role: "path", Text: "new extra", OriginalIndex: 3, Visible: true},
+		},
+	}
+	decisions := []compareDecision{{Kind: "subtree_pair", Old: "@e1", New: "@e10", Confidence: "high", MatchKind: "opaque_subtree", Count: 2}}
+	decisionMatches, err := compareResolveDecisionMatches(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
+	if err != nil {
+		t.Fatalf("expected opaque subtree decision to resolve: %v", err)
+	}
+	decisionEffects, err := compareResolveDecisionEffects(decisions, oldSnapshot.Nodes, newSnapshot.Nodes)
+	if err != nil {
+		t.Fatalf("expected opaque subtree effects to resolve: %v", err)
+	}
+	report := buildCompareReportWithDecisions(oldSnapshot, newSnapshot, nil, compareMatchModeExact, true, decisionMatches, decisionEffects)
+
+	if len(decisionMatches) != 3 || report.Summary.DecisionMatches != 3 || report.Summary.TextChanged != 0 || report.Summary.NewNodes != 1 || report.Summary.Info != 1 {
+		t.Fatalf("expected opaque descendants to suppress matched findings and downgrade extra node: matches=%+v summary=%+v findings=%+v", decisionMatches, report.Summary, report.Findings)
+	}
+	if len(report.Findings) != 1 || report.Findings[0].DecisionKind != "opaque_subtree" || report.Findings[0].MatchedBy != "decision:opaque_subtree" {
+		t.Fatalf("expected extra descendant to be opaque info: %+v", report.Findings)
+	}
+}
+
 func TestValidateCompareDecisionsDetectsDuplicateHighPair(t *testing.T) {
 	report := compareReport{
 		Old: compareSnapshot{
@@ -441,6 +509,32 @@ func TestValidateCompareDecisionsChecksSubtreePairCount(t *testing.T) {
 
 	if validation.Summary.Errors == 0 || validation.Summary.SubtreePairs != 1 {
 		t.Fatalf("expected subtree count validation error: %+v", validation)
+	}
+}
+
+func TestValidateCompareDecisionsChecksSubtreePairDescendantCount(t *testing.T) {
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{ID: 1, Children: []int{2}, Fingerprint: "old-root", Ref: "@e1", Role: "img"},
+				{ID: 2, Children: []int{3}, Fingerprint: "old-group", Ref: "@e2", Role: "g", OriginalIndex: 1},
+				{ID: 3, Fingerprint: "old-path", Ref: "@e3", Role: "path", OriginalIndex: 2},
+			},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{ID: 10, Children: []int{11}, Fingerprint: "new-root", Ref: "@e10", Role: "img"},
+				{ID: 11, Children: []int{12}, Fingerprint: "new-group", Ref: "@e11", Role: "g", OriginalIndex: 1},
+				{ID: 12, Fingerprint: "new-path", Ref: "@e12", Role: "path", OriginalIndex: 2},
+			},
+		},
+	}
+	validation := validateCompareDecisions([]compareDecision{
+		{Kind: "subtree_pair", Old: "@e1", New: "@e10", Confidence: "high", MatchKind: "ordered-descendants", Count: 3, Line: 1},
+	}, &report)
+
+	if validation.Summary.Errors == 0 || validation.Summary.SubtreePairs != 1 {
+		t.Fatalf("expected subtree descendant count validation error: %+v", validation)
 	}
 }
 
@@ -2198,10 +2292,56 @@ func TestCompareNodeScopeFiltersSnapshot(t *testing.T) {
 	}
 
 	all := buildCompareSnapshot(api.Observation{Tree: []api.Node{
-		{ID: 1, Fingerprint: "generic", Role: "generic", Text: "Decorative", Visible: true, StructurePath: "html:1>body:1>div:1", TextLength: 10, Descendants: 2},
+		{ID: 1, Fingerprint: "generic", Role: "generic", Text: "Decorative", Visible: true, StructurePath: "html:1>body:1>div:1", TextLength: 10, Descendants: 2, Bounds: api.Rect{W: 1440}},
 	}}, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
-	if len(all.Nodes) != 1 || all.Nodes[0].StructureKey != "html:1>body:1>div:1" || all.Nodes[0].SubtreeSignature != "generic|text:1-20|desc:1-3" {
+	if len(all.Nodes) != 1 || all.Nodes[0].StructureKey != "html:1>body:1>div:1" || all.Nodes[0].SubtreeSignature != "generic|text:1-20|desc:1-3|children:0|first:none|w:1281+" {
 		t.Fatalf("all node scope should preserve structural metadata: %+v", all.Nodes)
+	}
+}
+
+func TestCompareNodeScopeAllDefaultIgnoresStructuralNoise(t *testing.T) {
+	observation := api.Observation{Tree: []api.Node{
+		{ID: 1, Fingerprint: "svg", Role: "svg", Visible: true, StructurePath: "html:1>body:1>svg:1", Attrs: map[string]string{"tag": "svg"}},
+		{ID: 2, Fingerprint: "path", Role: "path", Visible: true, StructurePath: "html:1>body:1>svg:1>path:1", Attrs: map[string]string{"tag": "path"}},
+		{ID: 3, Fingerprint: "hidden", Role: "div", Visible: true, StructurePath: "html:1>body:1>div:1", Attrs: map[string]string{"tag": "div", "aria-hidden": "true"}},
+		{ID: 4, Fingerprint: "skip", Role: "div", Visible: true, StructurePath: "html:1>body:1>div:2", Attrs: map[string]string{"tag": "div", "data-nxctl-skip": "true"}},
+		{ID: 5, Fingerprint: "kept", Role: "div", Visible: true, StructurePath: "html:1>body:1>div:3", Attrs: map[string]string{"tag": "div"}},
+		{ID: 6, Fingerprint: "hidden-attr", Role: "div", Visible: true, StructurePath: "html:1>body:1>div:4", Attrs: map[string]string{"tag": "div", "hidden": "true"}},
+		{ID: 7, Fingerprint: "script", Role: "script", Visible: true, StructurePath: "html:1>body:1>script:1", Attrs: map[string]string{"tag": "script"}},
+	}}
+
+	filtered := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
+	refs := make([]string, 0, len(filtered.Nodes))
+	for _, node := range filtered.Nodes {
+		refs = append(refs, node.Fingerprint)
+	}
+	if slices.Contains(refs, "path") || slices.Contains(refs, "hidden") || slices.Contains(refs, "skip") || slices.Contains(refs, "hidden-attr") || slices.Contains(refs, "script") {
+		t.Fatalf("expected default ignores to suppress structural noise, got %+v", refs)
+	}
+	if !slices.Contains(refs, "svg") || !slices.Contains(refs, "kept") {
+		t.Fatalf("expected svg root and normal node to remain, got %+v", refs)
+	}
+
+	unfiltered := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeAll, NoDefaultIgnores: true})
+	if len(unfiltered.Nodes) != len(observation.Tree) {
+		t.Fatalf("expected no default ignores to keep all nodes, got %+v", unfiltered.Nodes)
+	}
+}
+
+func TestCompareSelectorRulesMatchTagAndAttributes(t *testing.T) {
+	rules, err := compileCompareSelectorRules([]string{"tag=path&attr:data-nxctl-skip=true"})
+	if err != nil {
+		t.Fatalf("expected selector rules to compile: %v", err)
+	}
+
+	if !matchesCompareSelectorRule(api.Node{Attrs: map[string]string{"tag": "path", "data-nxctl-skip": "true"}}, rules) {
+		t.Fatalf("expected tag and attr selector to match")
+	}
+	if matchesCompareSelectorRule(api.Node{Attrs: map[string]string{"tag": "circle", "data-nxctl-skip": "true"}}, rules) {
+		t.Fatalf("expected different tag not to match")
+	}
+	if matchesCompareSelectorRule(api.Node{Attrs: map[string]string{"tag": "path"}}, rules) {
+		t.Fatalf("expected missing attr not to match")
 	}
 }
 
@@ -2263,7 +2403,7 @@ func TestCompareManifestMatchModeAndNodeScopeMerge(t *testing.T) {
 	heuristic := compareMatchModeHeuristic
 	semantic := compareNodeScopeSemantic
 	disabled := false
-	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable, NodeScope: compareNodeScopeActionable, MatchingDebug: true}, compareManifestPage{MatchMode: &heuristic, NodeScope: &semantic, MatchingDebug: &disabled})
+	run = mergeCompareManifestPage(base, compareManifestDefaults{MatchMode: compareMatchModeStable, NodeScope: compareNodeScopeActionable, MatchingDebug: true, NoDefaultIgnores: true}, compareManifestPage{MatchMode: &heuristic, NodeScope: &semantic, MatchingDebug: &disabled})
 	if run.MatchMode != compareMatchModeHeuristic {
 		t.Fatalf("expected page match_mode override, got %q", run.MatchMode)
 	}
@@ -2272,5 +2412,14 @@ func TestCompareManifestMatchModeAndNodeScopeMerge(t *testing.T) {
 	}
 	if run.MatchingDebug {
 		t.Fatalf("expected page matching_debug override")
+	}
+	if !run.NoDefaultIgnores {
+		t.Fatalf("expected defaults no_default_ignores")
+	}
+
+	enabled := false
+	run = mergeCompareManifestPage(run, compareManifestDefaults{}, compareManifestPage{NoDefaultIgnores: &enabled})
+	if run.NoDefaultIgnores {
+		t.Fatalf("expected page no_default_ignores override")
 	}
 }

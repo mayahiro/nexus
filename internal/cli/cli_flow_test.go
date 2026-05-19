@@ -148,6 +148,8 @@ func TestFlowRunManifest(t *testing.T) {
 		"defaults": map[string]any{
 			"backend":        "chromium",
 			"target_ref":     "/tmp/fake-browser",
+			"match_mode":     "stable",
+			"node_scope":     "semantic",
 			"scope_selector": "main",
 		},
 		"matrices": map[string]any{
@@ -207,6 +209,8 @@ func TestFlowRunManifest(t *testing.T) {
 					{
 						"action":             "compare",
 						"name":               "dashboard",
+						"matching_debug":     true,
+						"no_default_ignores": true,
 						"old_scope_selector": "aside.legacy-filters",
 						"new_scope_selector": "main.filters",
 					},
@@ -307,9 +311,13 @@ func TestFlowRunManifest(t *testing.T) {
 	}
 	oldCompareScopeCount := 0
 	newCompareScopeCount := 0
+	semanticCompareCount := 0
 	for _, req := range handler.observeRequests {
 		if !req.Options.WithTree || req.Options.WithScreenshot {
 			continue
+		}
+		if req.Options.NodeScope == "semantic" {
+			semanticCompareCount++
 		}
 		if strings.HasPrefix(req.SessionID, "flow-old-") && req.Options.ScopeSelector == "aside.legacy-filters" {
 			oldCompareScopeCount++
@@ -320,6 +328,12 @@ func TestFlowRunManifest(t *testing.T) {
 	}
 	if oldCompareScopeCount != 2 || newCompareScopeCount != 2 {
 		t.Fatalf("expected 4 compare observe requests with scope selector, got %#v", handler.observeRequests)
+	}
+	if semanticCompareCount != 4 {
+		t.Fatalf("expected 4 compare observe requests with semantic node scope, got %#v", handler.observeRequests)
+	}
+	if !bytes.Contains(report.Scenarios[0].Steps[5].Compare, []byte(`"matching_debug"`)) {
+		t.Fatalf("expected matching debug in compare report: %s", string(report.Scenarios[0].Steps[5].Compare))
 	}
 	if len(handler.detachIDs) != 4 {
 		t.Fatalf("expected 4 detached sessions, got %#v", handler.detachIDs)

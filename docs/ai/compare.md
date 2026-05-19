@@ -2,6 +2,12 @@
 
 Use this guide when you need reliable compare results.
 
+Related docs:
+
+- README command overview: [README.md](../../README.md)
+- migration execution order: [playbooks/migration.md](playbooks/migration.md)
+- decision JSONL schema: [compare-decisions.schema.json](compare-decisions.schema.json)
+
 ## Default Approach
 
 1. Decide what you are comparing
@@ -48,6 +54,8 @@ Recommended passes:
 - Keep `--ignore-text-regex` minimal
 - Use `--mask-selector` for sensitive values, timestamps, and IDs that are expected to differ
 - Use `--ignore-selector` only for nodes that are truly outside the compare target
+- Use `tag=<value>` or `attr:<name>=<value>` selector rules for structural noise that lacks role/name/text identity
+- With `--node-scope all`, rely on default structural ignores first, then use `--no-default-ignores` only when ignored nodes are the review target
 - If a diff is suspicious, reduce the suppression rules and rerun
 
 ## Command Patterns
@@ -76,6 +84,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --matching-debug --output-decisions-template pair-decisions.todo.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope semantic --match-mode histogram --decisions-file pair-decisions.jsonl
 nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'main > section.hero' --match-mode histogram --matching-debug
+nxctl compare https://old.example.com/orders https://new.example.com/orders --node-scope all --scope-selector 'svg.logo' --no-default-ignores --matching-debug
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json
 nxctl compare validate-decisions --decisions-file pair-decisions.jsonl --compare-json compare-debug.json --strict
 nxctl compare validate-decisions --decisions-file pair-decisions.selectors.jsonl --compare-json compare-debug.json --old-session old --new-session new
@@ -127,7 +136,31 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
 JSON findings include a stable `finding_id`. Findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
-When `--node-scope all` is used, compare requires `--scope-selector` or both side-specific scope selectors. All visible elements inside that scope are observed. Compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings; histogram can use these as low-occurrence anchors without changing the base fingerprint.
+
+## Node Scope Selection
+
+Use the narrowest node scope that still covers the migration risk.
+
+- `current` preserves the existing observed candidates and is the safest default for broad checks
+- `actionable` focuses on controls and links when user interaction regressions matter most
+- `semantic` adds named or content-bearing semantic nodes such as headings, landmarks, status, tables, images with names, and testid-tagged elements
+- `all` observes every visible element in one explicit scope and is for focused structural review
+
+`--node-scope all` requires `--scope-selector` or both `--old-scope-selector` and `--new-scope-selector`. Use it when wrapper elements, layout containers, or anonymous DOM structure are part of what changed, for example one hero, one sidebar, one card grid, or one migrated component root. Do not use it as a broad page-wide starting point; repeated anonymous wrappers, decorative elements, and SVG internals can produce more review work than signal.
+
+When `all` is used, compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings. `structure_key` is a DOM-order structural path. `subtree_signature` summarizes the node role/tag, text-length bucket, descendant-count bucket, direct child-count bucket, first child role/tag, and width bucket. Histogram matching can use these low-occurrence structural values as anchors without changing the base fingerprint, which keeps normal fingerprint behavior stable while making anonymous containers easier to reason about in debug output.
+
+Default `all` ignores suppress common structural noise before matching: SVG descendants below the root `<svg>`, `script`, `style`, `link`, `meta`, `noscript`, `[hidden]`, `[aria-hidden="true"]`, and `[data-nxctl-skip="true"]`. This keeps decorative icons, hidden DOM, and tool-specific skip markers from dominating unmatched-node review. Add `--no-default-ignores` when the ignored nodes are the target, such as reviewing the internal geometry of one SVG asset.
+
+Practical `all` workflow:
+
+1. Select one stable component boundary with `--scope-selector`, or use side-specific selectors when old and new DOM roots differ.
+2. Run `--match-mode histogram --matching-debug --output-json compare-debug.json`.
+3. Inspect `matching_debug.unmatched_old`, `matching_debug.unmatched_new`, and ambiguous candidates before deciding whether noise is a real regression.
+4. Use `--output-decisions-template` when the same region needs reviewed pair or accepted-added/removed decisions.
+5. If hidden or decorative nodes still dominate the unmatched lists, narrow the scope or add explicit `--ignore-selector` rules after confirming they are outside the compare target.
+
+SVGs deserve special care in `all` mode. Nexus treats the `<svg>` root as the default compare unit and ignores visible descendants like `path`, `g`, `line`, `circle`, and `polyline` unless `--no-default-ignores` is set. That is useful when a logo or icon was intentionally replaced by a differently structured asset. Use `--no-default-ignores` only when the vector drawing internals are the target of review.
 
 ## Pair Decisions
 
@@ -140,6 +173,8 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 {"kind":"pair","old_locator":"role:button label:\"Save changes\"","new_locator":"href:/jobs","confidence":"high","reason":"same CTA; materialize refs before compare"}
 {"kind":"pair","old_selector":"#legacy .save","new_selector":"main .save","confidence":"high","reason":"same CTA; materialize selectors before compare"}
 {"kind":"subtree_pair","old":"@e40","new":"@e72","confidence":"high","match_kind":"ordered_children","count":12,"reason":"same link list region"}
+{"kind":"subtree_pair","old":"@e90","new":"@e120","confidence":"high","match_kind":"ordered_descendants","count":18,"reason":"same nested logo asset order"}
+{"kind":"subtree_pair","old":"@e91","new":"@e121","confidence":"high","match_kind":"opaque_subtree","reason":"asset root is equivalent; internals intentionally differ"}
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
 {"kind":"accepted_removed","old":"@e45","reason":"legacy-only footer link intentionally removed"}
 {"kind":"accepted_added","new":"@e88","reason":"new skip-link"}
@@ -149,7 +184,16 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 ```
 
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. If the AI can identify a node by visible or semantic features but does not want to guess a current `@e...` ref, it can write `old_locator` or `new_locator` first. Locator terms support `@eN`, `role:button`, `label:"Save changes"`, `name:Save`, `text:Login`, `href:/jobs`, `testid:submit`, `fingerprint:<value>`, and `role=button&name=Save`. If the AI knows a stable CSS path in the live DOM, it can write `old_selector` or `new_selector` first. Run `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file> --old-session <id> --new-session <id> --json` to preflight selectors before materialization; it checks each selector against the live DOM and verifies that the matched live node maps uniquely to one compare JSON node. Run `nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> --old-session <id> --new-session <id> --output <jsonl> --json` to resolve locator-only or selector-only decisions to concrete refs and review the `materialized[]` explanations; each locator must match exactly one compare JSON node, and each selector must match one live DOM node that maps uniquely to a compare JSON node. Non-high entries are accepted as review notes but are not used as anchors or matches.
-`subtree_pair` currently supports `match_kind:"ordered_children"` for concrete or materialized roots; it pairs the roots, then pairs observed direct children in DOM order. The roots can start as `old_selector` / `new_selector`, `old_locator` / `new_locator`, or fingerprint metadata, but materialize those fields to concrete refs before compare. `count` is optional and validates the expected number of child pairs when present.
+`subtree_pair` supports `match_kind:"ordered_children"`, `match_kind:"ordered_descendants"`, and `match_kind:"opaque_subtree"` for concrete or materialized roots. `ordered_children` pairs the roots, then pairs observed direct children in DOM order. `ordered_descendants` pairs the roots, then flattens all observed descendants under each root in DOM order and pairs those descendants, including grandchildren and deeper nodes. `opaque_subtree` pairs the roots, treats matched descendants as intentionally opaque, suppresses internal matched-node findings, and downgrades unmatched internal missing/new descendants to `info`. The roots can start as `old_selector` / `new_selector`, `old_locator` / `new_locator`, or fingerprint metadata, but materialize those fields to concrete refs before compare. `count` is optional and validates the expected number of child or descendant pairs, excluding the root pair.
+
+| Situation | Prefer |
+| --- | --- |
+| Only direct children intentionally correspond in order | `subtree_pair` with `match_kind:"ordered_children"` |
+| Nested descendants intentionally correspond in DOM order | `subtree_pair` with `match_kind:"ordered_descendants"` |
+| Root is the semantic unit and internals intentionally changed | `subtree_pair` with `match_kind:"opaque_subtree"` |
+| SVG/icon internals are decorative noise | default `--node-scope all` ignores |
+| SVG/vector internals are the target of review | `--no-default-ignores` with a narrow scope |
+| One repeated node type is known noise | `--ignore-selector`, including `tag=<name>` or `attr:<name>=<value>` |
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable review stubs from `matching_debug.ambiguous_candidates`, `unmatched_old`, and `unmatched_new`. Ambiguous and unmatched-old stubs start as `unknown` pair decisions; unmatched-new stubs start as `unknown` `accepted_added` decisions. Stubs include `old_locator`, `new_locator`, `old_selector`, or `new_selector` when Nexus can infer them. Selector hints are emitted only when a selector derived from id, testid, name, href, aria-label, or structure path is unique within the observed compare nodes. Candidate notes include each new candidate's ref, locator, selector, score, shared keys, and differing keys so an AI can either choose a concrete ref or write a locator/selector and materialize it. Nodes already covered by an ambiguous candidate are suppressed from unmatched stubs to reduce duplicate review work. Unmatched template output is capped to keep very noisy pages reviewable; inspect `matching_debug.unmatched_old` and `matching_debug.unmatched_new` in `compare.json` for any remaining nodes.
 Use `--output-finding-decisions-template <jsonl>` to write editable `unknown`-confidence stubs for current `critical` and `warning` findings. Review those lines, then set `confidence:"high"` or remove `confidence` to apply the `accepted_finding` or `regression_finding` decision on the next compare run.

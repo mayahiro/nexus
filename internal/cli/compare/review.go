@@ -225,6 +225,7 @@ func renderCompareReviewGuide(summary compareReviewSummary) string {
 	builder.WriteString("- Ambiguous candidates: keep `kind:\"pair\"`, set `new` or `new_locator`, and use `confidence:\"high\"` only when the correspondence is clear.\n")
 	builder.WriteString("- Unmatched old nodes: pair them with a new node, convert them to `accepted_removed`, or leave them unknown when unsure.\n")
 	builder.WriteString("- Unmatched new nodes: keep `accepted_added` for intentional additions, convert them to `pair` when they correspond to old nodes, or leave them unknown when unsure.\n")
+	builder.WriteString("- Nested regions: use `subtree_pair` with `ordered_children`, `ordered_descendants`, or `opaque_subtree` only when a reviewed root correspondence is clear.\n")
 	builder.WriteString("- Finding decisions: use `accepted_finding` for approved differences and `regression_finding` for real regressions.\n")
 	builder.WriteString("- Finding clusters: use `accepted_finding_cluster` or `regression_finding_cluster` when repeated findings share one decision.\n")
 	return builder.String()

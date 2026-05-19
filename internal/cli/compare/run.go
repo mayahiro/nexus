@@ -67,6 +67,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
 	compareCSS := fs.Bool("compare-css", false, "compare computed css values for matching nodes")
 	compareLayout := fs.Bool("compare-layout", false, "compare viewport-relative element bounds for matching nodes")
+	noDefaultIgnores := fs.Bool("no-default-ignores", false, "disable default ignored nodes for --node-scope all")
 	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
 	asJSON := fs.Bool("json", false, "print as json")
 	outputJSON := fs.String("output-json", "", "write compare report json to file")
@@ -160,6 +161,7 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		WaitNetworkIdle:         *waitNetworkIdle,
 		CompareCSS:              *compareCSS,
 		CompareLayout:           *compareLayout,
+		NoDefaultIgnores:        *noDefaultIgnores,
 		WaitTimeout:             *waitTimeout,
 		CSSProperties:           append([]string(nil), cssProperty...),
 		IgnoreTextRegex:         append([]string(nil), ignoreRegex...),
@@ -961,20 +963,22 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	}
 
 	oldSnapshot := buildCompareSnapshot(oldObservation, compareSnapshotOptions{
-		IgnoreText:    ignorePatterns,
-		IgnoreNode:    ignoreRules,
-		MaskNode:      maskRules,
-		CSSProperties: cssProperties,
-		CompareLayout: run.CompareLayout,
-		NodeScope:     nodeScope,
+		IgnoreText:       ignorePatterns,
+		IgnoreNode:       ignoreRules,
+		MaskNode:         maskRules,
+		CSSProperties:    cssProperties,
+		CompareLayout:    run.CompareLayout,
+		NoDefaultIgnores: run.NoDefaultIgnores,
+		NodeScope:        nodeScope,
 	})
 	newSnapshot := buildCompareSnapshot(newObservation, compareSnapshotOptions{
-		IgnoreText:    ignorePatterns,
-		IgnoreNode:    ignoreRules,
-		MaskNode:      maskRules,
-		CSSProperties: cssProperties,
-		CompareLayout: run.CompareLayout,
-		NodeScope:     nodeScope,
+		IgnoreText:       ignorePatterns,
+		IgnoreNode:       ignoreRules,
+		MaskNode:         maskRules,
+		CSSProperties:    cssProperties,
+		CompareLayout:    run.CompareLayout,
+		NoDefaultIgnores: run.NoDefaultIgnores,
+		NodeScope:        nodeScope,
 	})
 	decisions, err := loadCompareDecisions(run.DecisionsFile)
 	if err != nil {

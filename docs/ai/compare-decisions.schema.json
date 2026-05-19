@@ -58,7 +58,7 @@
     },
     "match_kind": {
       "type": "string",
-      "enum": ["ordered_children", "ordered-children"]
+      "enum": ["ordered_children", "ordered-children", "ordered_descendants", "ordered-descendants", "opaque_subtree", "opaque-subtree"]
     },
     "count": {
       "type": "integer",
@@ -518,6 +518,25 @@
       "match_kind": "ordered_children",
       "count": 12,
       "reason": "same link list region"
+    },
+    {
+      "schema_version": 1,
+      "kind": "subtree_pair",
+      "old": "@e90",
+      "new": "@e120",
+      "confidence": "high",
+      "match_kind": "ordered_descendants",
+      "count": 18,
+      "reason": "same nested asset order"
+    },
+    {
+      "schema_version": 1,
+      "kind": "subtree_pair",
+      "old": "@e91",
+      "new": "@e121",
+      "confidence": "high",
+      "match_kind": "opaque_subtree",
+      "reason": "asset root is equivalent; internals are intentionally different"
     },
     {
       "schema_version": 1,

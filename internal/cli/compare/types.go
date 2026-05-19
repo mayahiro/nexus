@@ -499,6 +499,7 @@ type compareManifestDefaults struct {
 	WaitNetworkIdle  bool     `json:"wait_network_idle,omitempty"`
 	CompareCSS       bool     `json:"compare_css,omitempty"`
 	CompareLayout    bool     `json:"compare_layout,omitempty"`
+	NoDefaultIgnores bool     `json:"no_default_ignores,omitempty"`
 	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
 	CSSProperty      []string `json:"css_property,omitempty"`
 	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
@@ -526,6 +527,7 @@ type compareManifestPage struct {
 	WaitNetworkIdle  *bool    `json:"wait_network_idle,omitempty"`
 	CompareCSS       *bool    `json:"compare_css,omitempty"`
 	CompareLayout    *bool    `json:"compare_layout,omitempty"`
+	NoDefaultIgnores *bool    `json:"no_default_ignores,omitempty"`
 	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
 	CSSProperty      []string `json:"css_property,omitempty"`
 	IgnoreTextRegex  []string `json:"ignore_text_regex,omitempty"`
@@ -577,6 +579,7 @@ type compareRun struct {
 	WaitNetworkIdle         bool
 	CompareCSS              bool
 	CompareLayout           bool
+	NoDefaultIgnores        bool
 	WaitTimeout             int
 	CSSProperties           []string
 	IgnoreTextRegex         []string
@@ -599,12 +602,13 @@ type compareSelectorTerm struct {
 }
 
 type compareSnapshotOptions struct {
-	IgnoreText    []*regexp.Regexp
-	IgnoreNode    []compareSelectorRule
-	MaskNode      []compareSelectorRule
-	CSSProperties []string
-	CompareLayout bool
-	NodeScope     string
+	IgnoreText       []*regexp.Regexp
+	IgnoreNode       []compareSelectorRule
+	MaskNode         []compareSelectorRule
+	CSSProperties    []string
+	CompareLayout    bool
+	NoDefaultIgnores bool
+	NodeScope        string
 }
 
 const compareURLReadyTimeout = 10 * time.Second

@@ -7,6 +7,8 @@ Use them after reading the main guide.
 ## Available Playbooks
 
 - Migration projects: [docs/ai/playbooks/migration.md](migration.md)
+- Compare command details: [docs/ai/compare.md](../compare.md)
+- Compare decision schema: [docs/ai/compare-decisions.schema.json](../compare-decisions.schema.json)
 
 ## How To Use Playbooks
 
