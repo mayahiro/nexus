@@ -14,7 +14,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--json]")
+	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--strict] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
 	fmt.Fprintln(w, "   or: nxctl compare repair-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
@@ -44,8 +44,9 @@ func PrintHelp(w io.Writer) {
 }
 
 func PrintValidateDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--json]")
-	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, finding clusters from --review-summary, and session-backed selector uniqueness when --old-session or --new-session is supplied")
+	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--strict] [--json]")
+	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, schema_version, unknown or unused fields, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, finding clusters from --review-summary, and session-backed selector uniqueness when --old-session or --new-session is supplied")
+	fmt.Fprintln(w, "--strict turns unknown or kind-unused field warnings into errors")
 	fmt.Fprintln(w, "selector preflight requires --compare-json and checks that each old_selector/new_selector matches one live DOM node that maps uniquely to one compare JSON node")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)

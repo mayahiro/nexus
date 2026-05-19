@@ -497,6 +497,122 @@ func TestRunCompareValidateDecisionsRejectsUnknownKind(t *testing.T) {
 	}
 }
 
+func TestRunCompareValidateDecisionsWarnsForUnknownAndUnusedFields(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	input := `{"kind":"pair","old":"@e1","new":"@e2","finding_id":"text_changed:stale","confidence":"high","extra_field":"typo"}` + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save"}},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save", Name: "Save"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected non-strict schema issues to warn: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 0 || report.Summary.Warnings != 2 || len(report.Issues) != 2 {
+		t.Fatalf("expected two schema warnings: %+v", report)
+	}
+	if report.Issues[0].Field != "extra_field" || !strings.Contains(report.Issues[0].Message, "unknown decision field") {
+		t.Fatalf("expected unknown field warning: %+v", report.Issues)
+	}
+	if report.Issues[1].Field != "finding_id" || !strings.Contains(report.Issues[1].Message, "not used by decision kind") {
+		t.Fatalf("expected unused field warning: %+v", report.Issues)
+	}
+}
+
+func TestRunCompareValidateDecisionsStrictRejectsSchemaWarnings(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	input := `{"kind":"pair","old":"@e1","new":"@e2","finding_id":"text_changed:stale","confidence":"high","extra_field":"typo"}` + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{{Fingerprint: "old-save", Ref: "@e1", Role: "button", Label: "Save", Name: "Save"}},
+		},
+		New: compareSnapshot{
+			Nodes: []compareSnapshotNode{{Fingerprint: "new-save", Ref: "@e2", Role: "button", Label: "Save", Name: "Save"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--strict", "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected strict schema warnings to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 2 || report.Summary.Warnings != 0 || !report.Summary.Strict {
+		t.Fatalf("expected strict schema errors: %+v", report)
+	}
+}
+
+func TestRunCompareValidateDecisionsRejectsUnsupportedSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	input := `{"schema_version":2,"kind":"pattern","name":"favorite-button-a11y","reason":"ok"}` + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--json"}, &stdout, &stdout)
+	if code == 0 {
+		t.Fatalf("expected unsupported schema_version to fail:\n%s", stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 1 || len(report.Issues) != 1 || report.Issues[0].Field != "schema_version" {
+		t.Fatalf("expected schema_version error: %+v", report)
+	}
+}
+
+func TestRunCompareValidateDecisionsWarnsForUnusedConfidence(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	input := `{"kind":"pattern","name":"favorite-button-a11y","confidence":"high","reason":"ok"}` + "\n"
+	if err := os.WriteFile(decisionsPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareValidateDecisions([]string{"--decisions-file", decisionsPath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected unused confidence to warn: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionValidationReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected validation json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Errors != 0 || report.Summary.Warnings != 1 || len(report.Issues) != 1 || report.Issues[0].Field != "confidence" {
+		t.Fatalf("expected confidence warning: %+v", report)
+	}
+}
+
 func TestRunCompareValidateDecisionsSelectorPreflightRequiresCompareJSON(t *testing.T) {
 	dir := t.TempDir()
 	decisionsPath := filepath.Join(dir, "selector-decisions.jsonl")

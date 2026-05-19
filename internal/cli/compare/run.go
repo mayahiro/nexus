@@ -281,6 +281,7 @@ func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, s
 	reviewSummary := fs.String("review-summary", "", "review-summary.json used to validate finding cluster decisions")
 	oldSession := fs.String("old-session", "", "old browser session used to preflight old_selector")
 	newSession := fs.String("new-session", "", "new browser session used to preflight new_selector")
+	strict := fs.Bool("strict", false, "treat schema-style validation warnings as errors")
 	asJSON := fs.Bool("json", false, "print validation report as json")
 
 	if err := parseCommandFlags(fs, args, stderr, "compare validate-decisions"); err != nil {
@@ -320,7 +321,7 @@ func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, s
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	report := validateCompareDecisionsWithClusters(decisions, loadedCompareReport, reviewClusters)
+	report := validateCompareDecisionsWithOptions(decisions, loadedCompareReport, reviewClusters, compareDecisionValidationOptions{Strict: *strict})
 	if selectorPreflightRequested {
 		selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
 		if err != nil {

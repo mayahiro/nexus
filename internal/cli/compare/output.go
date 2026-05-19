@@ -165,6 +165,9 @@ func printCompareDecisionValidationReport(w io.Writer, report compareDecisionVal
 	fmt.Fprintf(w, "accepted_findings: %d\n", report.Summary.AcceptedFindings)
 	fmt.Fprintf(w, "regression_findings: %d\n", report.Summary.RegressionFindings)
 	fmt.Fprintf(w, "compare_json_used: %t\n", report.Summary.CompareJSONUsed)
+	if report.Summary.Strict {
+		fmt.Fprintf(w, "strict: %t\n", report.Summary.Strict)
+	}
 	fmt.Fprintf(w, "errors: %d\n", report.Summary.Errors)
 	fmt.Fprintf(w, "warnings: %d\n", report.Summary.Warnings)
 	if len(report.Issues) == 0 {

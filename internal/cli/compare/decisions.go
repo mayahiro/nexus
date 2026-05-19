@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -22,32 +23,33 @@ type compareDecisionTemplatePlan struct {
 }
 
 type compareDecision struct {
-	SchemaVersion  int      `json:"schema_version,omitempty"`
-	Kind           string   `json:"kind,omitempty"`
-	Old            string   `json:"old,omitempty"`
-	New            string   `json:"new,omitempty"`
-	OldLocator     string   `json:"old_locator,omitempty"`
-	NewLocator     string   `json:"new_locator,omitempty"`
-	OldSelector    string   `json:"old_selector,omitempty"`
-	NewSelector    string   `json:"new_selector,omitempty"`
-	OldFingerprint string   `json:"old_fingerprint,omitempty"`
-	NewFingerprint string   `json:"new_fingerprint,omitempty"`
-	FindingID      string   `json:"finding_id,omitempty"`
-	ClusterKey     string   `json:"cluster_key,omitempty"`
-	Confidence     string   `json:"confidence,omitempty"`
-	MatchKind      string   `json:"match_kind,omitempty"`
-	Count          int      `json:"count,omitempty"`
-	Reason         string   `json:"reason,omitempty"`
-	Note           string   `json:"note,omitempty"`
-	DecidedBy      string   `json:"decided_by,omitempty"`
-	DecidedAt      string   `json:"decided_at,omitempty"`
-	Context        string   `json:"context,omitempty"`
-	SessionContext string   `json:"session_context,omitempty"`
-	Name           string   `json:"name,omitempty"`
-	Matches        []string `json:"matches,omitempty"`
-	From           string   `json:"from,omitempty"`
-	To             string   `json:"to,omitempty"`
-	Line           int      `json:"-"`
+	SchemaVersion  int                 `json:"schema_version,omitempty"`
+	Kind           string              `json:"kind,omitempty"`
+	Old            string              `json:"old,omitempty"`
+	New            string              `json:"new,omitempty"`
+	OldLocator     string              `json:"old_locator,omitempty"`
+	NewLocator     string              `json:"new_locator,omitempty"`
+	OldSelector    string              `json:"old_selector,omitempty"`
+	NewSelector    string              `json:"new_selector,omitempty"`
+	OldFingerprint string              `json:"old_fingerprint,omitempty"`
+	NewFingerprint string              `json:"new_fingerprint,omitempty"`
+	FindingID      string              `json:"finding_id,omitempty"`
+	ClusterKey     string              `json:"cluster_key,omitempty"`
+	Confidence     string              `json:"confidence,omitempty"`
+	MatchKind      string              `json:"match_kind,omitempty"`
+	Count          int                 `json:"count,omitempty"`
+	Reason         string              `json:"reason,omitempty"`
+	Note           string              `json:"note,omitempty"`
+	DecidedBy      string              `json:"decided_by,omitempty"`
+	DecidedAt      string              `json:"decided_at,omitempty"`
+	Context        string              `json:"context,omitempty"`
+	SessionContext string              `json:"session_context,omitempty"`
+	Name           string              `json:"name,omitempty"`
+	Matches        []string            `json:"matches,omitempty"`
+	From           string              `json:"from,omitempty"`
+	To             string              `json:"to,omitempty"`
+	Line           int                 `json:"-"`
+	RawFields      map[string]struct{} `json:"-"`
 }
 
 type compareDecisionEffect struct {
@@ -89,10 +91,15 @@ func loadCompareDecisions(path string) ([]compareDecision, error) {
 		if line == "" {
 			continue
 		}
+		rawFields, err := parseCompareDecisionRawFields(line)
+		if err != nil {
+			return nil, fmt.Errorf("invalid decisions file %q line %d: %w", path, lineNumber, err)
+		}
 		var decision compareDecision
 		if err := json.Unmarshal([]byte(line), &decision); err != nil {
 			return nil, fmt.Errorf("invalid decisions file %q line %d: %w", path, lineNumber, err)
 		}
+		decision.RawFields = rawFields
 		decision.Kind = normalizeCompareDecisionToken(decision.Kind)
 		decision.Confidence = normalizeCompareDecisionToken(decision.Confidence)
 		decision.MatchKind = normalizeCompareDecisionMatchKind(decision.MatchKind)
@@ -115,6 +122,18 @@ func loadCompareDecisions(path string) ([]compareDecision, error) {
 		return nil, fmt.Errorf("invalid decisions file %q: %w", path, err)
 	}
 	return decisions, nil
+}
+
+func parseCompareDecisionRawFields(line string) (map[string]struct{}, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &raw); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]struct{}, len(raw))
+	for key := range raw {
+		fields[key] = struct{}{}
+	}
+	return fields, nil
 }
 
 func loadCompareReport(path string) (compareReport, error) {
@@ -1714,16 +1733,145 @@ func compareDecisionConfidenceSupported(confidence string) bool {
 	}
 }
 
+func validateCompareDecisionStrictSchema(addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int, strict bool) {
+	if _, ok := decision.RawFields["schema_version"]; ok && decision.SchemaVersion != 1 {
+		addIssue("error", decision, index, "schema_version", fmt.Sprintf("unsupported schema_version %d", decision.SchemaVersion))
+	}
+	severity := "warning"
+	if strict {
+		severity = "error"
+	}
+	fields := compareDecisionRawFieldNames(decision)
+	for _, field := range fields {
+		if !compareDecisionFieldSupported(field) {
+			addIssue(severity, decision, index, field, fmt.Sprintf("unknown decision field %q", field))
+		}
+	}
+	if decision.Kind == "unknown" {
+		return
+	}
+	allowed := compareDecisionAllowedFields(decision.Kind)
+	if len(allowed) == 0 {
+		return
+	}
+	for _, field := range fields {
+		if !compareDecisionFieldSupported(field) {
+			continue
+		}
+		if _, ok := allowed[field]; ok {
+			continue
+		}
+		addIssue(severity, decision, index, field, fmt.Sprintf("field %q is not used by decision kind %q", field, decision.Kind))
+	}
+}
+
+func compareDecisionRawFieldNames(decision compareDecision) []string {
+	fields := make([]string, 0, len(decision.RawFields))
+	for field := range decision.RawFields {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	return fields
+}
+
+func compareDecisionFieldSupported(field string) bool {
+	_, ok := compareDecisionAllFields()[field]
+	return ok
+}
+
+func compareDecisionAllFields() map[string]struct{} {
+	return map[string]struct{}{
+		"schema_version":  {},
+		"kind":            {},
+		"old":             {},
+		"new":             {},
+		"old_locator":     {},
+		"new_locator":     {},
+		"old_selector":    {},
+		"new_selector":    {},
+		"old_fingerprint": {},
+		"new_fingerprint": {},
+		"finding_id":      {},
+		"cluster_key":     {},
+		"confidence":      {},
+		"match_kind":      {},
+		"count":           {},
+		"reason":          {},
+		"note":            {},
+		"decided_by":      {},
+		"decided_at":      {},
+		"context":         {},
+		"session_context": {},
+		"name":            {},
+		"matches":         {},
+		"from":            {},
+		"to":              {},
+	}
+}
+
+func compareDecisionAllowedFields(kind string) map[string]struct{} {
+	fields := compareDecisionCommonFields()
+	switch kind {
+	case "pair":
+		compareDecisionAddAllowedFields(fields, "old", "new", "old_locator", "new_locator", "old_selector", "new_selector", "old_fingerprint", "new_fingerprint", "confidence")
+	case "subtree_pair":
+		compareDecisionAddAllowedFields(fields, "old", "new", "old_locator", "new_locator", "old_selector", "new_selector", "old_fingerprint", "new_fingerprint", "confidence", "match_kind", "count")
+	case "accepted_removed", "regression_removed":
+		compareDecisionAddAllowedFields(fields, "old", "old_locator", "old_selector", "old_fingerprint", "confidence")
+	case "accepted_added", "unexpected_added":
+		compareDecisionAddAllowedFields(fields, "new", "new_locator", "new_selector", "new_fingerprint", "confidence")
+	case "accepted_finding", "regression_finding":
+		compareDecisionAddAllowedFields(fields, "finding_id", "confidence")
+	case "accepted_finding_cluster", "regression_finding_cluster":
+		compareDecisionAddAllowedFields(fields, "cluster_key", "confidence")
+	case "pattern":
+		compareDecisionAddAllowedFields(fields, "name", "matches")
+	case "severity":
+		compareDecisionAddAllowedFields(fields, "finding_id", "name", "from", "to")
+	default:
+		return nil
+	}
+	return fields
+}
+
+func compareDecisionCommonFields() map[string]struct{} {
+	return map[string]struct{}{
+		"schema_version":  {},
+		"kind":            {},
+		"reason":          {},
+		"note":            {},
+		"decided_by":      {},
+		"decided_at":      {},
+		"context":         {},
+		"session_context": {},
+	}
+}
+
+func compareDecisionAddAllowedFields(fields map[string]struct{}, values ...string) {
+	for _, value := range values {
+		fields[value] = struct{}{}
+	}
+}
+
 func validateCompareDecisions(decisions []compareDecision, compareReport *compareReport) compareDecisionValidationReport {
 	return validateCompareDecisionsWithClusters(decisions, compareReport, nil)
 }
 
 func validateCompareDecisionsWithClusters(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster) compareDecisionValidationReport {
+	return validateCompareDecisionsWithOptions(decisions, compareReport, clusters, compareDecisionValidationOptions{})
+}
+
+type compareDecisionValidationOptions struct {
+	Strict bool
+}
+
+func validateCompareDecisionsWithOptions(decisions []compareDecision, compareReport *compareReport, clusters []compareFindingCluster, options compareDecisionValidationOptions) compareDecisionValidationReport {
 	report := compareDecisionValidationReport{
 		Summary: compareDecisionValidationSummary{
 			TotalDecisions:    len(decisions),
 			CompareJSONUsed:   compareReport != nil,
 			ReviewSummaryUsed: len(clusters) > 0,
+			Strict:            options.Strict,
 		},
 	}
 	addIssue := func(severity string, decision compareDecision, index int, field string, message string) {
@@ -1762,6 +1910,7 @@ func validateCompareDecisionsWithClusters(decisions []compareDecision, compareRe
 			addIssue("error", decision, index, "confidence", fmt.Sprintf("unsupported confidence %q", decision.Confidence))
 			continue
 		}
+		validateCompareDecisionStrictSchema(addIssue, decision, index, options.Strict)
 		switch decision.Kind {
 		case "pair":
 			validateComparePairDecision(&report, addIssue, usedOldPairs, usedNewPairs, decision, index, compareReport)

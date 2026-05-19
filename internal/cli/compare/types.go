@@ -146,6 +146,7 @@ type compareDecisionValidationSummary struct {
 	CompareJSONUsed       bool `json:"compare_json_used"`
 	ReviewSummaryUsed     bool `json:"review_summary_used,omitempty"`
 	SelectorPreflightUsed bool `json:"selector_preflight_used,omitempty"`
+	Strict                bool `json:"strict,omitempty"`
 }
 
 type compareDecisionValidationIssue struct {
