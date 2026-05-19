@@ -186,6 +186,25 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 `old_fingerprint` and `new_fingerprint` may be included to detect stale refs. If the AI can identify a node by visible or semantic features but does not want to guess a current `@e...` ref, it can write `old_locator` or `new_locator` first. Locator terms support `@eN`, `role:button`, `label:"Save changes"`, `name:Save`, `text:Login`, `href:/jobs`, `testid:submit`, `fingerprint:<value>`, and `role=button&name=Save`. If the AI knows a stable CSS path in the live DOM, it can write `old_selector` or `new_selector` first. Run `nxctl compare validate-decisions --decisions-file <jsonl> --compare-json <file> --old-session <id> --new-session <id> --json` to preflight selectors before materialization; it checks each selector against the live DOM and verifies that the matched live node maps uniquely to one compare JSON node. Run `nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> --old-session <id> --new-session <id> --output <jsonl> --json` to resolve locator-only or selector-only decisions to concrete refs and review the `materialized[]` explanations; each locator must match exactly one compare JSON node, and each selector must match one live DOM node that maps uniquely to a compare JSON node. Non-high entries are accepted as review notes but are not used as anchors or matches.
 `subtree_pair` supports `match_kind:"ordered_children"`, `match_kind:"ordered_descendants"`, and `match_kind:"opaque_subtree"` for concrete or materialized roots. `ordered_children` pairs the roots, then pairs observed direct children in DOM order. `ordered_descendants` pairs the roots, then flattens all observed descendants under each root in DOM order and pairs those descendants, including grandchildren and deeper nodes. `opaque_subtree` pairs the roots, treats matched descendants as intentionally opaque, suppresses internal matched-node findings, and downgrades unmatched internal missing/new descendants to `info`. The roots can start as `old_selector` / `new_selector`, `old_locator` / `new_locator`, or fingerprint metadata, but materialize those fields to concrete refs before compare. `count` is optional and validates the expected number of child or descendant pairs, excluding the root pair.
 
+### Subtree Pair Match Kind Flow
+
+Choose `subtree_pair` only when the old root and new root are clearly the same logical region, component, or asset. If the root equivalence is uncertain, keep the decision at individual `pair`, `accepted_removed`, or `accepted_added` entries.
+
+1. Is the root itself the same semantic unit on both sides?
+   - No: do not use `subtree_pair`; narrow the scope or write smaller decisions.
+   - Yes: continue.
+2. Should internal matched-node findings still be reviewed?
+   - No: use `match_kind:"opaque_subtree"` when the root is equivalent but internals intentionally changed.
+   - Yes: continue.
+3. Do only the direct children correspond in the same DOM order?
+   - Yes: use `match_kind:"ordered_children"`.
+   - No: continue.
+4. Do all observed descendants, including grandchildren and deeper nodes, correspond in the same DOM order?
+   - Yes: use `match_kind:"ordered_descendants"`.
+   - No: avoid one broad `subtree_pair`; split into smaller roots or explicit `pair` decisions.
+
+`ordered_descendants` is still order-based matching, not fuzzy semantic matching. Use it when wrappers or nesting make direct-child pairing too shallow, but the descendant sequence is stable enough to review as one region. Use `opaque_subtree` only when hiding internal differences is intentional, such as a replaced logo asset or a component whose inner markup is not part of the current regression target.
+
 | Situation | Prefer |
 | --- | --- |
 | Only direct children intentionally correspond in order | `subtree_pair` with `match_kind:"ordered_children"` |
@@ -194,6 +213,15 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 | SVG/icon internals are decorative noise | default `--node-scope all` ignores |
 | SVG/vector internals are the target of review | `--no-default-ignores` with a narrow scope |
 | One repeated node type is known noise | `--ignore-selector`, including `tag=<name>` or `attr:<name>=<value>` |
+
+| Example | Prefer | Why |
+| --- | --- | --- |
+| A header nav list whose old and new roots are the same navigation region and whose link items appear in the same direct-child order | `ordered_children` | The direct children are the intended comparison units, and deeper descendants can be handled by normal matching. |
+| A nested sidebar menu or card list where wrappers are stable enough that every observed descendant lines up in DOM order | `ordered_descendants` | Grandchildren and deeper nodes need deterministic pairing, and the full descendant order is meaningful. |
+| An old SVG logo and a new optimized SVG logo represent the same brand mark but use different internal `path` / `g` structure | `opaque_subtree` | The asset root is the reviewed unit, and internal geometry differences would be noise for this compare. |
+| Decorative icon SVG paths dominate `missing_node` / `new_node` output in `--node-scope all` | Default `all` ignores | The internal vector nodes are not the review target, so no pair decision is needed. |
+| The internal geometry of one SVG is the review target | `--no-default-ignores` with a narrow scope, then explicit `pair` or `ordered_descendants` only if order is reliable | Default ignores would hide the nodes that must be reviewed. |
+| A hero section was redesigned and descendant order no longer maps cleanly | Smaller `pair` decisions or accepted added/removed decisions | A broad subtree pair would manufacture matches that do not represent the visual change. |
 
 Use `--output-decisions-template <jsonl>` with `--matching-debug` to write editable review stubs from `matching_debug.ambiguous_candidates`, `unmatched_old`, and `unmatched_new`. Ambiguous and unmatched-old stubs start as `unknown` pair decisions; unmatched-new stubs start as `unknown` `accepted_added` decisions. Stubs include `old_locator`, `new_locator`, `old_selector`, or `new_selector` when Nexus can infer them. Selector hints are emitted only when a selector derived from id, testid, name, href, aria-label, or structure path is unique within the observed compare nodes. Candidate notes include each new candidate's ref, locator, selector, score, shared keys, and differing keys so an AI can either choose a concrete ref or write a locator/selector and materialize it. Nodes already covered by an ambiguous candidate are suppressed from unmatched stubs to reduce duplicate review work. Unmatched template output is capped to keep very noisy pages reviewable; inspect `matching_debug.unmatched_old` and `matching_debug.unmatched_new` in `compare.json` for any remaining nodes.
 Use `--output-finding-decisions-template <jsonl>` to write editable `unknown`-confidence stubs for current `critical` and `warning` findings. Review those lines, then set `confidence:"high"` or remove `confidence` to apply the `accepted_finding` or `regression_finding` decision on the next compare run.
