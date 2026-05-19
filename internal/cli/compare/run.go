@@ -739,7 +739,11 @@ func compareResolveSelectorMaterializedRef(side string, selector string, selecte
 		if ref == "" {
 			return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q matched a compare JSON node without ref", side, strings.TrimSpace(selector))
 		}
-		return compareDecisionRefResolution{Ref: ref, MatchedBy: matchedBy}, nil
+		return compareDecisionRefResolution{
+			Ref:       ref,
+			MatchedBy: matchedBy,
+			LiveNode:  compareDecisionNodeSummaryForNode(selected),
+		}, nil
 	default:
 		return compareDecisionRefResolution{}, fmt.Errorf("%s selector %q matched %d compare JSON nodes: %s", side, strings.TrimSpace(selector), len(matches), compareDecisionNodeHints(nodes, matches, 5))
 	}

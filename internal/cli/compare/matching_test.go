@@ -925,6 +925,9 @@ func TestRunCompareMaterializeDecisionsWritesRefs(t *testing.T) {
 	if report.Materialized[0].Line != 1 || report.Materialized[0].Side != "old" || report.Materialized[0].Source != "old_locator" || report.Materialized[0].Ref != "@e1" || report.Materialized[0].MatchedBy != "locator" {
 		t.Fatalf("unexpected first materialized detail: %+v", report.Materialized[0])
 	}
+	if report.Materialized[0].Node == nil || report.Materialized[0].Node.Ref != "@e1" || report.Materialized[0].Node.Role != "button" || report.Materialized[0].Node.Label != "Save changes" {
+		t.Fatalf("expected first materialized node summary: %+v", report.Materialized[0])
+	}
 	outputBytes, err := os.ReadFile(outputPath)
 	if err != nil {
 		t.Fatal(err)
@@ -995,6 +998,9 @@ func TestRunCompareRepairDecisionsWritesRefs(t *testing.T) {
 	if report.Repaired[0].Side != "old" || report.Repaired[0].Source != "old_fingerprint" || report.Repaired[0].OldRef != "@e99" || report.Repaired[0].NewRef != "@e1" || report.Repaired[0].MatchedBy != "fingerprint" {
 		t.Fatalf("unexpected first repair detail: %+v", report.Repaired[0])
 	}
+	if report.Repaired[0].Node == nil || report.Repaired[0].Node.Ref != "@e1" || report.Repaired[0].Node.Role != "button" || report.Repaired[0].Node.Label != "Save changes" {
+		t.Fatalf("expected first repaired node summary: %+v", report.Repaired[0])
+	}
 	if report.Repaired[1].Side != "new" || report.Repaired[1].Source != "new_locator" || report.Repaired[1].OldRef != "@e98" || report.Repaired[1].NewRef != "@e2" || report.Repaired[1].MatchedBy != "locator" {
 		t.Fatalf("unexpected second repair detail: %+v", report.Repaired[1])
 	}
@@ -1053,6 +1059,36 @@ func TestRunCompareRepairDecisionsReportsUnrepairedRef(t *testing.T) {
 	}
 }
 
+func TestRepairCompareDecisionSelectorReportsLiveNode(t *testing.T) {
+	decisions := []compareDecision{
+		{Kind: "accepted_removed", Old: "@e99", OldSelector: "#save", Confidence: "high", Reason: "same removed CTA"},
+	}
+	report := compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e1", Role: "button", Label: "Save", Name: "Save", TestID: "save"},
+			},
+		},
+	}
+	resolver := func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error) {
+		if !oldSide || selector != "#save" {
+			t.Fatalf("unexpected selector resolution request old=%v selector=%q", oldSide, selector)
+		}
+		return compareResolveSelectorMaterializedRef("old", selector, compareSnapshotNode{Role: "button", Label: "Save", Name: "Save", TestID: "save"}, nodes)
+	}
+
+	repaired, issues, refs := repairCompareDecisionRefs(decisions, report, resolver)
+	if len(issues) != 0 {
+		t.Fatalf("expected selector repair without issues: %+v", issues)
+	}
+	if len(refs) != 1 || len(repaired) != 1 || repaired[0].Old != "@e1" {
+		t.Fatalf("unexpected selector repair: refs=%+v decisions=%+v", refs, repaired)
+	}
+	if refs[0].Node == nil || refs[0].Node.Ref != "@e1" || refs[0].LiveNode == nil || refs[0].LiveNode.TestID != "save" {
+		t.Fatalf("expected selector repair node summaries: %+v", refs)
+	}
+}
+
 func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 	decisions := []compareDecision{
 		{Kind: "pair", OldSelector: "#save", NewSelector: "a.jobs", Confidence: "high", Reason: "same CTA"},
@@ -1085,6 +1121,12 @@ func TestMaterializeCompareDecisionSelectorsWritesRefs(t *testing.T) {
 	}
 	if refs[0].Source != "old_selector" || refs[0].MatchedBy != "testid" || refs[1].Source != "new_selector" || refs[1].MatchedBy != "href" {
 		t.Fatalf("unexpected selector materialization details: %+v", refs)
+	}
+	if refs[0].Node == nil || refs[0].Node.Ref != "@e1" || refs[0].Node.TestID != "save" || refs[1].Node == nil || refs[1].Node.Ref != "@e2" || refs[1].Node.Href != "/jobs" {
+		t.Fatalf("expected selector node summaries: %+v", refs)
+	}
+	if refs[0].LiveNode == nil || refs[0].LiveNode.TestID != "save" || refs[1].LiveNode == nil || refs[1].LiveNode.Href != "/jobs" {
+		t.Fatalf("expected selector live node summaries: %+v", refs)
 	}
 	if materialized[0].OldSelector != "#save" || materialized[0].NewSelector != "a.jobs" {
 		t.Fatalf("expected selectors to remain as audit metadata: %+v", materialized[0])

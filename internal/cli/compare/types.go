@@ -188,12 +188,14 @@ type compareDecisionMaterializeSummary struct {
 }
 
 type compareDecisionMaterializedRef struct {
-	Line      int    `json:"line"`
-	Side      string `json:"side"`
-	Source    string `json:"source"`
-	Value     string `json:"value"`
-	Ref       string `json:"ref"`
-	MatchedBy string `json:"matched_by"`
+	Line      int                         `json:"line"`
+	Side      string                      `json:"side"`
+	Source    string                      `json:"source"`
+	Value     string                      `json:"value"`
+	Ref       string                      `json:"ref"`
+	MatchedBy string                      `json:"matched_by"`
+	Node      *compareDecisionNodeSummary `json:"node,omitempty"`
+	LiveNode  *compareDecisionNodeSummary `json:"live_node,omitempty"`
 }
 
 type compareDecisionMaterializeReport struct {
@@ -214,19 +216,36 @@ type compareDecisionRepairSummary struct {
 }
 
 type compareDecisionRepairedRef struct {
-	Line      int    `json:"line"`
-	Side      string `json:"side"`
-	Source    string `json:"source"`
-	Value     string `json:"value"`
-	OldRef    string `json:"old_ref"`
-	NewRef    string `json:"new_ref"`
-	MatchedBy string `json:"matched_by"`
+	Line      int                         `json:"line"`
+	Side      string                      `json:"side"`
+	Source    string                      `json:"source"`
+	Value     string                      `json:"value"`
+	OldRef    string                      `json:"old_ref"`
+	NewRef    string                      `json:"new_ref"`
+	MatchedBy string                      `json:"matched_by"`
+	Node      *compareDecisionNodeSummary `json:"node,omitempty"`
+	LiveNode  *compareDecisionNodeSummary `json:"live_node,omitempty"`
 }
 
 type compareDecisionRepairReport struct {
 	Summary  compareDecisionRepairSummary     `json:"summary"`
 	Repaired []compareDecisionRepairedRef     `json:"repaired,omitempty"`
 	Issues   []compareDecisionValidationIssue `json:"issues,omitempty"`
+}
+
+type compareDecisionNodeSummary struct {
+	Ref              string    `json:"ref,omitempty"`
+	Role             string    `json:"role,omitempty"`
+	Label            string    `json:"label,omitempty"`
+	Name             string    `json:"name,omitempty"`
+	Text             string    `json:"text,omitempty"`
+	Value            string    `json:"value,omitempty"`
+	Href             string    `json:"href,omitempty"`
+	TestID           string    `json:"testid,omitempty"`
+	Fingerprint      string    `json:"fingerprint,omitempty"`
+	StructureKey     string    `json:"structure_key,omitempty"`
+	SubtreeSignature string    `json:"subtree_signature,omitempty"`
+	Bounds           *api.Rect `json:"bounds,omitempty"`
 }
 
 type compareDecisionAuditSummary struct {

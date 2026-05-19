@@ -272,6 +272,7 @@ func materializeCompareDecisionRefs(decisions []compareDecision, compareReport c
 type compareDecisionRefResolution struct {
 	Ref       string
 	MatchedBy string
+	LiveNode  *compareDecisionNodeSummary
 }
 
 type compareDecisionSelectorResolver func(oldSide bool, selector string, nodes []compareSnapshotNode) (compareDecisionRefResolution, error)
@@ -382,6 +383,8 @@ func materializeCompareDecisionSelectorSide(decision compareDecision, index int,
 		Value:     strings.TrimSpace(selector),
 		Ref:       ref,
 		MatchedBy: firstNonEmpty(strings.TrimSpace(resolution.MatchedBy), "selector"),
+		Node:      compareDecisionNodeSummaryForRef(nodes, ref),
+		LiveNode:  resolution.LiveNode,
 	}, nil
 }
 
@@ -390,6 +393,7 @@ type compareDecisionRepairCandidate struct {
 	Source    string
 	Value     string
 	MatchedBy string
+	LiveNode  *compareDecisionNodeSummary
 }
 
 func repairCompareDecisionRefs(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) ([]compareDecision, []compareDecisionValidationIssue, []compareDecisionRepairedRef) {
@@ -481,6 +485,8 @@ func repairCompareDecisionSide(decision compareDecision, index int, nodes []comp
 		OldRef:    ref,
 		NewRef:    strings.TrimSpace(candidate.Ref),
 		MatchedBy: candidate.MatchedBy,
+		Node:      compareDecisionNodeSummaryForRef(nodes, candidate.Ref),
+		LiveNode:  candidate.LiveNode,
 	}
 }
 
@@ -536,6 +542,7 @@ func compareDecisionRepairCandidateForSide(decision compareDecision, nodes []com
 				Source:    "selector",
 				Value:     strings.TrimSpace(selector),
 				MatchedBy: firstNonEmpty(strings.TrimSpace(resolution.MatchedBy), "selector"),
+				LiveNode:  resolution.LiveNode,
 			}, nil
 		}
 	}
@@ -569,6 +576,44 @@ func compareDecisionRepairCandidateForSide(decision compareDecision, nodes []com
 		messages = append(messages, fmt.Sprintf("stale %s ref has no %s_selector, %s_locator, or %s_fingerprint", side, side, side, side))
 	}
 	return compareDecisionRepairCandidate{}, messages
+}
+
+func compareDecisionNodeSummaryForRef(nodes []compareSnapshotNode, ref string) *compareDecisionNodeSummary {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil
+	}
+	for _, node := range nodes {
+		if strings.TrimSpace(node.Ref) == ref {
+			return compareDecisionNodeSummaryForNode(node)
+		}
+	}
+	return nil
+}
+
+func compareDecisionNodeSummaryForNode(node compareSnapshotNode) *compareDecisionNodeSummary {
+	return &compareDecisionNodeSummary{
+		Ref:              strings.TrimSpace(node.Ref),
+		Role:             strings.TrimSpace(node.Role),
+		Label:            strings.TrimSpace(node.Label),
+		Name:             strings.TrimSpace(node.Name),
+		Text:             compareDecisionNodeSummaryText(node.Text),
+		Value:            strings.TrimSpace(node.Value),
+		Href:             strings.TrimSpace(node.Href),
+		TestID:           strings.TrimSpace(node.TestID),
+		Fingerprint:      strings.TrimSpace(node.Fingerprint),
+		StructureKey:     strings.TrimSpace(node.StructureKey),
+		SubtreeSignature: strings.TrimSpace(node.SubtreeSignature),
+		Bounds:           node.Bounds,
+	}
+}
+
+func compareDecisionNodeSummaryText(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if len(value) <= 160 {
+		return value
+	}
+	return value[:157] + "..."
 }
 
 func preflightCompareDecisionSelectors(decisions []compareDecision, compareReport compareReport, resolver compareDecisionSelectorResolver) compareDecisionSelectorPreflightResult {
@@ -696,6 +741,7 @@ func materializeCompareDecisionSide(decision compareDecision, index int, nodes [
 		Value:     strings.TrimSpace(locator),
 		Ref:       ref,
 		MatchedBy: "locator",
+		Node:      compareDecisionNodeSummaryForNode(nodes[nodeIndex]),
 	}, nil
 }
 
