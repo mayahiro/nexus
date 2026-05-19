@@ -1322,6 +1322,29 @@ func TestRunCompareAuditDecisionsReportsAppliedPendingStaleAndConflicts(t *testi
 	if report.Summary.Errors != 1 || report.Summary.Warnings != 1 || !report.Summary.CompareJSONUsed {
 		t.Fatalf("unexpected audit issue counts: %+v issues=%+v", report.Summary, report.Issues)
 	}
+	if len(report.Entries) != 5 {
+		t.Fatalf("expected audit entries for applied, pending, stale, and conflict states: %+v", report.Entries)
+	}
+	if !slices.ContainsFunc(report.Entries, func(entry compareDecisionAuditEntry) bool {
+		return entry.Line == 1 && entry.Status == "applied" && entry.Expected == "decision match in matching_debug" && strings.Contains(entry.Actual, "1 match")
+	}) {
+		t.Fatalf("expected applied pair audit entry: %+v", report.Entries)
+	}
+	if !slices.ContainsFunc(report.Entries, func(entry compareDecisionAuditEntry) bool {
+		return entry.Line == 2 && entry.Status == "pending" && entry.Field == "confidence" && entry.Expected == "confidence high" && entry.Actual == "confidence unknown"
+	}) {
+		t.Fatalf("expected pending confidence audit entry: %+v", report.Entries)
+	}
+	if !slices.ContainsFunc(report.Entries, func(entry compareDecisionAuditEntry) bool {
+		return entry.Line == 4 && entry.Status == "conflict" && entry.ConflictLine == 3 && entry.ConflictTarget == "finding:text_changed:abc123"
+	}) {
+		t.Fatalf("expected conflict audit entry: %+v", report.Entries)
+	}
+	if !slices.ContainsFunc(report.Entries, func(entry compareDecisionAuditEntry) bool {
+		return entry.Line == 4 && entry.Status == "stale" && entry.Field == "finding_id" && entry.Expected == "regression_finding" && entry.Actual == "accepted_finding" && entry.RepairHint != ""
+	}) {
+		t.Fatalf("expected stale finding audit entry: %+v", report.Entries)
+	}
 }
 
 func TestRunCompareAuditDecisionsRequiresCompareJSON(t *testing.T) {
@@ -1338,6 +1361,40 @@ func TestRunCompareAuditDecisionsRequiresCompareJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "requires --compare-json") {
 		t.Fatalf("expected compare-json error, got:\n%s", stdout.String())
+	}
+}
+
+func TestRunCompareAuditDecisionsReportsRepairHintForStaleRef(t *testing.T) {
+	dir := t.TempDir()
+	decisionsPath := filepath.Join(dir, "decisions.jsonl")
+	comparePath := filepath.Join(dir, "compare.json")
+	if err := os.WriteFile(decisionsPath, []byte(`{"kind":"accepted_removed","old":"@e99","old_locator":"role button --name Save","confidence":"high"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeIndentedJSONFile(comparePath, compareReport{
+		Old: compareSnapshot{
+			Nodes: []compareSnapshotNode{
+				{Ref: "@e1", Role: "button", Label: "Save", Name: "Save"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout bytes.Buffer
+	code := runCompareAuditDecisions([]string{"--decisions-file", decisionsPath, "--compare-json", comparePath, "--json"}, &stdout, &stdout)
+	if code != 0 {
+		t.Fatalf("expected stale audit to warn without failing: %d\n%s", code, stdout.String())
+	}
+	var report compareDecisionAuditReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("expected audit json: %v\n%s", err, stdout.String())
+	}
+	if report.Summary.Stale != 1 || report.Summary.Warnings != 1 {
+		t.Fatalf("unexpected stale audit summary: %+v", report.Summary)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Status != "stale" || report.Entries[0].Field != "old" || !strings.Contains(report.Entries[0].RepairHint, "old_locator") {
+		t.Fatalf("expected stale ref repair hint: %+v", report.Entries)
 	}
 }
 
@@ -1608,6 +1665,11 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 			Warnings:        1,
 			CompareJSONUsed: true,
 		},
+		Entries: []compareDecisionAuditEntry{
+			{Line: 1, Kind: "pair", Status: "applied", Field: "pair", Reason: "decision match was observed"},
+			{Line: 2, Kind: "pair", Status: "pending", Field: "confidence", Reason: "decision is not high-confidence", Expected: "confidence high", Actual: "confidence unknown"},
+			{Line: 4, Kind: "regression_finding", Status: "conflict", Field: "decision", Reason: "decision target conflicts with another applicable decision", ConflictLine: 3},
+		},
 	}
 	if err := writeCompareReviewPacket(dir, report, screenshots, compareReviewPacketOptions{DecisionAudit: &audit}); err != nil {
 		t.Fatalf("expected review packet to write: %v", err)
@@ -1658,6 +1720,9 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if summary.DecisionAudit == nil || summary.DecisionAudit.Applied != 2 || summary.DecisionAudit.Pending != 1 || summary.DecisionAudit.Stale != 1 || summary.DecisionAudit.Conflicts != 1 {
 		t.Fatalf("expected decision audit summary: %+v", summary.DecisionAudit)
 	}
+	if len(summary.DecisionAuditExamples) != 2 || summary.DecisionAuditExamples[0].Status != "pending" || summary.DecisionAuditExamples[1].Status != "conflict" {
+		t.Fatalf("expected unresolved decision audit examples: %+v", summary.DecisionAuditExamples)
+	}
 	if len(summary.ScreenshotWarnings) != 1 {
 		t.Fatalf("expected screenshot warning in review summary: %+v", summary)
 	}
@@ -1672,7 +1737,7 @@ func TestCompareReviewPacketWritesReviewFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "cluster-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "Decision audit: 4 decisions, 2 applied, 3 unresolved") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
+	if !strings.Contains(string(reviewGuide), "Nexus Compare Review") || !strings.Contains(string(reviewGuide), "pair-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "cluster-decisions.todo.jsonl") || !strings.Contains(string(reviewGuide), "Decision audit: 4 decisions, 2 applied, 3 unresolved") || !strings.Contains(string(reviewGuide), "Decision audit examples:") || !strings.Contains(string(reviewGuide), "materialize-decisions") {
 		t.Fatalf("unexpected review guide:\n%s", string(reviewGuide))
 	}
 	clusterTemplate, err := os.ReadFile(filepath.Join(dir, compareReviewFileClusterDecisionsTemplate))

@@ -259,8 +259,26 @@ type compareDecisionAuditSummary struct {
 	CompareJSONUsed bool `json:"compare_json_used"`
 }
 
+type compareDecisionAuditEntry struct {
+	Line           int    `json:"line,omitempty"`
+	Kind           string `json:"kind,omitempty"`
+	Status         string `json:"status"`
+	Field          string `json:"field,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+	Expected       string `json:"expected,omitempty"`
+	Actual         string `json:"actual,omitempty"`
+	RepairHint     string `json:"repair_hint,omitempty"`
+	ConflictLine   int    `json:"conflict_line,omitempty"`
+	ConflictTarget string `json:"conflict_target,omitempty"`
+	Old            string `json:"old,omitempty"`
+	New            string `json:"new,omitempty"`
+	FindingID      string `json:"finding_id,omitempty"`
+	ClusterKey     string `json:"cluster_key,omitempty"`
+}
+
 type compareDecisionAuditReport struct {
 	Summary compareDecisionAuditSummary      `json:"summary"`
+	Entries []compareDecisionAuditEntry      `json:"entries,omitempty"`
 	Issues  []compareDecisionValidationIssue `json:"issues,omitempty"`
 }
 
@@ -303,6 +321,7 @@ type compareReviewSummary struct {
 	UnmatchedNew            int                            `json:"unmatched_new,omitempty"`
 	PairDecisionTemplate    *compareDecisionTemplateCounts `json:"pair_decision_template_counts,omitempty"`
 	DecisionAudit           *compareDecisionAuditSummary   `json:"decision_audit,omitempty"`
+	DecisionAuditExamples   []compareDecisionAuditEntry    `json:"decision_audit_examples,omitempty"`
 	Files                   compareReviewFiles             `json:"files"`
 	FindingClusters         []compareFindingCluster        `json:"finding_clusters,omitempty"`
 	ScreenshotWarnings      []string                       `json:"screenshot_warnings,omitempty"`

@@ -119,6 +119,7 @@ func buildCompareReviewSummary(report compareReport, files compareReviewFiles, s
 	if decisionAudit != nil {
 		auditSummary := decisionAudit.Summary
 		summary.DecisionAudit = &auditSummary
+		summary.DecisionAuditExamples = compareDecisionAuditExampleEntries(decisionAudit, 5)
 	}
 	if report.Scope != nil {
 		summary.Scope = compareScopeLabel(report.Scope)
@@ -191,6 +192,9 @@ func renderCompareReviewGuide(summary compareReviewSummary) string {
 	}
 	if summary.DecisionAudit != nil {
 		fmt.Fprintf(&builder, "- Decision audit: %s\n", compareDecisionAuditSummaryLabel(summary.DecisionAudit))
+	}
+	if len(summary.DecisionAuditExamples) > 0 {
+		fmt.Fprintf(&builder, "- Decision audit examples: %s\n", compareDecisionAuditExampleLabels(summary.DecisionAuditExamples, 3))
 	}
 	if len(summary.ScreenshotWarnings) > 0 || len(summary.CropWarnings) > 0 {
 		fmt.Fprintf(&builder, "- Capture warnings: %d screenshots, %d crops\n", len(summary.ScreenshotWarnings), len(summary.CropWarnings))
@@ -760,6 +764,47 @@ func compareDecisionAuditSummaryLabel(summary *compareDecisionAuditSummary) stri
 		values = append(values, fmt.Sprintf("%d warnings", summary.Warnings))
 	}
 	return strings.Join(values, ", ")
+}
+
+func compareDecisionAuditExampleEntries(report *compareDecisionAuditReport, limit int) []compareDecisionAuditEntry {
+	if report == nil || limit <= 0 {
+		return nil
+	}
+	examples := make([]compareDecisionAuditEntry, 0, min(len(report.Entries), limit))
+	for _, entry := range report.Entries {
+		if entry.Status == "applied" {
+			continue
+		}
+		examples = append(examples, entry)
+		if len(examples) >= limit {
+			return examples
+		}
+	}
+	return examples
+}
+
+func compareDecisionAuditExampleLabels(entries []compareDecisionAuditEntry, limit int) string {
+	if limit <= 0 || len(entries) == 0 {
+		return ""
+	}
+	values := make([]string, 0, min(len(entries), limit))
+	for index, entry := range entries {
+		if index >= limit {
+			break
+		}
+		label := fmt.Sprintf("line %d %s", entry.Line, entry.Status)
+		if entry.Field != "" {
+			label += " " + entry.Field
+		}
+		if entry.Reason != "" {
+			label += ": " + entry.Reason
+		}
+		values = append(values, label)
+	}
+	if len(entries) > limit {
+		values = append(values, fmt.Sprintf("%d more", len(entries)-limit))
+	}
+	return strings.Join(values, "; ")
 }
 
 type compareManifestReviewHTMLData struct {

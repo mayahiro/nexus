@@ -83,6 +83,7 @@ func PrintRepairDecisionsHelp(w io.Writer) {
 func PrintAuditDecisionsHelp(w io.Writer) {
 	fmt.Fprintln(w, "usage: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
 	fmt.Fprintln(w, "audits whether reviewed decisions are applied, pending, stale, or conflicting against a current compare report")
+	fmt.Fprintln(w, "with --json, entries[] explains each state with reason, expected/actual values, conflict metadata, and repair hints")
 	fmt.Fprintln(w, "pair and subtree application checks require compare json produced with --matching-debug")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)

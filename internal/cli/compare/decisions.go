@@ -918,6 +918,15 @@ func auditCompareDecisions(decisions []compareDecision, compareReport compareRep
 		}
 		report.Summary.Warnings++
 	}
+	addEntry := func(decision compareDecision, index int, entry compareDecisionAuditEntry) {
+		entry.Line = compareDecisionLineNumber(decision, index)
+		entry.Kind = strings.TrimSpace(decision.Kind)
+		entry.Old = strings.TrimSpace(decision.Old)
+		entry.New = strings.TrimSpace(decision.New)
+		entry.FindingID = strings.TrimSpace(decision.FindingID)
+		entry.ClusterKey = strings.TrimSpace(decision.ClusterKey)
+		report.Entries = append(report.Entries, entry)
+	}
 
 	normalized := make([]compareDecision, 0, len(decisions))
 	for _, decision := range decisions {
@@ -927,19 +936,26 @@ func auditCompareDecisions(decisions []compareDecision, compareReport compareRep
 		normalized = append(normalized, decision)
 	}
 
-	report.Summary.Conflicts = auditCompareDecisionConflicts(normalized, addIssue)
+	report.Summary.Conflicts = auditCompareDecisionConflicts(normalized, addIssue, addEntry)
 	for index, decision := range normalized {
 		switch decision.Kind {
 		case "pair", "subtree_pair":
-			auditComparePairLikeDecision(&report, addIssue, decision, index, compareReport)
+			auditComparePairLikeDecision(&report, addIssue, addEntry, decision, index, compareReport)
 		case "accepted_removed", "regression_removed":
-			auditCompareOldEffectDecision(&report, addIssue, decision, index, compareReport)
+			auditCompareOldEffectDecision(&report, addIssue, addEntry, decision, index, compareReport)
 		case "accepted_added", "unexpected_added":
-			auditCompareNewEffectDecision(&report, addIssue, decision, index, compareReport)
+			auditCompareNewEffectDecision(&report, addIssue, addEntry, decision, index, compareReport)
 		case "accepted_finding", "regression_finding":
-			auditCompareFindingEffectDecision(&report, addIssue, decision, index, compareReport)
+			auditCompareFindingEffectDecision(&report, addIssue, addEntry, decision, index, compareReport)
 		default:
 			report.Summary.Pending++
+			addEntry(decision, index, compareDecisionAuditEntry{
+				Status:   "pending",
+				Field:    "kind",
+				Reason:   "decision kind is informational or is not applied by audit",
+				Expected: "applicable high-confidence decision kind",
+				Actual:   firstNonEmpty(strings.TrimSpace(decision.Kind), "empty"),
+			})
 		}
 	}
 	return report
@@ -950,7 +966,7 @@ type compareAuditConflictSeen struct {
 	Key  string
 }
 
-func auditCompareDecisionConflicts(decisions []compareDecision, addIssue func(string, compareDecision, int, string, string)) int {
+func auditCompareDecisionConflicts(decisions []compareDecision, addIssue func(string, compareDecision, int, string, string), addEntry func(compareDecision, int, compareDecisionAuditEntry)) int {
 	seen := map[string]compareAuditConflictSeen{}
 	conflicts := 0
 	for index, decision := range decisions {
@@ -965,6 +981,15 @@ func auditCompareDecisionConflicts(decisions []compareDecision, addIssue func(st
 				}
 				conflicts++
 				addIssue("error", decision, index, "decision", fmt.Sprintf("decision target conflicts with line %d", previous.Line))
+				addEntry(decision, index, compareDecisionAuditEntry{
+					Status:         "conflict",
+					Field:          "decision",
+					Reason:         "decision target conflicts with another applicable decision",
+					Expected:       "one applicable decision per target",
+					Actual:         fmt.Sprintf("target already claimed by line %d", previous.Line),
+					ConflictLine:   previous.Line,
+					ConflictTarget: target,
+				})
 				continue
 			}
 			seen[target] = compareAuditConflictSeen{
@@ -1035,18 +1060,33 @@ func compareAuditDecisionCanApply(decision compareDecision) bool {
 	}
 }
 
-func auditComparePairLikeDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int, compareReport compareReport) {
+func auditComparePairLikeDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), addEntry func(compareDecision, int, compareDecisionAuditEntry), decision compareDecision, index int, compareReport compareReport) {
 	if decision.Confidence != "high" {
 		if decision.Confidence == "" {
 			addIssue("error", decision, index, "confidence", decision.Kind+" decisions require confidence high, tentative, or unknown")
 			return
 		}
 		report.Summary.Pending++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "pending",
+			Field:    "confidence",
+			Reason:   "decision is not high-confidence, so it is kept as a review note",
+			Expected: "confidence high",
+			Actual:   "confidence " + decision.Confidence,
+		})
 		return
 	}
 	if compareReport.MatchingDebug == nil {
 		report.Summary.Stale++
 		addIssue("warning", decision, index, "matching_debug", "matching_debug is required to verify pair decision application")
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      "matching_debug",
+			Reason:     "matching_debug is required to verify pair decision application",
+			Expected:   "compare JSON produced with --matching-debug",
+			Actual:     "matching_debug missing",
+			RepairHint: "rerun compare with --matching-debug before auditing pair or subtree decisions",
+		})
 		return
 	}
 	var matches []compareNodeMatch
@@ -1060,16 +1100,39 @@ func auditComparePairLikeDecision(report *compareDecisionAuditReport, addIssue f
 	if err != nil {
 		report.Summary.Stale++
 		addIssue("warning", decision, index, decision.Kind, err.Error())
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      decision.Kind,
+			Reason:     err.Error(),
+			Expected:   "decision refs or fingerprints resolve in the current compare JSON",
+			Actual:     compareDecisionAuditPairActual(decision),
+			RepairHint: compareDecisionAuditRepairHint(decision, decision.Kind),
+		})
 		return
 	}
 	for _, match := range matches {
 		if !compareMatchingDebugHasDecisionMatch(compareReport.MatchingDebug, match) {
 			report.Summary.Stale++
 			addIssue("warning", decision, index, decision.Kind, "decision match was not observed in matching_debug")
+			addEntry(decision, index, compareDecisionAuditEntry{
+				Status:     "stale",
+				Field:      decision.Kind,
+				Reason:     "decision match was not observed in matching_debug",
+				Expected:   match.MatchedBy + " match in matching_debug",
+				Actual:     "match missing",
+				RepairHint: "rerun compare with the reviewed decisions file; if this persists, repair stale refs or revise the pair",
+			})
 			return
 		}
 	}
 	report.Summary.Applied++
+	addEntry(decision, index, compareDecisionAuditEntry{
+		Status:   "applied",
+		Field:    decision.Kind,
+		Reason:   "decision match was observed in matching_debug",
+		Expected: "decision match in matching_debug",
+		Actual:   fmt.Sprintf("%d match(es) observed", len(matches)),
+	})
 }
 
 func compareMatchingDebugHasDecisionMatch(debug *compareMatchingDebug, match compareNodeMatch) bool {
@@ -1084,42 +1147,102 @@ func compareMatchingDebugHasDecisionMatch(debug *compareMatchingDebug, match com
 	return false
 }
 
-func auditCompareOldEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int, compareReport compareReport) {
+func auditCompareOldEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), addEntry func(compareDecision, int, compareDecisionAuditEntry), decision compareDecision, index int, compareReport compareReport) {
 	if !compareDecisionApplies(decision) {
 		report.Summary.Pending++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "pending",
+			Field:    "confidence",
+			Reason:   "decision is not applicable, so it is kept as a review note",
+			Expected: "confidence high or omitted for accepted/regression decisions",
+			Actual:   "confidence " + firstNonEmpty(strings.TrimSpace(decision.Confidence), "default"),
+		})
 		return
 	}
 	oldIndex, err := compareResolveDecisionNode(compareReport.Old.Nodes, "old", decision.Old, decision.OldFingerprint)
 	if err != nil {
 		report.Summary.Stale++
 		addIssue("warning", decision, index, "old", err.Error())
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      "old",
+			Reason:     err.Error(),
+			Expected:   "old ref or fingerprint resolves in the current compare JSON",
+			Actual:     compareDecisionAuditSideActual(decision, true),
+			RepairHint: compareDecisionAuditRepairHint(decision, "old"),
+		})
 		return
 	}
 	if compareReportHasNodeDecisionFinding(compareReport.Findings, "missing_node", decision.Kind, compareReport.Old.Nodes[oldIndex]) {
 		report.Summary.Applied++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "applied",
+			Field:    "old",
+			Reason:   "decision_kind was observed on a current missing_node finding",
+			Expected: "missing_node finding stamped with " + decision.Kind,
+			Actual:   "old " + strings.TrimSpace(compareReport.Old.Nodes[oldIndex].Ref),
+		})
 		return
 	}
 	report.Summary.Stale++
 	addIssue("warning", decision, index, "old", "decision was not observed on a current missing_node finding")
+	addEntry(decision, index, compareDecisionAuditEntry{
+		Status:     "stale",
+		Field:      "old",
+		Reason:     "decision was not observed on a current missing_node finding",
+		Expected:   "missing_node finding stamped with " + decision.Kind,
+		Actual:     "matching finding missing",
+		RepairHint: "rerun compare with the reviewed decisions file; if the finding disappeared, remove or archive this decision",
+	})
 }
 
-func auditCompareNewEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int, compareReport compareReport) {
+func auditCompareNewEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), addEntry func(compareDecision, int, compareDecisionAuditEntry), decision compareDecision, index int, compareReport compareReport) {
 	if !compareDecisionApplies(decision) {
 		report.Summary.Pending++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "pending",
+			Field:    "confidence",
+			Reason:   "decision is not applicable, so it is kept as a review note",
+			Expected: "confidence high or omitted for accepted/regression decisions",
+			Actual:   "confidence " + firstNonEmpty(strings.TrimSpace(decision.Confidence), "default"),
+		})
 		return
 	}
 	newIndex, err := compareResolveDecisionNode(compareReport.New.Nodes, "new", decision.New, decision.NewFingerprint)
 	if err != nil {
 		report.Summary.Stale++
 		addIssue("warning", decision, index, "new", err.Error())
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      "new",
+			Reason:     err.Error(),
+			Expected:   "new ref or fingerprint resolves in the current compare JSON",
+			Actual:     compareDecisionAuditSideActual(decision, false),
+			RepairHint: compareDecisionAuditRepairHint(decision, "new"),
+		})
 		return
 	}
 	if compareReportHasNodeDecisionFinding(compareReport.Findings, "new_node", decision.Kind, compareReport.New.Nodes[newIndex]) {
 		report.Summary.Applied++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "applied",
+			Field:    "new",
+			Reason:   "decision_kind was observed on a current new_node finding",
+			Expected: "new_node finding stamped with " + decision.Kind,
+			Actual:   "new " + strings.TrimSpace(compareReport.New.Nodes[newIndex].Ref),
+		})
 		return
 	}
 	report.Summary.Stale++
 	addIssue("warning", decision, index, "new", "decision was not observed on a current new_node finding")
+	addEntry(decision, index, compareDecisionAuditEntry{
+		Status:     "stale",
+		Field:      "new",
+		Reason:     "decision was not observed on a current new_node finding",
+		Expected:   "new_node finding stamped with " + decision.Kind,
+		Actual:     "matching finding missing",
+		RepairHint: "rerun compare with the reviewed decisions file; if the finding disappeared, remove or archive this decision",
+	})
 }
 
 func compareReportHasNodeDecisionFinding(findings []compareFinding, kind string, decisionKind string, node compareSnapshotNode) bool {
@@ -1148,15 +1271,30 @@ func compareFindingMatchesNode(finding compareFinding, node compareSnapshotNode)
 	return true
 }
 
-func auditCompareFindingEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), decision compareDecision, index int, compareReport compareReport) {
+func auditCompareFindingEffectDecision(report *compareDecisionAuditReport, addIssue func(string, compareDecision, int, string, string), addEntry func(compareDecision, int, compareDecisionAuditEntry), decision compareDecision, index int, compareReport compareReport) {
 	if !compareDecisionApplies(decision) {
 		report.Summary.Pending++
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:   "pending",
+			Field:    "confidence",
+			Reason:   "decision is not applicable, so it is kept as a review note",
+			Expected: "confidence high or omitted for accepted/regression decisions",
+			Actual:   "confidence " + firstNonEmpty(strings.TrimSpace(decision.Confidence), "default"),
+		})
 		return
 	}
 	findingID := strings.TrimSpace(decision.FindingID)
 	if compareDecisionUnknownValue(findingID) {
 		report.Summary.Stale++
 		addIssue("warning", decision, index, "finding_id", "finding decision requires finding_id")
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      "finding_id",
+			Reason:     "finding decision requires finding_id",
+			Expected:   "current finding_id",
+			Actual:     firstNonEmpty(findingID, "empty"),
+			RepairHint: compareDecisionAuditRepairHint(decision, "finding_id"),
+		})
 		return
 	}
 	for _, finding := range compareReport.Findings {
@@ -1165,14 +1303,126 @@ func auditCompareFindingEffectDecision(report *compareDecisionAuditReport, addIs
 		}
 		if strings.TrimSpace(finding.DecisionKind) == decision.Kind {
 			report.Summary.Applied++
+			addEntry(decision, index, compareDecisionAuditEntry{
+				Status:   "applied",
+				Field:    "finding_id",
+				Reason:   "finding decision_kind was observed",
+				Expected: decision.Kind,
+				Actual:   strings.TrimSpace(finding.DecisionKind),
+			})
 			return
 		}
 		report.Summary.Stale++
 		addIssue("warning", decision, index, "finding_id", "finding exists but decision_kind was not observed")
+		addEntry(decision, index, compareDecisionAuditEntry{
+			Status:     "stale",
+			Field:      "finding_id",
+			Reason:     "finding exists but decision_kind was not observed",
+			Expected:   decision.Kind,
+			Actual:     firstNonEmpty(strings.TrimSpace(finding.DecisionKind), "empty"),
+			RepairHint: "rerun compare with the reviewed decisions file; if another decision owns this finding, resolve the conflict",
+		})
 		return
 	}
 	report.Summary.Stale++
 	addIssue("warning", decision, index, "finding_id", fmt.Sprintf("finding_id %q was not found in compare report", findingID))
+	addEntry(decision, index, compareDecisionAuditEntry{
+		Status:     "stale",
+		Field:      "finding_id",
+		Reason:     fmt.Sprintf("finding_id %q was not found in compare report", findingID),
+		Expected:   "current finding_id in compare report",
+		Actual:     findingID,
+		RepairHint: compareDecisionAuditRepairHint(decision, "finding_id"),
+	})
+}
+
+func compareDecisionAuditPairActual(decision compareDecision) string {
+	values := []string{}
+	if side := compareDecisionAuditSideActual(decision, true); side != "" {
+		values = append(values, side)
+	}
+	if side := compareDecisionAuditSideActual(decision, false); side != "" {
+		values = append(values, side)
+	}
+	return strings.Join(values, "; ")
+}
+
+func compareDecisionAuditSideActual(decision compareDecision, oldSide bool) string {
+	side := "new"
+	ref := strings.TrimSpace(decision.New)
+	fingerprint := strings.TrimSpace(decision.NewFingerprint)
+	locator := strings.TrimSpace(decision.NewLocator)
+	selector := strings.TrimSpace(decision.NewSelector)
+	if oldSide {
+		side = "old"
+		ref = strings.TrimSpace(decision.Old)
+		fingerprint = strings.TrimSpace(decision.OldFingerprint)
+		locator = strings.TrimSpace(decision.OldLocator)
+		selector = strings.TrimSpace(decision.OldSelector)
+	}
+	values := []string{}
+	if !compareDecisionUnknownValue(ref) {
+		values = append(values, side+"="+ref)
+	}
+	if fingerprint != "" {
+		values = append(values, side+"_fingerprint="+strconv.Quote(fingerprint))
+	}
+	if locator != "" {
+		values = append(values, side+"_locator="+strconv.Quote(locator))
+	}
+	if selector != "" {
+		values = append(values, side+"_selector="+strconv.Quote(selector))
+	}
+	return strings.Join(values, ", ")
+}
+
+func compareDecisionAuditRepairHint(decision compareDecision, field string) string {
+	switch field {
+	case "old", "new", "pair", "subtree_pair":
+		oldHint := compareDecisionAuditSideRepairHint(decision, true)
+		newHint := compareDecisionAuditSideRepairHint(decision, false)
+		if field == "old" {
+			return oldHint
+		}
+		if field == "new" {
+			return newHint
+		}
+		switch {
+		case oldHint != "" && newHint != "":
+			return oldHint + "; " + newHint
+		case oldHint != "":
+			return oldHint
+		default:
+			return newHint
+		}
+	case "finding_id":
+		return "rerun compare and choose a current finding_id from finding-decisions.todo.jsonl or compare.json"
+	default:
+		return ""
+	}
+}
+
+func compareDecisionAuditSideRepairHint(decision compareDecision, oldSide bool) string {
+	side := "new"
+	selector := strings.TrimSpace(decision.NewSelector)
+	locator := strings.TrimSpace(decision.NewLocator)
+	fingerprint := strings.TrimSpace(decision.NewFingerprint)
+	if oldSide {
+		side = "old"
+		selector = strings.TrimSpace(decision.OldSelector)
+		locator = strings.TrimSpace(decision.OldLocator)
+		fingerprint = strings.TrimSpace(decision.OldFingerprint)
+	}
+	if selector != "" {
+		return fmt.Sprintf("run repair-decisions with --%s-session; %s_selector can resolve a current ref", side, side)
+	}
+	if locator != "" {
+		return fmt.Sprintf("run repair-decisions; %s_locator can resolve a current ref", side)
+	}
+	if fingerprint != "" {
+		return fmt.Sprintf("run repair-decisions; %s_fingerprint can resolve a current ref", side)
+	}
+	return fmt.Sprintf("add %s_selector, %s_locator, or %s_fingerprint, then run repair-decisions", side, side, side)
 }
 
 func compareResolveDecisionMatches(decisions []compareDecision, oldNodes []compareSnapshotNode, newNodes []compareSnapshotNode) ([]compareNodeMatch, error) {
