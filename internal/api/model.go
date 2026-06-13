@@ -78,6 +78,7 @@ type ObserveOptions struct {
 	LayoutProperties  []string `json:"layout_properties,omitempty"`
 	ScopeSelector     string   `json:"scope_selector,omitempty"`
 	NodeScope         string   `json:"node_scope,omitempty"`
+	TimeoutMS         int      `json:"timeout_ms,omitempty"`
 }
 
 type LogOptions struct {

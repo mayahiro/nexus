@@ -30,9 +30,10 @@ import (
 const startupTimeout = 5 * time.Second
 const shutdownTimeout = 5 * time.Second
 const maxLogEntries = 200
-const pageTargetTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
+
+var pageTargetTimeout = 5 * time.Second
 
 func selectorHintSupportExpression() string {
 	return `
@@ -2393,22 +2394,29 @@ func containsModifier(modifiers []input.Modifier, target input.Modifier) bool {
 }
 
 func currentPageTarget(ctx context.Context, devtoolsURL string) (pageTargetInfo, error) {
-	deadline := time.Now().Add(pageTargetTimeout)
+	lookupCtx, cancel := context.WithTimeout(ctx, pageTargetTimeout)
+	defer cancel()
+
+	var lastErr error
 	for {
-		target, err := currentPageTargetOnce(ctx, devtoolsURL)
+		target, err := currentPageTargetOnce(lookupCtx, devtoolsURL)
 		if err == nil {
 			return target, nil
 		}
+		lastErr = err
 		if !errors.Is(err, errPageTargetNotFound) && !isRetryablePageTargetError(err) {
-			return pageTargetInfo{}, err
-		}
-		if time.Now().After(deadline) {
 			return pageTargetInfo{}, err
 		}
 
 		select {
-		case <-ctx.Done():
-			return pageTargetInfo{}, ctx.Err()
+		case <-lookupCtx.Done():
+			if ctx.Err() != nil {
+				return pageTargetInfo{}, ctx.Err()
+			}
+			if lastErr != nil && !errors.Is(lastErr, context.DeadlineExceeded) {
+				return pageTargetInfo{}, lastErr
+			}
+			return pageTargetInfo{}, lookupCtx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}

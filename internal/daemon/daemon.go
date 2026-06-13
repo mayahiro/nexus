@@ -30,6 +30,8 @@ type sessionManager interface {
 
 const shutdownTimeout = 5 * time.Second
 
+var screenshotObserveTimeout = 30 * time.Second
+
 type RunOptions struct {
 	IdleTimeout time.Duration
 }
@@ -123,12 +125,26 @@ func (s Server) StopDaemon(_ context.Context, _ api.StopDaemonRequest) (api.Stop
 }
 
 func (s Server) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
-	observation, err := s.sessions.Observe(ctx, req.SessionID, req.Options)
+	observeCtx, cancel := observeSessionContext(ctx, req.Options)
+	defer cancel()
+
+	observation, err := s.sessions.Observe(observeCtx, req.SessionID, req.Options)
 	if err != nil {
 		return api.ObserveSessionResponse{}, err
 	}
 
 	return api.ObserveSessionResponse{Observation: observation}, nil
+}
+
+func observeSessionContext(ctx context.Context, opts api.ObserveOptions) (context.Context, context.CancelFunc) {
+	if opts.WithScreenshot {
+		timeout := screenshotObserveTimeout
+		if opts.TimeoutMS > 0 {
+			timeout = time.Duration(opts.TimeoutMS) * time.Millisecond
+		}
+		return context.WithTimeout(ctx, timeout)
+	}
+	return context.WithCancel(ctx)
 }
 
 func (s Server) ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {

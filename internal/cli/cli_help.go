@@ -260,7 +260,7 @@ func printScrollHelp(w io.Writer) {
 }
 
 func printScreenshotHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl screenshot [path] [--session <id>] [--full] [--annotate] [--locator <locator>] [--nth <n>]")
+	fmt.Fprintln(w, "usage: nxctl screenshot [path] [--session <id>] [--full] [--annotate] [--locator <locator>] [--nth <n>] [--timeout <ms>]")
 	fmt.Fprintln(w, "locator: @eN, role=<value>, name=<value>, text=<value>, label=<value>, testid=<value>, href=<value>, or role=<value>&name=<value>")
 }
 

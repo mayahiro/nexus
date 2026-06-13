@@ -65,7 +65,7 @@ Useful step fields:
 
 - `side`: `old`, `new`, or `both`
 - `continue_on_error`
-- `timeout` for `wait`
+- `timeout` for `wait` and `screenshot`, in milliseconds
 - `locator` for `click`, `fill`, and targeted `screenshot`
 - `nth` for repeated locator matches
 - `text` for `fill`
@@ -76,6 +76,7 @@ Useful step fields:
 With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
 When `locator` is present, `screenshot` captures just the matched element instead of the whole viewport.
 Use `nth` when multiple nodes intentionally share the same locator.
+Screenshot capture times out after 30000 ms by default. Set `timeout` on the step when a large page needs more time.
 `full` is not supported together with `locator`.
 `compare` supports step-level overrides such as `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 

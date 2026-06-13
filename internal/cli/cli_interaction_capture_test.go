@@ -81,6 +81,67 @@ func TestScreenshot(t *testing.T) {
 	}
 }
 
+func TestScreenshotTimesOutWhenRPCDoesNotRespond(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	previousTimeout := screenshotCaptureTimeout
+	screenshotCaptureTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		screenshotCaptureTimeout = previousTimeout
+	})
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, hangingScreenshotRPCHandler{}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"screenshot"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected timeout exit code\n%s", stdout.String())
+	}
+	if output := stdout.String(); !strings.Contains(output, "timeout") && !strings.Contains(output, "deadline") {
+		t.Fatalf("expected timeout output, got: %s", output)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestScreenshotRejectsNonPositiveTimeout(t *testing.T) {
+	var stdout bytes.Buffer
+	if code := Run(context.Background(), []string{"screenshot", "--timeout", "0"}, &stdout, &stdout); code == 0 {
+		t.Fatalf("expected invalid timeout exit code")
+	}
+	if !strings.Contains(stdout.String(), "--timeout must be a positive integer") {
+		t.Fatalf("unexpected timeout validation output: %s", stdout.String())
+	}
+}
+
 func TestScreenshotAnnotate(t *testing.T) {
 	configureXDGTestEnv(t)
 

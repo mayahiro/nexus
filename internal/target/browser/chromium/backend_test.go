@@ -3,6 +3,7 @@ package chromium
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/target"
@@ -136,6 +138,29 @@ func TestCurrentPageTarget(t *testing.T) {
 
 	if target.ID != "page1" {
 		t.Fatalf("unexpected target: %+v", target)
+	}
+}
+
+func TestCurrentPageTargetTimesOutWhenDevToolsDoesNotRespond(t *testing.T) {
+	previousTimeout := pageTargetTimeout
+	pageTargetTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		pageTargetTimeout = previousTimeout
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/list" {
+			http.NotFound(w, r)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	_, err := currentPageTarget(context.Background(), wsURL)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected page target deadline, got: %v", err)
 	}
 }
 

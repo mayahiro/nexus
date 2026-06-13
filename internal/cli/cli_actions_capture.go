@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -29,7 +30,10 @@ type screenshotCaptureOptions struct {
 	Full     bool
 	Locator  string
 	Nth      int
+	Timeout  time.Duration
 }
+
+var screenshotCaptureTimeout = 30 * time.Second
 
 func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if isHelpArgs(args) {
@@ -44,6 +48,7 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 	annotate := fs.Bool("annotate", false, "draw node refs on top of the screenshot")
 	locator := fs.String("locator", "", "capture a single element such as @e3 or label=Email")
 	nth := fs.Int("nth", 0, "select nth match when --locator matches multiple nodes")
+	timeout := fs.Int("timeout", int(screenshotCaptureTimeout/time.Millisecond), "screenshot timeout in milliseconds")
 	pathArg := ""
 
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
@@ -64,6 +69,10 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 	}
 	if strings.TrimSpace(*locator) != "" && *full {
 		fmt.Fprintln(stderr, "--full is not supported with --locator")
+		return 1
+	}
+	if *timeout <= 0 {
+		fmt.Fprintln(stderr, "--timeout must be a positive integer")
 		return 1
 	}
 
@@ -90,6 +99,7 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 		Full:     *full,
 		Locator:  strings.TrimSpace(*locator),
 		Nth:      *nth,
+		Timeout:  time.Duration(*timeout) * time.Millisecond,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -105,16 +115,21 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 }
 
 func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID string, opts screenshotCaptureOptions) ([]byte, error) {
+	timeout := screenshotTimeout(opts.Timeout)
+	captureCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	if opts.Locator != "" {
-		return captureElementScreenshotBytes(ctx, client, sessionID, opts)
+		return captureElementScreenshotBytes(captureCtx, client, sessionID, opts)
 	}
 
-	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+	res, err := client.ObserveSession(captureCtx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
 			WithScreenshot: true,
 			WithTree:       opts.Annotate,
 			FullScreenshot: opts.Full,
+			TimeoutMS:      int(timeout / time.Millisecond),
 		},
 	})
 	if err != nil {
@@ -133,6 +148,13 @@ func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID s
 	}
 
 	return annotateScreenshot(data, res.Observation.Tree)
+}
+
+func screenshotTimeout(timeout time.Duration) time.Duration {
+	if timeout > 0 {
+		return timeout
+	}
+	return screenshotCaptureTimeout
 }
 
 func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID string, opts screenshotCaptureOptions) ([]byte, error) {
@@ -156,6 +178,7 @@ func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sess
 		Options: api.ObserveOptions{
 			WithScreenshot: true,
 			WithTree:       opts.Annotate,
+			TimeoutMS:      int(screenshotTimeout(opts.Timeout) / time.Millisecond),
 		},
 	})
 	if err != nil {

@@ -71,6 +71,7 @@ Rules:
 - `--locator` supports `@eN`, `role=...`, `name=...`, `text=...`, `label=...`, `testid=...`, `href=...`, and combined forms such as `role=button&name=Submit`
 - use `--nth` only when multiple nodes intentionally share the same locator
 - `--full` is not supported together with `--locator`
+- screenshot capture times out after 30000 ms by default; use `--timeout <ms>` for large pages that need more time
 - refresh the locator from a recent `state` output if the page changed after navigation or interaction
 - in flow manifests, use `{"action":"screenshot","path":"...","locator":"..."}` for the same targeted capture behavior
 

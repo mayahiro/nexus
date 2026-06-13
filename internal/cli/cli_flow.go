@@ -969,6 +969,13 @@ func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state fl
 	if strings.TrimSpace(step.Locator) != "" && step.Full {
 		return nil, errors.New("full is not supported with screenshot locator")
 	}
+	timeout := time.Duration(0)
+	if step.Timeout != nil {
+		if *step.Timeout <= 0 {
+			return nil, errors.New("timeout must be a positive integer")
+		}
+		timeout = time.Duration(*step.Timeout) * time.Millisecond
+	}
 
 	targets := flowStepTargets(state, step)
 	paths := make(map[string]string, len(targets))
@@ -980,6 +987,7 @@ func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state fl
 			Full:     step.Full,
 			Locator:  strings.TrimSpace(step.Locator),
 			Nth:      step.Nth,
+			Timeout:  timeout,
 		})
 		if err != nil {
 			return paths, err

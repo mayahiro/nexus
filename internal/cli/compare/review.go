@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -38,6 +39,8 @@ const (
 	compareReviewMaxFindingClusters           = 5
 	compareReviewMaxClusterFindingIDs         = 20
 )
+
+var compareReviewScreenshotTimeout = 30 * time.Second
 
 type compareReviewScreenshots struct {
 	Old      []byte
@@ -418,11 +421,15 @@ func captureCompareReviewScreenshots(ctx context.Context, client *rpc.Client, ol
 }
 
 func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, sessionID string) ([]byte, error) {
-	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+	captureCtx, cancel := context.WithTimeout(ctx, compareReviewScreenshotTimeout)
+	defer cancel()
+
+	res, err := client.ObserveSession(captureCtx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
 			WithScreenshot: true,
 			FullScreenshot: true,
+			TimeoutMS:      int(compareReviewScreenshotTimeout / time.Millisecond),
 		},
 	})
 	if err != nil {

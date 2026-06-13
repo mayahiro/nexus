@@ -76,9 +76,36 @@ func TestServerDetachSessionReturnsError(t *testing.T) {
 	}
 }
 
+func TestServerObserveSessionTimesOutScreenshots(t *testing.T) {
+	previousTimeout := screenshotObserveTimeout
+	screenshotObserveTimeout = 20 * time.Millisecond
+	t.Cleanup(func() {
+		screenshotObserveTimeout = previousTimeout
+	})
+
+	server := Server{
+		sessions: fakeSessionManager{
+			observe: func(ctx context.Context, _ string, _ api.ObserveOptions) (api.Observation, error) {
+				<-ctx.Done()
+				return api.Observation{}, ctx.Err()
+			},
+		},
+		stop: func() {},
+	}
+
+	_, err := server.ObserveSession(context.Background(), api.ObserveSessionRequest{
+		SessionID: "web1",
+		Options:   api.ObserveOptions{WithScreenshot: true},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected screenshot observe deadline, got: %v", err)
+	}
+}
+
 type fakeSessionManager struct {
 	session   api.Session
 	detachErr error
+	observe   func(context.Context, string, api.ObserveOptions) (api.Observation, error)
 }
 
 func (f fakeSessionManager) Attach(context.Context, api.AttachSessionRequest) (api.Session, error) {
@@ -96,7 +123,10 @@ func (f fakeSessionManager) Detach(context.Context, string) (api.Session, error)
 	return f.session, nil
 }
 
-func (f fakeSessionManager) Observe(context.Context, string, api.ObserveOptions) (api.Observation, error) {
+func (f fakeSessionManager) Observe(ctx context.Context, sessionID string, opts api.ObserveOptions) (api.Observation, error) {
+	if f.observe != nil {
+		return f.observe(ctx, sessionID, opts)
+	}
 	return api.Observation{}, nil
 }
 

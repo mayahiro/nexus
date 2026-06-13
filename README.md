@@ -161,6 +161,7 @@ nxctl screenshot
 nxctl screenshot annotated.png --annotate
 nxctl screenshot email.png --locator label=Email
 nxctl screenshot submit.png --locator @e1
+nxctl screenshot page.png --full --timeout 60000
 nxctl viewport 1280x720
 nxctl close
 ```
@@ -233,6 +234,7 @@ Scenarios can define `old` and `new` endpoints, optional `matrix` names, and str
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.
 Screenshot steps can also target one element with `locator` and optional `nth`, using the same selector DSL as flow `click` and `fill`.
+Screenshot capture times out after 30000 ms by default. Use `nxctl screenshot --timeout <ms>` or a flow screenshot step `timeout` value when a large page legitimately needs more time.
 
 ## Viewport
 

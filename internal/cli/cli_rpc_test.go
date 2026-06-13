@@ -48,6 +48,7 @@ type mouseRPCHandler struct{ noopRPCHandler }
 type typeRPCHandler struct{ noopRPCHandler }
 type keysRPCHandler struct{ noopRPCHandler }
 type screenshotRPCHandler struct{ noopRPCHandler }
+type hangingScreenshotRPCHandler struct{ noopRPCHandler }
 type annotateScreenshotRPCHandler struct{ noopRPCHandler }
 type elementScreenshotRPCHandler struct{ noopRPCHandler }
 type scrollRPCHandler struct{ noopRPCHandler }
@@ -158,6 +159,14 @@ func (screenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSes
 			Screenshot: base64.StdEncoding.EncodeToString([]byte("pngdata")),
 		},
 	}, nil
+}
+
+func (hangingScreenshotRPCHandler) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	if !req.Options.WithScreenshot {
+		return api.ObserveSessionResponse{}, nil
+	}
+	<-ctx.Done()
+	return api.ObserveSessionResponse{}, ctx.Err()
 }
 
 func (annotateScreenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
