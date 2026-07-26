@@ -3,174 +3,41 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
-	"strings"
+
+	nagicli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/nexus/internal/api"
 )
 
-func runInput(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printInputHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("input", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	indexArg := ""
-	textArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		indexArg = args[0]
-		args = args[1:]
-	}
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		textArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "input"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 2)
-	if indexArg != "" {
-		positionals = append(positionals, indexArg)
-	}
-	if textArg != "" {
-		positionals = append(positionals, textArg)
-	}
-	positionals = append(positionals, fs.Args()...)
-
-	if len(positionals) != 2 {
-		fmt.Fprintln(stderr, "input requires an index and text")
-		printCommandHint(stderr, "input", `nxctl input @e3 "hello@example.com" --json`)
-		return 1
-	}
-
-	indexArg = positionals[0]
-	textArg = positionals[1]
-
-	nodeID, _, err := parseNodeSelector(indexArg)
-	if err != nil {
-		fmt.Fprintln(stderr, "input requires a positive integer index or @eN ref")
-		return 1
-	}
-
+func runInputInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	node := nagiNodeValue(invocation, "node")
 	return runTextAction(ctx, stdout, stderr, textActionOptions{
-		SessionID: *sessionID,
-		JSON:      *asJSON,
-		NodeID:    &nodeID,
+		SessionID: nagiStringValue(invocation, "session"),
+		JSON:      nagiBoolValue(invocation, "json"),
+		NodeID:    &node.ID,
 		Kind:      "type",
-		Text:      textArg,
+		Text:      nagiStringValue(invocation, "value"),
 	})
 }
 
-func runFill(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printFillHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("fill", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	indexArg := ""
-	textArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		indexArg = args[0]
-		args = args[1:]
-	}
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		textArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "fill"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 2)
-	if indexArg != "" {
-		positionals = append(positionals, indexArg)
-	}
-	if textArg != "" {
-		positionals = append(positionals, textArg)
-	}
-	positionals = append(positionals, fs.Args()...)
-
-	if len(positionals) != 2 {
-		fmt.Fprintln(stderr, "fill requires an index and text")
-		printCommandHint(stderr, "fill", `nxctl fill @e3 "hello@example.com" --json`)
-		return 1
-	}
-
-	nodeID, _, err := parseNodeSelector(positionals[0])
-	if err != nil {
-		fmt.Fprintln(stderr, "fill requires a positive integer index or @eN ref")
-		return 1
-	}
-
+func runFillInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	node := nagiNodeValue(invocation, "node")
 	return runTextAction(ctx, stdout, stderr, textActionOptions{
-		SessionID: *sessionID,
-		JSON:      *asJSON,
-		NodeID:    &nodeID,
+		SessionID: nagiStringValue(invocation, "session"),
+		JSON:      nagiBoolValue(invocation, "json"),
+		NodeID:    &node.ID,
 		Kind:      "fill",
-		Text:      positionals[1],
+		Text:      nagiStringValue(invocation, "value"),
 	})
 }
 
-func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printSelectHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("select", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	indexArg := ""
-	valueArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		indexArg = args[0]
-		args = args[1:]
-	}
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		valueArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "select"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 2)
-	if indexArg != "" {
-		positionals = append(positionals, indexArg)
-	}
-	if valueArg != "" {
-		positionals = append(positionals, valueArg)
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 2 {
-		fmt.Fprintln(stderr, "select requires an index and value")
-		printCommandHint(stderr, "select", `nxctl select @e3 "two" --json`)
-		return 1
-	}
-
-	nodeID, nodeRef, err := parseNodeSelector(positionals[0])
-	if err != nil {
-		fmt.Fprintln(stderr, "select requires a positive integer index or @eN ref")
-		return 1
-	}
+func runSelectInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	node := nagiNodeValue(invocation, "node")
+	value := nagiStringValue(invocation, "value")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -180,11 +47,11 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind:   "select",
-			NodeID: &nodeID,
-			Text:   positionals[1],
+			NodeID: &node.ID,
+			Text:   value,
 		},
 	})
 	if err != nil {
@@ -198,7 +65,7 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
@@ -208,65 +75,25 @@ func runSelect(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 0
 	}
 
-	if nodeRef == "" && res.Result.Message != "" {
+	if node.Ref == "" && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
 		return 0
 	}
 
-	if nodeRef != "" {
-		fmt.Fprintf(stdout, "selected %s on %s\n", positionals[1], nodeRef)
+	if node.Ref != "" {
+		fmt.Fprintf(stdout, "selected %s on %s\n", value, node.Ref)
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "selected %s on %d\n", positionals[1], nodeID)
+	fmt.Fprintf(stdout, "selected %s on %d\n", value, node.ID)
 	return 0
 }
 
-func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printUploadHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("upload", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	indexArg := ""
-	pathArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		indexArg = args[0]
-		args = args[1:]
-	}
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		pathArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "upload"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 2)
-	if indexArg != "" {
-		positionals = append(positionals, indexArg)
-	}
-	if pathArg != "" {
-		positionals = append(positionals, pathArg)
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) != 2 {
-		fmt.Fprintln(stderr, "upload requires an index and path")
-		printCommandHint(stderr, "upload", "nxctl upload @e4 /path/to/file")
-		return 1
-	}
-
-	nodeID, nodeRef, err := parseNodeSelector(positionals[0])
-	if err != nil {
-		fmt.Fprintln(stderr, "upload requires a positive integer index or @eN ref")
-		return 1
-	}
+func runUploadInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	node := nagiNodeValue(invocation, "node")
+	path := nagiStringValue(invocation, "value")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -276,11 +103,11 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind:   "upload",
-			NodeID: &nodeID,
-			Text:   positionals[1],
+			NodeID: &node.ID,
+			Text:   path,
 		},
 	})
 	if err != nil {
@@ -294,7 +121,7 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
@@ -304,56 +131,26 @@ func runUpload(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 		return 0
 	}
 
-	if nodeRef == "" && res.Result.Message != "" {
+	if node.Ref == "" && res.Result.Message != "" {
 		fmt.Fprintln(stdout, res.Result.Message)
 		return 0
 	}
 
-	if nodeRef != "" {
-		fmt.Fprintf(stdout, "uploaded %s to %s\n", positionals[1], nodeRef)
+	if node.Ref != "" {
+		fmt.Fprintf(stdout, "uploaded %s to %s\n", path, node.Ref)
 		return 0
 	}
 
-	fmt.Fprintf(stdout, "uploaded %s to %d\n", positionals[1], nodeID)
+	fmt.Fprintf(stdout, "uploaded %s to %d\n", path, node.ID)
 	return 0
 }
 
-func runType(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printTypeHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("type", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	textArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		textArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "type"); err != nil {
-		return 1
-	}
-
-	if textArg == "" && fs.NArg() == 1 {
-		textArg = fs.Arg(0)
-	}
-
-	if textArg == "" || fs.NArg() > 1 {
-		fmt.Fprintln(stderr, "type requires text")
-		printCommandHint(stderr, "type", `nxctl type "hello" --json`)
-		return 1
-	}
-
+func runTypeInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
 	return runTextAction(ctx, stdout, stderr, textActionOptions{
-		SessionID: *sessionID,
-		JSON:      *asJSON,
+		SessionID: nagiStringValue(invocation, "session"),
+		JSON:      nagiBoolValue(invocation, "json"),
 		Kind:      "type",
-		Text:      textArg,
+		Text:      nagiStringValue(invocation, "value"),
 	})
 }
 

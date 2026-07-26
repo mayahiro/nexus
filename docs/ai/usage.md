@@ -44,6 +44,8 @@ nxctl help flow
 
 ## Core Rules
 
+- Treat `nxctl --help` and `nxctl help <command> [subcommand]` as the canonical command schema
+- Read the `error[code]: ...` diagnostic and its command-specific usage line before retrying invalid input
 - Reuse `@eN` refs from the latest `state` output when they are still fresh
 - Prefer semantic locators such as `role`, `label`, `text`, `testid`, or `href` when they are stable
 - Use `fill` when you want replacement semantics

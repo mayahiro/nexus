@@ -1,9 +1,7 @@
 package comparecmd
 
 import (
-	"bytes"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -11,14 +9,25 @@ import (
 )
 
 func PrintHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare <old-url> <new-url> [--backend chromium|lightpanda] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare --old-session <id> --new-session <id> [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]... [--output-json <file>] [--output-md <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare --manifest <file> [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--continue-on-error] [--limit <n>] [--output-json <file>] [--output-md <file>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--strict] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare repair-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
-	fmt.Fprintln(w, "   or: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
+	if !printNagiCompareUsage(w) {
+		usages := []string{
+			compareURLUsage,
+			compareEndpointUsage,
+			compareManifestUsage,
+			compareValidateDecisionsUsage,
+			compareNormalizeDecisionsUsage,
+			compareMaterializeDecisionsUsage,
+			compareRepairDecisionsUsage,
+			compareAuditDecisionsUsage,
+		}
+		for index, usage := range usages {
+			prefix := "   or: "
+			if index == 0 {
+				prefix = "usage: "
+			}
+			fmt.Fprintln(w, prefix+"nxctl compare "+usage)
+		}
+	}
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
 	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
 	fmt.Fprintln(w, "layout: --compare-layout reports significant viewport-relative bounds changes for matching nodes")
@@ -46,7 +55,9 @@ func PrintHelp(w io.Writer) {
 }
 
 func PrintValidateDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare validate-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--old-session <id>] [--new-session <id>] [--strict] [--json]")
+	if !printNagiCompareDecisionUsage(w, "validate-decisions") {
+		fmt.Fprintln(w, "usage: nxctl compare "+compareValidateDecisionsUsage)
+	}
 	fmt.Fprintln(w, "validates compare decision JSONL syntax, supported kinds, schema_version, unknown or unused fields, duplicate high-confidence pairs/subtrees/finding decisions, current refs/fingerprints/finding_ids from --compare-json, finding clusters from --review-summary, and session-backed selector uniqueness when --old-session or --new-session is supplied")
 	fmt.Fprintln(w, "--strict turns unknown or kind-unused field warnings into errors")
 	fmt.Fprintln(w, "selector preflight requires --compare-json and checks that each old_selector/new_selector matches one live DOM node that maps uniquely to one compare JSON node")
@@ -55,7 +66,9 @@ func PrintValidateDecisionsHelp(w io.Writer) {
 }
 
 func PrintNormalizeDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare normalize-decisions --decisions-file <jsonl> [--compare-json <file>] [--review-summary <file>] [--output <jsonl>] [--json]")
+	if !printNagiCompareDecisionUsage(w, "normalize-decisions") {
+		fmt.Fprintln(w, "usage: nxctl compare "+compareNormalizeDecisionsUsage)
+	}
 	fmt.Fprintln(w, "normalizes compare decision JSONL tokens, materializes finding-cluster decisions from --compare-json or --review-summary, removes duplicate decisions, and validates current refs/fingerprints/finding_ids")
 	fmt.Fprintln(w, "without --output, normalized JSONL is written to stdout unless --json is used")
 	fmt.Fprintln(w, "")
@@ -63,7 +76,9 @@ func PrintNormalizeDecisionsHelp(w io.Writer) {
 }
 
 func PrintMaterializeDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare materialize-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
+	if !printNagiCompareDecisionUsage(w, "materialize-decisions") {
+		fmt.Fprintln(w, "usage: nxctl compare "+compareMaterializeDecisionsUsage)
+	}
 	fmt.Fprintln(w, "resolves old_locator/new_locator fields against compare JSON nodes and old_selector/new_selector fields through live sessions, then writes concrete old/new refs")
 	fmt.Fprintln(w, "locator terms support @eN, role:button, name:Save, label:Save, text:Login, href:/jobs, testid:submit, fingerprint:<value>, and role=button&name=Save")
 	fmt.Fprintln(w, "selector materialization requires --old-session for old_selector and --new-session for new_selector; each selector must resolve to one live node that maps to one compare JSON node")
@@ -74,7 +89,9 @@ func PrintMaterializeDecisionsHelp(w io.Writer) {
 }
 
 func PrintRepairDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare repair-decisions --decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]")
+	if !printNagiCompareDecisionUsage(w, "repair-decisions") {
+		fmt.Fprintln(w, "usage: nxctl compare "+compareRepairDecisionsUsage)
+	}
 	fmt.Fprintln(w, "repairs stale old/new refs in compare decision JSONL when old_selector/new_selector, old_locator/new_locator, or old_fingerprint/new_fingerprint resolves uniquely against the current compare JSON")
 	fmt.Fprintln(w, "selector-backed repair uses --old-session for old_selector and --new-session for new_selector; unresolved or ambiguous stale refs are left unchanged and reported as warnings")
 	fmt.Fprintln(w, "without --output, repaired JSONL is written to stdout unless --json is used")
@@ -83,94 +100,14 @@ func PrintRepairDecisionsHelp(w io.Writer) {
 }
 
 func PrintAuditDecisionsHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]")
+	if !printNagiCompareDecisionUsage(w, "audit-decisions") {
+		fmt.Fprintln(w, "usage: nxctl compare "+compareAuditDecisionsUsage)
+	}
 	fmt.Fprintln(w, "audits whether reviewed decisions are applied, pending, stale, or conflicting against a current compare report")
 	fmt.Fprintln(w, "with --json, entries[] explains each state with reason, expected/actual values, conflict metadata, and repair hints")
 	fmt.Fprintln(w, "pair and subtree application checks require compare json produced with --matching-debug")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)
-}
-
-func isHelpArgs(args []string) bool {
-	return len(args) == 1 && (args[0] == "-h" || args[0] == "--help")
-}
-
-func parseCommandFlags(fs *flag.FlagSet, args []string, stderr io.Writer, command string) error {
-	normalized := normalizeFlagArgs(fs, args)
-	output := fs.Output()
-	var buf bytes.Buffer
-	fs.SetOutput(&buf)
-	defer fs.SetOutput(output)
-
-	if err := fs.Parse(normalized); err != nil {
-		message := strings.TrimSpace(buf.String())
-		if message != "" {
-			fmt.Fprintln(stderr, message)
-		}
-		fmt.Fprintf(stderr, "hint: run `nxctl help %s` for details\n", command)
-		return err
-	}
-
-	return nil
-}
-
-func normalizeFlagArgs(fs *flag.FlagSet, args []string) []string {
-	flags := make([]string, 0, len(args))
-	positionals := make([]string, 0, len(args))
-
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			positionals = append(positionals, args[i+1:]...)
-			break
-		}
-		if !strings.HasPrefix(arg, "-") || arg == "-" {
-			positionals = append(positionals, arg)
-			continue
-		}
-
-		name, hasValue := parseFlagToken(arg)
-		flags = append(flags, arg)
-		if hasValue {
-			continue
-		}
-
-		defined := fs.Lookup(name)
-		if defined == nil || isBoolFlag(defined) {
-			continue
-		}
-		if i+1 >= len(args) {
-			continue
-		}
-
-		flags = append(flags, args[i+1])
-		i++
-	}
-
-	return append(flags, positionals...)
-}
-
-func parseFlagToken(arg string) (string, bool) {
-	trimmed := strings.TrimLeft(arg, "-")
-	if trimmed == "" {
-		return "", false
-	}
-	if index := strings.IndexByte(trimmed, '='); index >= 0 {
-		return trimmed[:index], true
-	}
-	return trimmed, false
-}
-
-func isBoolFlag(def *flag.Flag) bool {
-	if def == nil {
-		return false
-	}
-	getter, ok := def.Value.(flag.Getter)
-	if !ok {
-		return false
-	}
-	_, ok = getter.Get().(bool)
-	return ok
 }
 
 func resolvedViewport(value string) (int, int, error) {

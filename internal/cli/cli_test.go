@@ -63,8 +63,11 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
+	if !strings.Contains(stdout.String(), "Usage:\n  nxctl [OPTIONS] <COMMAND>") {
 		t.Fatalf("unexpected help output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Commands:\n") || !strings.Contains(stdout.String(), "compare     Compare browser interfaces") {
+		t.Fatalf("unexpected command list: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), aiUsageDocURL) {
 		t.Fatalf("unexpected help output: %s", stdout.String())
@@ -74,7 +77,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"--help"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected --help exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
+	if !strings.Contains(stdout.String(), "Usage:\n  nxctl [OPTIONS] <COMMAND>") {
 		t.Fatalf("unexpected --help output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), migrationPlaybookDocURL) {
@@ -85,7 +88,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"-h"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected -h exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "commands:") {
+	if !strings.Contains(stdout.String(), "Commands:") {
 		t.Fatalf("unexpected -h output: %s", stdout.String())
 	}
 
@@ -93,7 +96,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "wait"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help wait exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl wait selector`) {
+	if !strings.Contains(stdout.String(), `nxctl wait selector <CSS>`) {
 		t.Fatalf("unexpected help wait output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), aiCompareDocURL) {
@@ -104,7 +107,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"wait", "--help"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected wait --help exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `wait url "value"`) {
+	if !strings.Contains(stdout.String(), `nxctl wait url <VALUE>`) {
 		t.Fatalf("unexpected wait --help output: %s", stdout.String())
 	}
 
@@ -112,16 +115,10 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "find"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help find exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl find role <role> click`) {
+	if !strings.Contains(stdout.String(), `nxctl find role <QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--nth <N>]`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `find role <role> fill "text"`) {
-		t.Fatalf("unexpected help find output: %s", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `--nth <n>`) {
-		t.Fatalf("unexpected help find output: %s", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `find testid "value" click|fill|get`) {
+	if !strings.Contains(stdout.String(), `nxctl find testid <QUERY> <click|input|fill|get>`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
 
@@ -129,7 +126,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "get"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help get exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `nxctl get bbox --selector <css>`) {
+	if !strings.Contains(stdout.String(), `nxctl get bbox --selector <CSS>`) {
 		t.Fatalf("unexpected help get output: %s", stdout.String())
 	}
 
@@ -137,19 +134,16 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "inspect"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help inspect exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl inspect '<locator>' --old-session <id> --new-session <id>`) {
+	if !strings.Contains(stdout.String(), `nxctl inspect <LOCATOR> --old-session <ID> --new-session <ID>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `role <role> [--name <text>]`) {
-		t.Fatalf("unexpected help inspect output: %s", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `--nth <n>`) {
+	if !strings.Contains(stdout.String(), `--nth <N>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `--layout-context`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `nxctl inspect --selector <css> --old-session <id> --new-session <id>`) {
+	if !strings.Contains(stdout.String(), `nxctl inspect --selector <CSS> --old-session <ID> --new-session <ID>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
 
@@ -157,7 +151,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "batch"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help batch exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl batch --cmd "open https://example.com"`) {
+	if !strings.Contains(stdout.String(), `nxctl batch --cmd "COMMAND" [--cmd "COMMAND"]... [--json]`) {
 		t.Fatalf("unexpected help batch output: %s", stdout.String())
 	}
 
@@ -165,7 +159,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "compare"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help compare exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl compare <old-url> <new-url>`) {
+	if !strings.Contains(stdout.String(), `nxctl compare <old-url> <new-url>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `nxctl compare --manifest <file>`) {
@@ -202,7 +196,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "navigate"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help navigate exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `usage: nxctl navigate <url>`) {
+	if !strings.Contains(stdout.String(), `nxctl navigate <URL>`) {
 		t.Fatalf("unexpected help navigate output: %s", stdout.String())
 	}
 
@@ -210,7 +204,8 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"wait"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected wait without args to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `hint: nxctl wait selector ".ready"`) {
+	if !strings.Contains(stdout.String(), `error[missing-required]: required argument "target" is missing`) ||
+		!strings.Contains(stdout.String(), `usage: nxctl wait [OPTIONS] <TARGET> [VALUE]`) {
 		t.Fatalf("unexpected wait missing-args output: %s", stdout.String())
 	}
 }
@@ -248,7 +243,8 @@ func TestBatch(t *testing.T) {
 	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "unknown"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected batch failure\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "usage: nxctl <command>") {
+	if !strings.Contains(stdout.String(), "error[unknown-command]: unknown command 'unknown'") ||
+		!strings.Contains(stdout.String(), "usage: nxctl [OPTIONS] <COMMAND>") {
 		t.Fatalf("unexpected batch failure output: %s", stdout.String())
 	}
 
@@ -264,32 +260,32 @@ func TestBatch(t *testing.T) {
 	}
 }
 
-func TestCommandHints(t *testing.T) {
+func TestCommandDiagnostics(t *testing.T) {
 	var stdout bytes.Buffer
 	if code := Run(context.Background(), []string{"open"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected open without url to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "hint: nxctl open https://example.com --session work") {
-		t.Fatalf("unexpected open hint output: %s", stdout.String())
-	}
-	if strings.Contains(stdout.String(), "usage: nxctl <command>") {
-		t.Fatalf("unexpected global usage in open hint output: %s", stdout.String())
+	if !strings.Contains(stdout.String(), `error[missing-required]: required argument "url" is missing`) ||
+		!strings.Contains(stdout.String(), `usage: nxctl open [OPTIONS] <URL>`) {
+		t.Fatalf("unexpected open diagnostic output: %s", stdout.String())
 	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"navigate"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected navigate without url to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "hint: nxctl navigate https://example.com --session work") {
-		t.Fatalf("unexpected navigate hint output: %s", stdout.String())
+	if !strings.Contains(stdout.String(), `error[missing-required]: required argument "url" is missing`) ||
+		!strings.Contains(stdout.String(), `usage: nxctl navigate [OPTIONS] <URL>`) {
+		t.Fatalf("unexpected navigate diagnostic output: %s", stdout.String())
 	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"click", "--bogus", "3"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected click parse failure\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "hint: run `nxctl help click` for details") {
-		t.Fatalf("unexpected click parse hint output: %s", stdout.String())
+	if !strings.Contains(stdout.String(), `error[unknown-option]: unknown option '--bogus'`) ||
+		!strings.Contains(stdout.String(), `usage: nxctl click [OPTIONS] [TARGETS]...`) {
+		t.Fatalf("unexpected click parse diagnostic output: %s", stdout.String())
 	}
 }
 

@@ -1,10 +1,8 @@
 package comparecmd
 
 import (
-	"errors"
 	"regexp"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -12,21 +10,6 @@ import (
 
 var newCompareSessionSuffix = func() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 10)
-}
-
-type compareStringValues []string
-
-func (v *compareStringValues) String() string {
-	return strings.Join(*v, ", ")
-}
-
-func (v *compareStringValues) Set(value string) error {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return errors.New("compare value must not be empty")
-	}
-	*v = append(*v, trimmed)
-	return nil
 }
 
 type compareEndpoint struct {

@@ -182,8 +182,11 @@ Available command groups include:
 - automation flow: `batch`
 - session control: `sessions`, `detach`, `close`
 
-Run `nxctl help <command>` for command-specific usage.
+Run `nxctl help <command> [subcommand]` for command-specific usage.
 Run `nxctl --help` or `nxctl -h` for the top-level command list and documentation links.
+
+The `nxctl` command surface is defined by one Nagi command graph. Parsing, validation diagnostics, nested help, and command execution use that same schema, so generated help is the canonical reference for accepted arguments and options.
+Usage errors are rendered as structured messages such as `error[missing-required]: ...` followed by the relevant generated usage line.
 
 Most command flags can be placed before or after positional arguments.
 Examples: `nxctl open --session work https://example.com`, `nxctl navigate --session work https://example.com/docs`, `nxctl click @e3 --json`

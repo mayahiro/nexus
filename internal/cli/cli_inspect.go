@@ -3,47 +3,22 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
+	nagicli "github.com/mayahiro/nagicli-go"
+
 	"github.com/mayahiro/nexus/internal/api"
 	comparecmd "github.com/mayahiro/nexus/internal/cli/compare"
 )
 
-func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printEvalHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	source := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		source = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "eval"); err != nil {
-		return 1
-	}
-
-	if source == "" && fs.NArg() == 1 {
-		source = fs.Arg(0)
-	}
-
-	if source == "" || fs.NArg() > 1 {
-		fmt.Fprintln(stderr, "eval requires js code")
-		printCommandHint(stderr, "eval", `nxctl eval "document.title" --json`)
-		return 1
-	}
+func runEvalInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	source := nagiStringValue(invocation, "source")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -53,7 +28,7 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind: "eval",
 			Text: source,
@@ -70,7 +45,7 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result.Value); err != nil {
@@ -88,51 +63,12 @@ func runEval(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	return 0
 }
 
-func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printGetHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("get", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	selector := fs.String("selector", "", "selector for html or bbox")
-	refs := fs.String("refs", "", "comma-separated node refs")
-	target := ""
-	arg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		target = args[0]
-		args = args[1:]
-	}
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		arg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "get"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 2)
-	if target != "" {
-		positionals = append(positionals, target)
-	}
-	if arg != "" {
-		positionals = append(positionals, arg)
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) == 0 {
-		fmt.Fprintln(stderr, "get requires a target")
-		printCommandHint(stderr, "get", "nxctl get title")
-		return 1
-	}
-
-	target = positionals[0]
-	selectorValue := strings.TrimSpace(*selector)
-	refsValue := strings.TrimSpace(*refs)
+func runGetInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	selectorValue := strings.TrimSpace(nagiStringValue(invocation, "selector"))
+	refsValue := strings.TrimSpace(nagiStringValue(invocation, "refs"))
+	target := nagiStringValue(invocation, "target")
 	action := api.Action{
 		Kind: "get",
 		Args: map[string]string{
@@ -141,66 +77,25 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	}
 
 	if refsValue != "" {
-		return runGetRefs(ctx, *sessionID, target, selectorValue, positionals, refsValue, *asJSON, stdout, stderr)
+		return runGetRefs(ctx, sessionID, target, refsValue, asJSON, stdout, stderr)
 	}
 
 	switch target {
 	case "title":
-		if len(positionals) != 1 {
-			fmt.Fprintln(stderr, "get title does not accept an index")
-			return 1
-		}
-		if selectorValue != "" {
-			fmt.Fprintln(stderr, "get title does not support --selector")
-			return 1
-		}
 	case "html":
-		if len(positionals) != 1 {
-			fmt.Fprintln(stderr, "get html does not accept an index")
-			return 1
-		}
 		if selectorValue != "" {
 			action.Args["selector"] = selectorValue
 		}
 	case "text", "value", "attributes":
-		if len(positionals) != 2 {
-			fmt.Fprintf(stderr, "get %s requires an index\n", target)
-			printCommandHint(stderr, "get", "nxctl get attributes @e3")
-			return 1
-		}
-		if selectorValue != "" {
-			fmt.Fprintf(stderr, "get %s does not support --selector\n", target)
-			return 1
-		}
-		nodeID, _, err := parseNodeSelector(positionals[1])
-		if err != nil {
-			fmt.Fprintf(stderr, "get %s requires a positive integer index or @eN ref\n", target)
-			return 1
-		}
+		nodeID := nagiNodeValue(invocation, "node").ID
 		action.NodeID = &nodeID
 	case "bbox":
 		if selectorValue != "" {
-			if len(positionals) != 1 {
-				fmt.Fprintln(stderr, "get bbox with --selector does not accept an index")
-				return 1
-			}
 			action.Args["selector"] = selectorValue
 		} else {
-			if len(positionals) != 2 {
-				fmt.Fprintln(stderr, "get bbox requires an index or --selector")
-				printCommandHint(stderr, "get", `nxctl get bbox --selector ".hero"`)
-				return 1
-			}
-			nodeID, _, err := parseNodeSelector(positionals[1])
-			if err != nil {
-				fmt.Fprintln(stderr, "get bbox requires a positive integer index or @eN ref")
-				return 1
-			}
+			nodeID := nagiNodeValue(invocation, "node").ID
 			action.NodeID = &nodeID
 		}
-	default:
-		fmt.Fprintln(stderr, "get target must be title, html, text, value, attributes, or bbox")
-		return 1
 	}
 
 	client, err := connectClient(ctx)
@@ -211,7 +106,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action:    action,
 	})
 	if err != nil {
@@ -225,7 +120,7 @@ func runGet(ctx context.Context, args []string, stdout io.Writer, stderr io.Writ
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result.Value); err != nil {
@@ -248,22 +143,7 @@ type refValueResult struct {
 	Value interface{} `json:"value"`
 }
 
-func runGetRefs(ctx context.Context, sessionID string, target string, selectorValue string, positionals []string, refsValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {
-	switch target {
-	case "text", "value", "attributes", "bbox":
-	default:
-		fmt.Fprintln(stderr, "get --refs supports text, value, attributes, or bbox")
-		return 1
-	}
-	if len(positionals) != 1 {
-		fmt.Fprintf(stderr, "get %s --refs does not accept an index\n", target)
-		return 1
-	}
-	if selectorValue != "" {
-		fmt.Fprintf(stderr, "get %s --refs does not support --selector\n", target)
-		return 1
-	}
-
+func runGetRefs(ctx context.Context, sessionID string, target string, refsValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {
 	nodes, err := parseNodeSelectorList(refsValue)
 	if err != nil {
 		fmt.Fprintln(stderr, "get --refs requires comma-separated positive integer indexes or @eN refs")
@@ -343,28 +223,11 @@ func printRefValue(w io.Writer, ref string, value interface{}) error {
 	}
 }
 
-func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printObserveHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("observe", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	withText := fs.Bool("text", true, "include text")
-	withTree := fs.Bool("tree", true, "include tree")
-	withScreenshot := fs.Bool("screenshot", false, "include screenshot")
-
-	if err := parseCommandFlags(fs, args, stderr, "observe"); err != nil {
-		return 1
-	}
-
-	if *sessionID == "" {
-		fmt.Fprintln(stderr, "--session is required")
-		return 1
-	}
+func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	withScreenshot := nagiBoolValue(invocation, "screenshot")
+	fullScreenshot := nagiBoolValue(invocation, "full")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -374,11 +237,12 @@ func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	defer client.Close()
 
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithText:       *withText,
-			WithTree:       *withTree,
-			WithScreenshot: *withScreenshot,
+			WithText:       true,
+			WithTree:       true,
+			WithScreenshot: withScreenshot || fullScreenshot,
+			FullScreenshot: fullScreenshot,
 		},
 	})
 	if err != nil {
@@ -386,7 +250,7 @@ func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Observation); err != nil {
@@ -407,36 +271,15 @@ func runObserve(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	return 0
 }
 
-func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printStateHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("state", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	role := fs.String("role", "", "filter by role")
-	name := fs.String("name", "", "filter by accessible name")
-	text := fs.String("text", "", "filter by text")
-	testID := fs.String("testid", "", "filter by data-testid or data-test")
-	href := fs.String("href", "", "filter by href")
-	limit := fs.Int("limit", 0, "maximum nodes to print")
-
-	if err := parseCommandFlags(fs, args, stderr, "state"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "state does not accept positional arguments")
-		printCommandHint(stderr, "state", "nxctl state --role button --limit 20")
-		return 1
-	}
-	if *limit < 0 {
-		fmt.Fprintln(stderr, "state limit must be a non-negative integer")
-		printCommandHint(stderr, "state", "nxctl state --limit 20")
-		return 1
-	}
+func runStateInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	role := nagiStringValue(invocation, "role")
+	name := nagiStringValue(invocation, "name")
+	textValue := nagiStringValue(invocation, "text")
+	testID := nagiStringValue(invocation, "testid")
+	href := nagiStringValue(invocation, "href")
+	limit := nagiIntValue(invocation, "limit")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -446,7 +289,7 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	defer client.Close()
 
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Options: api.ObserveOptions{
 			WithText:       true,
 			WithTree:       true,
@@ -459,15 +302,15 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	res.Observation.Tree = filterStateNodes(res.Observation.Tree, stateFilterOptions{
-		Role:   *role,
-		Name:   *name,
-		Text:   *text,
-		TestID: *testID,
-		Href:   *href,
-		Limit:  *limit,
+		Role:   role,
+		Name:   name,
+		Text:   textValue,
+		TestID: testID,
+		Href:   href,
+		Limit:  limit,
 	})
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Observation); err != nil {
@@ -489,21 +332,6 @@ func runState(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	return 0
-}
-
-type inspectStringValues []string
-
-func (v *inspectStringValues) String() string {
-	return strings.Join(*v, ", ")
-}
-
-func (v *inspectStringValues) Set(value string) error {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return fmt.Errorf("inspect value must not be empty")
-	}
-	*v = append(*v, trimmed)
-	return nil
 }
 
 type inspectLocator struct {
@@ -591,78 +419,21 @@ var inspectDefaultLayoutProperties = []string{
 	"transform",
 }
 
-func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printInspectHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("inspect", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+func runInspectInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	oldSession := nagiStringValue(invocation, "old-session")
+	newSession := nagiStringValue(invocation, "new-session")
+	locatorValue := strings.TrimSpace(nagiRawValue(invocation, "locator"))
+	selectorValue := strings.TrimSpace(nagiStringValue(invocation, "selector"))
+	scopeSelectorValue := strings.TrimSpace(nagiStringValue(invocation, "scope-selector"))
+	oldScopeSelectorValue := strings.TrimSpace(nagiStringValue(invocation, "old-scope-selector"))
+	newScopeSelectorValue := strings.TrimSpace(nagiStringValue(invocation, "new-scope-selector"))
+	asJSON := nagiBoolValue(invocation, "json")
+	withLayoutContext := nagiBoolValue(invocation, "layout-context")
+	nth := nagiIntValue(invocation, "nth")
+	cssProperty := nagiStringValues(invocation, "css-property")
 
-	oldSession := fs.String("old-session", "", "old session id")
-	newSession := fs.String("new-session", "", "new session id")
-	selector := fs.String("selector", "", "raw css selector to inspect")
-	scopeSelector := fs.String("scope-selector", "", "raw css selector subtree for locator inspection")
-	oldScopeSelector := fs.String("old-scope-selector", "", "old side css selector subtree")
-	newScopeSelector := fs.String("new-scope-selector", "", "new side css selector subtree")
-	asJSON := fs.Bool("json", false, "print as json")
-	withLayoutContext := fs.Bool("layout-context", false, "include ancestor layout context")
-	nth := fs.Int("nth", 0, "choose the nth matching node")
-	var cssProperty inspectStringValues
-	fs.Var(&cssProperty, "css-property", "computed css property to compare")
-
-	locatorValue := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		locatorValue = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "inspect"); err != nil {
-		return 1
-	}
-
-	positionals := make([]string, 0, 1)
-	if locatorValue != "" {
-		positionals = append(positionals, locatorValue)
-	}
-	positionals = append(positionals, fs.Args()...)
-	if len(positionals) > 1 {
-		fmt.Fprintln(stderr, "inspect requires exactly one locator or selector")
-		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
-		return 1
-	}
-	hasLocator := len(positionals) == 1
-	selectorValue := strings.TrimSpace(*selector)
-	scopeSelectorValue := strings.TrimSpace(*scopeSelector)
-	oldScopeSelectorValue := strings.TrimSpace(*oldScopeSelector)
-	newScopeSelectorValue := strings.TrimSpace(*newScopeSelector)
-	if !hasLocator && selectorValue == "" && scopeSelectorValue == "" && oldScopeSelectorValue == "" && newScopeSelectorValue == "" {
-		fmt.Fprintln(stderr, "inspect requires exactly one locator or --selector")
-		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
-		return 1
-	}
-	if strings.TrimSpace(*oldSession) == "" || strings.TrimSpace(*newSession) == "" {
-		fmt.Fprintln(stderr, "inspect requires --old-session and --new-session")
-		printCommandHint(stderr, "inspect", `nxctl inspect 'role button --name "Submit"' --old-session old --new-session new`)
-		return 1
-	}
-	if hasLocator && selectorValue != "" {
-		fmt.Fprintln(stderr, "inspect can not combine a locator with --selector")
-		return 1
-	}
-	if selectorValue != "" && scopeSelectorValue != "" {
-		fmt.Fprintln(stderr, "inspect can not combine --selector with --scope-selector")
-		return 1
-	}
+	hasLocator := locatorValue != ""
 	targetSelectorMode := !hasLocator
-	if targetSelectorMode && *nth > 0 {
-		fmt.Fprintln(stderr, "inspect --selector does not support --nth")
-		return 1
-	}
-	if isInvalidNthFlag(fs, *nth) {
-		fmt.Fprintln(stderr, "inspect --nth must be a positive integer")
-		return 1
-	}
 
 	locator := inspectLocator{}
 	commonScopeSelector := scopeSelectorValue
@@ -677,11 +448,7 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	if targetSelectorMode {
 		locator = inspectSelectorLocator(oldEffectiveScopeSelector, newEffectiveScopeSelector)
 	} else {
-		locator, err = parseInspectLocator(positionals[0])
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
+		locator, _ = nagicli.ValueAs[inspectLocator](invocation, "locator")
 	}
 
 	client, err := connectClient(ctx)
@@ -692,43 +459,43 @@ func runInspect(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	defer client.Close()
 
 	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
-	layoutProperties := inspectResolveLayoutProperties(*withLayoutContext)
-	oldObservation, err := inspectObservation(ctx, client, *oldSession, cssProperties, oldEffectiveScopeSelector, *withLayoutContext, layoutProperties)
+	layoutProperties := inspectResolveLayoutProperties(withLayoutContext)
+	oldObservation, err := inspectObservation(ctx, client, oldSession, cssProperties, oldEffectiveScopeSelector, withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	newObservation, err := inspectObservation(ctx, client, *newSession, cssProperties, newEffectiveScopeSelector, *withLayoutContext, layoutProperties)
+	newObservation, err := inspectObservation(ctx, client, newSession, cssProperties, newEffectiveScopeSelector, withLayoutContext, layoutProperties)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	selection := nodeSelectionOptions{Nth: *nth}
+	selection := nodeSelectionOptions{Nth: nth}
 	oldNode, err := resolveInspectNode(oldObservation.Tree, locator, selection)
 	if err != nil {
-		fmt.Fprintf(stderr, "old session %s: %v\n", *oldSession, err)
+		fmt.Fprintf(stderr, "old session %s: %v\n", oldSession, err)
 		return 1
 	}
 	newNode, err := resolveInspectNode(newObservation.Tree, locator, selection)
 	if err != nil {
-		fmt.Fprintf(stderr, "new session %s: %v\n", *newSession, err)
+		fmt.Fprintf(stderr, "new session %s: %v\n", newSession, err)
 		return 1
 	}
 
 	report := buildInspectReport(locator, cssProperties, layoutProperties, inspectMatch{
-		SessionID: *oldSession,
+		SessionID: oldSession,
 		URL:       oldObservation.URLOrScreen,
 		Title:     oldObservation.Title,
 		Node:      oldNode,
 	}, inspectMatch{
-		SessionID: *newSession,
+		SessionID: newSession,
 		URL:       newObservation.URLOrScreen,
 		Title:     newObservation.Title,
 		Node:      newNode,
 	}, inspectScopeFromObservations(oldEffectiveScopeSelector, newEffectiveScopeSelector, oldObservation, newObservation))
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -860,16 +627,17 @@ func parseInspectLocator(value string) (inspectLocator, error) {
 }
 
 func parseInspectRoleName(args []string) (string, error) {
-	fs := flag.NewFlagSet("inspect role locator", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	name := fs.String("name", "", "accessible name")
-	if err := fs.Parse(normalizeFlagArgs(fs, args)); err != nil {
+	command := nagicli.NewCommand("role").
+		UsageVariant("default", "[--name <TEXT>]").
+		Option(nagiValueOption("name", "TEXT", "Accessible name"))
+	result, err := command.Parse(args)
+	if err != nil {
 		return "", err
 	}
-	if fs.NArg() != 0 {
-		return "", fmt.Errorf("unexpected extra arguments")
+	if result.Kind() != nagicli.ParseInvocation {
+		return "", fmt.Errorf("invalid role locator")
 	}
-	return strings.TrimSpace(*name), nil
+	return strings.TrimSpace(nagiStringValue(result.Invocation(), "name")), nil
 }
 
 func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection nodeSelectionOptions) (api.Node, error) {
