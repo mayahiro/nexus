@@ -154,6 +154,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `nxctl batch --cmd "COMMAND" [--cmd "COMMAND"]... [--json]`) {
 		t.Fatalf("unexpected help batch output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "Commands run in order and batch stops at the first non-zero exit status") {
+		t.Fatalf("unexpected help batch output: %s", stdout.String())
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"help", "compare"}, &stdout, &stdout); code != 0 {
@@ -249,6 +252,22 @@ func TestBatch(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(
+		context.Background(),
+		[]string{"batch", "--cmd", "help wait", "--cmd", "open", "--cmd", "help inspect"},
+		&stdout,
+		&stdout,
+	); code == 0 {
+		t.Fatalf("expected batch fail-fast failure\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "batch stopped at: open") {
+		t.Fatalf("expected batch stop message: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `nxctl inspect <LOCATOR>`) {
+		t.Fatalf("batch continued after failure: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "help find", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected batch json exit code: %d\n%s", code, stdout.String())
 	}
@@ -257,6 +276,22 @@ func TestBatch(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"exit_code": 0`) {
 		t.Fatalf("unexpected batch json output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(
+		context.Background(),
+		[]string{"batch", "--cmd", "help wait", "--cmd", "open", "--cmd", "help inspect", "--json"},
+		&stdout,
+		&stdout,
+	); code == 0 {
+		t.Fatalf("expected batch json fail-fast failure\n%s", stdout.String())
+	}
+	if strings.Count(stdout.String(), `"command":`) != 2 {
+		t.Fatalf("unexpected batch json result count: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), `"command": "help inspect"`) {
+		t.Fatalf("batch json continued after failure: %s", stdout.String())
 	}
 }
 

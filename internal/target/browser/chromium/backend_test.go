@@ -333,6 +333,22 @@ func TestObserveTreeExpressionIncludesLayoutContext(t *testing.T) {
 	}
 }
 
+func TestObserveTreeExpressionUsesAriaLabelAsAccessibleName(t *testing.T) {
+	script := observeTreeExpression(nil, "", nil, "")
+
+	for _, expected := range []string{
+		`const label = (el.getAttribute('aria-label') || '').trim();`,
+		`if (label) return label;`,
+		`attrs['aria-label'] = el.getAttribute('aria-label');`,
+		`const name = nameFor(el);`,
+		`name: name,`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("expected aria-label accessible name contract %q in script", expected)
+		}
+	}
+}
+
 func TestObserveTreeExpressionIncludesDefaultIgnoreAttrs(t *testing.T) {
 	script := observeTreeExpression(nil, "", nil, "all")
 

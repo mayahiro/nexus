@@ -90,6 +90,7 @@ func newNagiBatchCommand() *nagicli.Command {
 	return nagicli.NewCommand("batch").
 		About("Run multiple nxctl commands sequentially").
 		UsageVariant("default", `--cmd "COMMAND" [--cmd "COMMAND"]... [--json]`).
+		Note("Commands run in order and batch stops at the first non-zero exit status").
 		Option(
 			nagiRequiredValueOption("cmd", "COMMAND", "Command to execute").
 				Parser(nagiNonEmptyParser("COMMAND")).

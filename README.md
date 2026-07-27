@@ -61,7 +61,9 @@ open/navigate -> state/find -> click/type/fill/input/keys -> wait/get/state
 
 `state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, `get`, and `screenshot`.
 `state` also prints short locator hints derived from the current tree, so an agent can switch from `@eN` refs to `find role|text|label|testid|href` without recomputing selectors.
-Use `fill` when you want to replace the current value, and `type` when you want keystroke-style input against the current focus or target.
+Use `fill` to replace a node value, `input` to type into a specific node, and `type` to type into the currently focused editable element.
+See the [AI usage guide](docs/ai/usage.md#choosing-fill-input-or-type) for the controlled-form decision matrix.
+`batch` runs commands in order and stops at the first non-zero exit status.
 
 When you want a meaning-based locator instead of a ref, use `find`:
 

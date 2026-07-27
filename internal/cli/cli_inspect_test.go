@@ -539,6 +539,14 @@ func TestFind(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "--name", "Points explanation", "click"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected aria-label find exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e5" {
+		t.Fatalf("unexpected aria-label find output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"find", "text", "Sign In", "click", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected find text exit code: %d\n%s", code, stdout.String())
 	}
