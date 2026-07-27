@@ -29,7 +29,7 @@ func PrintHelp(w io.Writer) {
 		}
 	}
 	fmt.Fprintln(w, "rules: @eN, role=<value>, name=<value>, text=<value>, testid=<value>, href=<value>, role=<value>&name=<value>")
-	fmt.Fprintln(w, "css: --compare-css uses the default property allowlist, --css-property overrides it with explicit properties")
+	fmt.Fprintln(w, "css: --compare-css uses the stable default property allowlist, --css-property overrides it, and --all-css-properties exhaustively compares every computed property")
 	fmt.Fprintln(w, "layout: --compare-layout reports significant viewport-relative bounds changes for matching nodes")
 	fmt.Fprintln(w, "matching: --match-mode exact preserves fingerprint matching, stable uses unique identity keys, heuristic adds conservative fuzzy matching, histogram experimentally anchors low-occurrence semantic keys before local matching")
 	fmt.Fprintln(w, "matching debug: --matching-debug includes anchors, regions, ambiguous candidates, and unmatched nodes in json and markdown reports")
@@ -46,7 +46,7 @@ func PrintHelp(w io.Writer) {
 	fmt.Fprintln(w, "scope: --scope-selector applies to both sides; --old-scope-selector and --new-scope-selector override it per side")
 	fmt.Fprintln(w, "scope selectors accept raw CSS selectors, must match exactly one element on their side, and may use positional selectors such as :nth-child()")
 	fmt.Fprintln(w, "scope selector multi-match errors include up to five matched candidate hints")
-	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, match_mode, node_scope, matching_debug, decisions_file, wait_*, scope_selector, old_scope_selector, new_scope_selector, compare_css, compare_layout, no_default_ignores, css_property, ignore_selector, and mask_selector")
+	fmt.Fprintln(w, "manifest: defaults and pages support backend, viewport, match_mode, node_scope, matching_debug, decisions_file, wait_*, scope_selector, old_scope_selector, new_scope_selector, compare_css, all_css_properties, compare_layout, no_default_ignores, css_property, ignore_selector, and mask_selector; all_css_properties and css_property can not coexist in one object")
 	fmt.Fprintln(w, "manifest review packet: --manifest with --review-dir writes root REVIEW.md, manifest summaries, cluster decisions, review-index.md/html, finding clusters, cropped finding previews, and one review packet directory per page")
 	fmt.Fprintln(w, "")
 	printDocLink(w, "compare guide", aiCompareDocURL)

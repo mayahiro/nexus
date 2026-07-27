@@ -117,6 +117,14 @@ func loadCompareManifest(path string) (compareManifest, error) {
 	if len(manifest.Pages) == 0 {
 		return compareManifest{}, fmt.Errorf("manifest %q requires at least one page", path)
 	}
+	if manifest.Defaults.AllCSSProperties && len(manifest.Defaults.CSSProperty) > 0 {
+		return compareManifest{}, fmt.Errorf("manifest %q defaults can not combine all_css_properties with css_property", path)
+	}
+	for i, page := range manifest.Pages {
+		if page.AllCSSProperties != nil && *page.AllCSSProperties && len(page.CSSProperty) > 0 {
+			return compareManifest{}, fmt.Errorf("manifest %q page %s can not combine all_css_properties with css_property", path, compareManifestPageName(page, i))
+		}
+	}
 	return manifest, nil
 }
 
@@ -145,6 +153,7 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		WaitFunction:     base.WaitFunction,
 		WaitNetworkIdle:  base.WaitNetworkIdle,
 		CompareCSS:       base.CompareCSS,
+		AllCSSProperties: base.AllCSSProperties,
 		CompareLayout:    base.CompareLayout,
 		NoDefaultIgnores: base.NoDefaultIgnores,
 		WaitTimeout:      base.WaitTimeout,
@@ -195,6 +204,11 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	if defaults.CompareCSS {
 		run.CompareCSS = true
 	}
+	if defaults.AllCSSProperties {
+		run.AllCSSProperties = true
+		run.CompareCSS = true
+		run.CSSProperties = nil
+	}
 	if defaults.CompareLayout {
 		run.CompareLayout = true
 	}
@@ -205,6 +219,7 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		run.WaitTimeout = *defaults.WaitTimeout
 	}
 	if len(defaults.CSSProperty) > 0 {
+		run.AllCSSProperties = false
 		run.CSSProperties = append([]string(nil), defaults.CSSProperty...)
 	}
 	run.IgnoreTextRegex = append(run.IgnoreTextRegex, defaults.IgnoreTextRegex...)
@@ -252,6 +267,14 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 	if page.CompareCSS != nil {
 		run.CompareCSS = *page.CompareCSS
 		if !*page.CompareCSS && len(page.CSSProperty) == 0 {
+			run.AllCSSProperties = false
+			run.CSSProperties = nil
+		}
+	}
+	if page.AllCSSProperties != nil {
+		run.AllCSSProperties = *page.AllCSSProperties
+		if *page.AllCSSProperties {
+			run.CompareCSS = true
 			run.CSSProperties = nil
 		}
 	}
@@ -265,6 +288,7 @@ func mergeCompareManifestPage(base compareRun, defaults compareManifestDefaults,
 		run.WaitTimeout = *page.WaitTimeout
 	}
 	if len(page.CSSProperty) > 0 {
+		run.AllCSSProperties = false
 		run.CSSProperties = append([]string(nil), page.CSSProperty...)
 	}
 	run.IgnoreTextRegex = append(run.IgnoreTextRegex, page.IgnoreTextRegex...)

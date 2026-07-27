@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	nagicli "github.com/mayahiro/nagicli-go"
 
@@ -19,6 +20,7 @@ func runEvalInvocation(ctx context.Context, invocation *nagicli.Invocation, stdo
 	sessionID := nagiStringValue(invocation, "session")
 	asJSON := nagiBoolValue(invocation, "json")
 	source := nagiStringValue(invocation, "source")
+	world := nagiStringValue(invocation, "world")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -32,6 +34,7 @@ func runEvalInvocation(ctx context.Context, invocation *nagicli.Invocation, stdo
 		Action: api.Action{
 			Kind: "eval",
 			Text: source,
+			Args: map[string]string{"world": world},
 		},
 	})
 	if err != nil {
@@ -87,14 +90,16 @@ func runGetInvocation(ctx context.Context, invocation *nagicli.Invocation, stdou
 			action.Args["selector"] = selectorValue
 		}
 	case "text", "value", "attributes":
-		nodeID := nagiNodeValue(invocation, "node").ID
-		action.NodeID = &nodeID
+		node := nagiNodeValue(invocation, "node")
+		action.NodeID = &node.ID
+		action.NodeRef = node.Ref
 	case "bbox":
 		if selectorValue != "" {
 			action.Args["selector"] = selectorValue
 		} else {
-			nodeID := nagiNodeValue(invocation, "node").ID
-			action.NodeID = &nodeID
+			node := nagiNodeValue(invocation, "node")
+			action.NodeID = &node.ID
+			action.NodeRef = node.Ref
 		}
 	}
 
@@ -163,8 +168,9 @@ func runGetRefs(ctx context.Context, sessionID string, target string, refsValue 
 		res, err := client.ActSession(ctx, api.ActSessionRequest{
 			SessionID: sessionID,
 			Action: api.Action{
-				Kind:   "get",
-				NodeID: &nodeID,
+				Kind:    "get",
+				NodeID:  &nodeID,
+				NodeRef: node.Ref,
 				Args: map[string]string{
 					"target": target,
 				},
@@ -228,6 +234,8 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 	asJSON := nagiBoolValue(invocation, "json")
 	withScreenshot := nagiBoolValue(invocation, "screenshot")
 	fullScreenshot := nagiBoolValue(invocation, "full")
+	recoverScreenshot := nagiBoolValue(invocation, "recover-target")
+	timeoutMS := nagiIntValue(invocation, "timeout")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -236,13 +244,22 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 	}
 	defer client.Close()
 
-	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+	observeCtx := ctx
+	cancel := func() {}
+	if withScreenshot || fullScreenshot {
+		observeCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutMS)*time.Millisecond)
+	}
+	defer cancel()
+
+	res, err := client.ObserveSession(observeCtx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithText:       true,
-			WithTree:       true,
-			WithScreenshot: withScreenshot || fullScreenshot,
-			FullScreenshot: fullScreenshot,
+			WithText:          true,
+			WithTree:          true,
+			WithScreenshot:    withScreenshot || fullScreenshot,
+			FullScreenshot:    fullScreenshot,
+			RecoverScreenshot: recoverScreenshot,
+			TimeoutMS:         timeoutMS,
 		},
 	})
 	if err != nil {
@@ -258,6 +275,9 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 			return 1
 		}
 		return 0
+	}
+	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" {
+		fmt.Fprintf(stderr, "warning: %s\n", warning)
 	}
 
 	fmt.Fprintf(stdout, "session: %s\n", res.Observation.SessionID)

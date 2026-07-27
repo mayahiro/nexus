@@ -96,6 +96,8 @@ nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect --old-scope-selector '#legacy-summary' --new-scope-selector '[data-testid="order-summary"]' --old-session old --new-session new --css-property width
 ```
 
+Use `--all-css-properties` only for an exhaustive follow-up inside a narrow scope. It is mutually exclusive with `--css-property` and can expose browser-default or inherited-property noise that the stable default allowlist intentionally avoids.
+
 Use `--node-scope all` only with an explicit common or side-specific scope selector when wrappers or layout containers are part of the migration. It observes every visible element in that subtree and emits `structure_key` / `subtree_signature` metadata so histogram can anchor containers without changing the base fingerprint. For full node-scope semantics, default ignores, and matching debug fields, see [../compare.md#node-scope-selection](../compare.md#node-scope-selection).
 
 Prefer this order when structural DOM differences matter:

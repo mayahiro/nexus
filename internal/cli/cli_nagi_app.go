@@ -89,13 +89,14 @@ func newNagiBackCommand() *nagicli.Command {
 func newNagiBatchCommand() *nagicli.Command {
 	return nagicli.NewCommand("batch").
 		About("Run multiple nxctl commands sequentially").
-		UsageVariant("default", `--cmd "COMMAND" [--cmd "COMMAND"]... [--json]`).
-		Note("Commands run in order and batch stops at the first non-zero exit status").
+		UsageVariant("default", `--cmd "COMMAND" [--cmd "COMMAND"]... [--keep-going] [--json]`).
+		Note("Commands run in order; failures stop the batch unless --keep-going is set").
 		Option(
 			nagiRequiredValueOption("cmd", "COMMAND", "Command to execute").
 				Parser(nagiNonEmptyParser("COMMAND")).
 				Repeated(),
 		).
+		Option(nagicli.Flag("keep-going").Long("keep-going").Help("continue after failed commands")).
 		Option(nagiJSONFlag()).
 		Handle(nagiRunHandler(runBatchInvocation))
 }
@@ -132,11 +133,13 @@ func newNagiBrowserCommand() *nagicli.Command {
 func newNagiEvalCommand() *nagicli.Command {
 	return nagicli.NewCommand("eval").
 		About("Evaluate JavaScript in one session").
-		UsageVariant("default", "<SOURCE> [--session <ID>] [--json]").
+		UsageVariant("default", "<SOURCE> [--world main|persistent] [--session <ID>] [--json]").
 		Option(nagiSessionOption()).
 		Option(nagiJSONFlag()).
+		Option(nagiChoiceOption("world", "WORLD", "JavaScript execution world", "main", "persistent").Default("main")).
 		Argument(nagiRequiredArgument("source", "SOURCE", "JavaScript source")).
-		Handle(nagiRunHandler(runEvalInvocation))
+		Handle(nagiRunHandler(runEvalInvocation)).
+		Note("Persistent world state survives eval calls until the page navigates; store values on globalThis")
 }
 
 func newNagiFillCommand() *nagicli.Command {
@@ -167,12 +170,17 @@ func newNagiSelectCommand() *nagicli.Command {
 }
 
 func newNagiUploadCommand() *nagicli.Command {
-	return newNagiNodeTextCommand(
-		"upload",
-		"Upload a file through one observed node",
-		"<NODE> <PATH> [--session <ID>] [--json]",
-		runUploadInvocation,
-	)
+	return nagicli.NewCommand("upload").
+		About("Upload a file through a file input").
+		UsageVariant("node", "<NODE> <PATH> [--session <ID>] [--json]").
+		UsageVariant("selector", "--selector <CSS> <PATH> [--session <ID>] [--json]").
+		Option(nagiSessionOption()).
+		Option(nagiJSONFlag()).
+		Option(nagiValueOption("selector", "CSS", "Select a file input directly, including a hidden input")).
+		Argument(nagicli.Positional("values").Parser(nagicli.RawParser()).Repeated().Help("Node and path, or path with --selector")).
+		Validator(validateNagiUploadInvocation).
+		Handle(nagiRunHandler(runUploadInvocation)).
+		Note("--selector must match exactly one input[type=file]")
 }
 
 func newNagiNodeTextCommand(name string, about string, usage string, run nagiCommandRunner) *nagicli.Command {
@@ -195,15 +203,20 @@ func newNagiFindCommand() *nagicli.Command {
 		Subcommand(newNagiFindKindCommand("text", "Find by visible text", false, runFindTextInvocation)).
 		Subcommand(newNagiFindKindCommand("label", "Find by form label", false, runFindLabelInvocation)).
 		Subcommand(newNagiFindKindCommand("testid", "Find by test identifier", false, runFindTestIDInvocation)).
-		Subcommand(newNagiFindKindCommand("href", "Find by link target", false, runFindHrefInvocation))
+		Subcommand(newNagiFindKindCommand("href", "Find by link target", false, runFindHrefInvocation)).
+		Subcommand(newNagiFindKindCommand("aria-label", "Find by aria-label", false, runFindAriaLabelInvocation)).
+		Subcommand(newNagiFindKindCommand("css", "Find by CSS selector", false, runFindCSSInvocation)).
+		Note("--within requires a recent @eN ref and evaluates the query inside that container").
+		Note("Refs become stale after navigation, URL changes, or stable-identity changes at the referenced selector").
+		Link("AI usage guide", aiUsageDocURL)
 }
 
 func newNagiFindKindCommand(name string, about string, withName bool, run nagiCommandRunner) *nagicli.Command {
-	actionUsage := "<QUERY> <click|input|fill|get> [VALUE] [--nth <N>] [--session <ID>] [--json]"
-	allUsage := "<QUERY> --all [--session <ID>] [--json]"
+	actionUsage := "<QUERY> <click|input|fill|get> [VALUE] [--within <@eN>] [--nth <N>] [--session <ID>] [--json]"
+	allUsage := "<QUERY> --all [--within <@eN>] [--session <ID>] [--json]"
 	if withName {
-		actionUsage = "<QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--nth <N>] [--session <ID>] [--json]"
-		allUsage = "<QUERY> --all [--name <TEXT>] [--session <ID>] [--json]"
+		actionUsage = "<QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--within <@eN>] [--nth <N>] [--session <ID>] [--json]"
+		allUsage = "<QUERY> --all [--name <TEXT>] [--within <@eN>] [--session <ID>] [--json]"
 	}
 	command := nagicli.NewCommand(name).
 		About(about).
@@ -213,7 +226,8 @@ func newNagiFindKindCommand(name string, about string, withName bool, run nagiCo
 		Option(nagiJSONFlag()).
 		Option(nagicli.Flag("all").Long("all").Help("List all matching nodes")).
 		Option(nagiIntOption("nth", "N", "Choose the nth matching node")).
-		Argument(nagiRequiredArgument("query", "QUERY", "Role, text, label, or attribute value")).
+		Option(nagiValueOption("within", "@eN", "Limit the search to a previously observed node")).
+		Argument(nagiRequiredArgument("query", "QUERY", "Locator query or CSS selector")).
 		Argument(nagicli.Positional("action").Parser(nagicli.RawParser()).Help("Action to execute")).
 		Argument(nagicli.Positional("action-value").Parser(nagicli.RawParser()).Help("Action value")).
 		Validator(validateNagiFindInvocation).
@@ -320,14 +334,18 @@ func newNagiNodeActionCommand(name string, about string, run nagiCommandRunner) 
 func newNagiObserveCommand() *nagicli.Command {
 	return nagicli.NewCommand("observe").
 		About("Observe one attached session").
-		UsageVariant("default", "--session <ID> [--json] [--text] [--tree] [--screenshot] [--full]").
+		UsageVariant("default", "--session <ID> [--json] [--text] [--tree] [--screenshot] [--full] [--recover-target] [--timeout <MS>]").
 		Option(nagiRequiredValueOption("session", "ID", "Session identifier")).
 		Option(nagiJSONFlag()).
 		Option(nagicli.Flag("text").Long("text").Help("Include page text")).
 		Option(nagicli.Flag("tree").Long("tree").Help("Include the observed node tree")).
 		Option(nagicli.Flag("screenshot").Long("screenshot").Help("Include a screenshot")).
 		Option(nagicli.Flag("full").Long("full").Help("Capture a full-page screenshot")).
-		Handle(nagiRunHandler(runObserveInvocation))
+		Option(nagicli.Flag("recover-target").Long("recover-target").Help("Replace an unresponsive tab and retry, losing transient page state")).
+		Option(nagiIntOption("timeout", "MS", "Overall screenshot recovery timeout in milliseconds").Default("30000")).
+		Validator(validateNagiObserveInvocation).
+		Handle(nagiRunHandler(runObserveInvocation)).
+		Note("Each capture attempt is capped at 10000 ms within the overall timeout")
 }
 
 func newNagiOpenCommand() *nagicli.Command {
@@ -416,6 +434,7 @@ func newNagiWaitCommand() *nagicli.Command {
 		UsageVariant("text", "text <VALUE> [--timeout <MS>] [--session <ID>] [--json]").
 		UsageVariant("url", "url <VALUE> [--timeout <MS>] [--session <ID>] [--json]").
 		UsageVariant("navigation", "navigation [--timeout <MS>] [--session <ID>] [--json]").
+		UsageVariant("hydrated", "hydrated [--timeout <MS>] [--session <ID>] [--json]").
 		UsageVariant("function", "function <EXPRESSION> [--timeout <MS>] [--session <ID>] [--json]").
 		Option(nagiSessionOption()).
 		Option(nagiJSONFlag()).
@@ -423,13 +442,14 @@ func newNagiWaitCommand() *nagicli.Command {
 		Option(nagiIntOption("timeout", "MS", "Wait timeout in milliseconds").Default("30000")).
 		Argument(
 			nagicli.Positional("target").
-				Parser(nagiChoiceParser("TARGET", "selector", "text", "url", "navigation", "function")).
+				Parser(nagiChoiceParser("TARGET", "selector", "text", "url", "navigation", "hydrated", "function")).
 				Required().
 				Help("Wait target"),
 		).
 		Argument(nagicli.Positional("value").Parser(nagicli.RawParser()).Help("Wait value")).
 		Validator(validateNagiWaitInvocation).
 		Handle(nagiRunHandler(runWaitInvocation)).
+		Note("hydrated waits for DOMContentLoaded, animation frames, and a DOM mutation quiet window; it is not a React-internal signal").
 		Link("Compare guide", aiCompareDocURL)
 }
 
@@ -641,6 +661,13 @@ func validateNagiFindInvocation(invocation *nagicli.Invocation) *nagicli.Diagnos
 	action := nagiRawValue(invocation, "action")
 	actionValue := nagiRawValue(invocation, "action-value")
 	nth := nagiIntValue(invocation, "nth")
+	within := strings.TrimSpace(nagiStringValue(invocation, "within"))
+	if within != "" {
+		_, ref, err := parseNodeSelector(within)
+		if err != nil || ref == "" {
+			return nagiDiagnostic("find --within requires an @eN ref", nagicli.OptionTarget("within"))
+		}
+	}
 	if matchAll && action != "" {
 		return nagiDiagnostic(
 			"find --all does not accept an action",
@@ -742,6 +769,41 @@ func validateNagiGetInvocation(invocation *nagicli.Invocation) *nagicli.Diagnost
 	return nil
 }
 
+func validateNagiUploadInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
+	values := nagiRawValues(invocation, "values")
+	selector := strings.TrimSpace(nagiStringValue(invocation, "selector"))
+	if selector != "" {
+		if len(values) != 1 {
+			return nagiDiagnostic(
+				"upload --selector requires exactly one path",
+				nagicli.OptionTarget("selector"),
+				nagicli.ArgumentTarget("values"),
+			)
+		}
+		if values[0] == "" {
+			return nagiDiagnostic("upload path must not be empty", nagicli.ArgumentTarget("values"))
+		}
+		return nil
+	}
+	if len(values) != 2 {
+		return nagiDiagnostic(
+			"upload requires a node and path, or --selector and path",
+			nagicli.ArgumentTarget("values"),
+			nagicli.OptionTarget("selector"),
+		)
+	}
+	if values[1] == "" {
+		return nagiDiagnostic("upload path must not be empty", nagicli.ArgumentTarget("values"))
+	}
+	if _, _, err := parseNodeSelector(values[0]); err != nil {
+		return nagiDiagnostic(
+			"upload requires a positive integer index or @eN ref",
+			nagicli.ArgumentTarget("values"),
+		)
+	}
+	return nil
+}
+
 func validateNagiInspectInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
 	locator := strings.TrimSpace(nagiRawValue(invocation, "locator"))
 	selector := strings.TrimSpace(nagiRawValue(invocation, "selector"))
@@ -804,13 +866,41 @@ func validateNagiStateInvocation(invocation *nagicli.Invocation) *nagicli.Diagno
 	return nil
 }
 
+func validateNagiObserveInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
+	withScreenshot := nagiBoolValue(invocation, "screenshot") || nagiBoolValue(invocation, "full")
+	if nagiBoolValue(invocation, "recover-target") &&
+		!withScreenshot {
+		return nagiDiagnostic(
+			"observe --recover-target requires --screenshot or --full",
+			nagicli.OptionTarget("recover-target"),
+			nagicli.OptionTarget("screenshot"),
+			nagicli.OptionTarget("full"),
+		)
+	}
+	if invocation.Supplied("timeout") && !withScreenshot {
+		return nagiDiagnostic(
+			"observe --timeout requires --screenshot or --full",
+			nagicli.OptionTarget("timeout"),
+			nagicli.OptionTarget("screenshot"),
+			nagicli.OptionTarget("full"),
+		)
+	}
+	if nagiIntValue(invocation, "timeout") <= 0 {
+		return nagiDiagnostic(
+			"observe --timeout must be a positive integer",
+			nagicli.OptionTarget("timeout"),
+		)
+	}
+	return nil
+}
+
 func validateNagiWaitInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
 	target := nagiStringValue(invocation, "target")
 	value := nagiRawValue(invocation, "value")
-	if target == "navigation" && value != "" {
-		return nagiDiagnostic("wait navigation does not accept a value", nagicli.ArgumentTarget("value"))
+	if (target == "navigation" || target == "hydrated") && value != "" {
+		return nagiDiagnostic("wait "+target+" does not accept a value", nagicli.ArgumentTarget("value"))
 	}
-	if target != "navigation" && value == "" {
+	if target != "navigation" && target != "hydrated" && value == "" {
 		return nagiDiagnostic("wait "+target+" requires a value", nagicli.ArgumentTarget("value"))
 	}
 	if nagiIntValue(invocation, "timeout") < 0 {

@@ -3,6 +3,7 @@ package config
 import "testing"
 
 func TestDefaultPaths(t *testing.T) {
+	clearXDGEnvironment(t)
 	t.Setenv("HOME", "/tmp/nexus-home")
 
 	paths, err := DefaultPaths()
@@ -28,6 +29,7 @@ func TestDefaultPaths(t *testing.T) {
 }
 
 func TestDefaultPathsWithXDG(t *testing.T) {
+	clearXDGEnvironment(t)
 	t.Setenv("HOME", "/tmp/nexus-home")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-config")
 	t.Setenv("XDG_STATE_HOME", "/tmp/xdg-state")
@@ -64,6 +66,7 @@ func TestDefaultPathsWithXDG(t *testing.T) {
 }
 
 func TestDefaultPathsWithDataAndCacheXDG(t *testing.T) {
+	clearXDGEnvironment(t)
 	t.Setenv("HOME", "/tmp/nexus-home")
 	t.Setenv("XDG_DATA_HOME", "/tmp/xdg-data")
 	t.Setenv("XDG_CACHE_HOME", "/tmp/xdg-cache")
@@ -83,6 +86,7 @@ func TestDefaultPathsWithDataAndCacheXDG(t *testing.T) {
 }
 
 func TestDefaultPathsIgnoresRelativeXDG(t *testing.T) {
+	clearXDGEnvironment(t)
 	t.Setenv("HOME", "/tmp/nexus-home")
 	t.Setenv("XDG_CONFIG_HOME", "relative-config")
 	t.Setenv("XDG_STATE_HOME", "relative-state")
@@ -107,5 +111,18 @@ func TestDefaultPathsIgnoresRelativeXDG(t *testing.T) {
 
 	if paths.Cache != "/tmp/nexus-home/.cache/nexus" {
 		t.Fatalf("unexpected cache path: %s", paths.Cache)
+	}
+}
+
+func clearXDGEnvironment(t *testing.T) {
+	t.Helper()
+	for _, key := range []string{
+		"XDG_CONFIG_HOME",
+		"XDG_STATE_HOME",
+		"XDG_RUNTIME_DIR",
+		"XDG_DATA_HOME",
+		"XDG_CACHE_HOME",
+	} {
+		t.Setenv(key, "")
 	}
 }

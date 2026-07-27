@@ -82,6 +82,7 @@ func runClickInvocation(ctx context.Context, invocation *nagicli.Invocation, std
 			return 1
 		}
 		action.NodeID = &nodeID
+		action.NodeRef = nodeRef
 		if nodeRef != "" {
 			fallbackMessage = fmt.Sprintf("clicked %s", nodeRef)
 			useNodeRefMessage = true
@@ -170,8 +171,9 @@ func runClickRefs(ctx context.Context, sessionID string, nodes []nodeSelector, a
 		res, err := client.ActSession(ctx, api.ActSessionRequest{
 			SessionID: sessionID,
 			Action: api.Action{
-				Kind:   "invoke",
-				NodeID: &nodeID,
+				Kind:    "invoke",
+				NodeID:  &nodeID,
+				NodeRef: node.Ref,
 			},
 		})
 		if err != nil {
@@ -240,8 +242,9 @@ func runNodeActionInvocation(ctx context.Context, command string, fallbackFormat
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
 		SessionID: sessionID,
 		Action: api.Action{
-			Kind:   command,
-			NodeID: &nodeID,
+			Kind:    command,
+			NodeID:  &nodeID,
+			NodeRef: nodeRef,
 		},
 	})
 	if err != nil {

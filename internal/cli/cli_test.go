@@ -115,7 +115,7 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "find"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help find exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `nxctl find role <QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--nth <N>]`) {
+	if !strings.Contains(stdout.String(), `nxctl find role <QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--within <@eN>] [--nth <N>]`) {
 		t.Fatalf("unexpected help find output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `nxctl find testid <QUERY> <click|input|fill|get>`) {
@@ -151,11 +151,27 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "batch"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help batch exit code: %d\n%s", code, stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `nxctl batch --cmd "COMMAND" [--cmd "COMMAND"]... [--json]`) {
+	if !strings.Contains(stdout.String(), `nxctl batch --cmd "COMMAND" [--cmd "COMMAND"]... [--keep-going] [--json]`) {
 		t.Fatalf("unexpected help batch output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Commands run in order and batch stops at the first non-zero exit status") {
+	if !strings.Contains(stdout.String(), "Commands run in order; failures stop the batch unless --keep-going is set") {
 		t.Fatalf("unexpected help batch output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "screenshot"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help screenshot exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Each capture attempt is capped at 10000 ms within the overall timeout") {
+		t.Fatalf("unexpected help screenshot output: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"help", "observe"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected help observe exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Each capture attempt is capped at 10000 ms within the overall timeout") {
+		t.Fatalf("unexpected help observe output: %s", stdout.String())
 	}
 
 	stdout.Reset()
@@ -168,7 +184,9 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `nxctl compare --manifest <file>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), `--compare-css`) || !strings.Contains(stdout.String(), `--css-property <name>`) {
+	if !strings.Contains(stdout.String(), `--compare-css`) ||
+		!strings.Contains(stdout.String(), `--all-css-properties`) ||
+		!strings.Contains(stdout.String(), `--css-property <name>`) {
 		t.Fatalf("unexpected help compare output: %s", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), `--compare-layout`) {
@@ -268,6 +286,22 @@ func TestBatch(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(
+		context.Background(),
+		[]string{"batch", "--keep-going", "--cmd", "help wait", "--cmd", "open", "--cmd", "help inspect"},
+		&stdout,
+		&stdout,
+	); code == 0 {
+		t.Fatalf("expected keep-going batch failure\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "batch step failed: open") {
+		t.Fatalf("expected keep-going failure message: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `nxctl inspect <LOCATOR>`) {
+		t.Fatalf("batch did not continue after failure: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"batch", "--cmd", "help wait", "--cmd", "help find", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected batch json exit code: %d\n%s", code, stdout.String())
 	}
@@ -292,6 +326,92 @@ func TestBatch(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), `"command": "help inspect"`) {
 		t.Fatalf("batch json continued after failure: %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if code := Run(
+		context.Background(),
+		[]string{"batch", "--keep-going", "--cmd", "help wait", "--cmd", "open", "--cmd", "help inspect", "--json"},
+		&stdout,
+		&stdout,
+	); code == 0 {
+		t.Fatalf("expected keep-going batch json failure\n%s", stdout.String())
+	}
+	if strings.Count(stdout.String(), `"command":`) != 3 ||
+		!strings.Contains(stdout.String(), `"command": "help inspect"`) {
+		t.Fatalf("unexpected keep-going batch json output: %s", stdout.String())
+	}
+}
+
+func TestBatchKeepGoingWithoutDaemon(t *testing.T) {
+	var output bytes.Buffer
+	code := Run(
+		context.Background(),
+		[]string{"batch", "--keep-going", "--cmd", "unknown", "--cmd", "help wait"},
+		&output,
+		&output,
+	)
+	if code == 0 {
+		t.Fatalf("expected failed batch status\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "batch step failed: unknown") ||
+		!strings.Contains(output.String(), "==> help wait") {
+		t.Fatalf("unexpected keep-going output: %s", output.String())
+	}
+
+	output.Reset()
+	code = Run(
+		context.Background(),
+		[]string{"batch", "--keep-going", "--cmd", `"unterminated`, "--cmd", "help wait"},
+		&output,
+		&output,
+	)
+	if code == 0 {
+		t.Fatalf("expected malformed command failure\n%s", output.String())
+	}
+	if !strings.Contains(output.String(), "unterminated quote in batch command") ||
+		!strings.Contains(output.String(), "==> help wait") {
+		t.Fatalf("malformed command stopped keep-going batch: %s", output.String())
+	}
+}
+
+func TestDirectRefLocatorDoesNotReobserve(t *testing.T) {
+	node, directRef, err := directRefNode("@e42", nodeSelectionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !directRef || node.ID != 42 || node.Ref != "@e42" {
+		t.Fatalf("unexpected direct ref node: %+v direct=%t", node, directRef)
+	}
+
+	node, err = resolveFlowLocator(context.Background(), nil, "unused", "@e42", nodeSelectionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.ID != 42 || node.Ref != "@e42" {
+		t.Fatalf("unexpected direct flow ref: %+v", node)
+	}
+
+	if _, directRef, err := directRefNode("@e0", nodeSelectionOptions{}); !directRef || err == nil {
+		t.Fatalf("expected invalid direct ref error, direct=%t err=%v", directRef, err)
+	}
+	if _, directRef, err := directRefNode("@e42", nodeSelectionOptions{Nth: 2}); !directRef || err == nil {
+		t.Fatalf("expected direct ref nth error, direct=%t err=%v", directRef, err)
+	}
+}
+
+func TestParseScreenshotRectAcceptsGetBBoxShape(t *testing.T) {
+	rect, err := parseRectValue(map[string]interface{}{
+		"x":      float64(1),
+		"y":      float64(2),
+		"width":  float64(30),
+		"height": float64(40),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rect.X != 1 || rect.Y != 2 || rect.W != 30 || rect.H != 40 {
+		t.Fatalf("unexpected screenshot rect: %+v", rect)
 	}
 }
 

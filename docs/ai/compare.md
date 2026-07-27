@@ -115,6 +115,14 @@ Style-focused compare:
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css --css-property color --css-property pointer-events
 ```
 
+Use `--compare-css` without explicit properties for the stable default allowlist. Use repeated `--css-property` flags for a focused assertion. Use `--all-css-properties` for an exhaustive computed-style scan:
+
+```text
+nxctl compare https://old.example.com/orders https://new.example.com/orders --all-css-properties
+```
+
+The exhaustive mode cannot be combined with `--css-property`. Compare manifests likewise reject `all_css_properties: true` together with `css_property` in the same defaults or page object. A page-level property list can still override exhaustive mode inherited from defaults. Exhaustive comparison can surface browser-version defaults, inherited values, and properties unrelated to the intended migration, so keep the node scope narrow and review the resulting noise rather than treating every finding as a regression.
+
 Layout-focused compare:
 
 ```text
@@ -266,6 +274,15 @@ If the new page looks incomplete:
 2. Check whether the target content is really present
 3. Strengthen readiness with `--wait-selector` or `--wait-function`
 4. Narrow the compare scope before assuming there is a product bug
+
+## Evidence Limits and Known False Positives
+
+- A focused `--css-property` run proves only the requested properties; it says nothing about omitted properties
+- The default `--compare-css` allowlist is intentionally stable and incomplete; use `--all-css-properties` only when exhaustive evidence is required
+- If the old side lacks an accessible name or semantic role that exists on the new side, one logical control can appear as a `missing` and `new` pair instead of a changed match
+- Responsive controls implemented with different old/new DOM structures can produce many `new` nodes even when the visible behavior is equivalent
+- Use `--matching-debug`, a narrow scope, and screenshots together before classifying matching-heavy `missing` or `new` findings
+- Canvas pixels can be compared visually, but canvas-internal objects do not become semantic compare nodes
 
 ## Scope Selector Rules
 

@@ -1,10 +1,13 @@
 package chromium
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,8 +18,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/cdproto/target"
-	"github.com/chromedp/chromedp"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -164,23 +166,6 @@ func TestCurrentPageTargetTimesOutWhenDevToolsDoesNotRespond(t *testing.T) {
 	}
 }
 
-func TestPreserveTarget(t *testing.T) {
-	allocCtx, allocCancel := chromedp.NewExecAllocator(context.Background(), chromedp.ExecPath("/bin/false"))
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx)
-
-	chromedpCtx := chromedp.FromContext(targetCtx)
-	chromedpCtx.Target = &chromedp.Target{
-		SessionID: target.SessionID("session-1"),
-		TargetID:  target.ID("page-1"),
-	}
-
-	closeTargetContext(targetCtx, targetCancel, allocCancel)
-
-	if chromedpCtx.Target.SessionID != "" || chromedpCtx.Target.TargetID != "" {
-		t.Fatalf("expected target to be preserved: %+v", chromedpCtx.Target)
-	}
-}
-
 func TestDebugHTTPBaseURL(t *testing.T) {
 	baseURL, err := debugHTTPBaseURL("ws://127.0.0.1:9222/devtools/browser/test")
 	if err != nil {
@@ -293,6 +278,31 @@ func TestParseTreeJSON(t *testing.T) {
 	}
 }
 
+func TestBuildLocatorHintsIncludesAriaLabelAndCSSFallback(t *testing.T) {
+	hints := buildLocatorHints(api.Node{
+		Role:     "button",
+		Name:     "Points explanation",
+		Selector: "html:nth-of-type(1) > body:nth-of-type(1) > button:nth-of-type(1)",
+		Attrs: map[string]string{
+			"aria-label": "Points explanation",
+		},
+	})
+	kinds := map[string]bool{}
+	for _, hint := range hints {
+		kinds[hint.Kind] = true
+	}
+	if !kinds["aria-label"] || kinds["css"] {
+		t.Fatalf("expected aria-label to avoid a noisy css fallback: %+v", hints)
+	}
+
+	fallback := buildLocatorHints(api.Node{
+		Selector: "html:nth-of-type(1) > body:nth-of-type(1) > div:nth-of-type(1)",
+	})
+	if len(fallback) != 1 || fallback[0].Kind != "css" {
+		t.Fatalf("expected css fallback hint: %+v", fallback)
+	}
+}
+
 func TestEvalExpression(t *testing.T) {
 	source := `Array.from(document.querySelectorAll("a")).map((a) => a.textContent)`
 	script := evalExpression(source)
@@ -316,6 +326,27 @@ func TestObserveTreeExpressionNormalizesColorProperties(t *testing.T) {
 	}
 	if !strings.Contains(script, "new Set(['fill', 'stroke'])") {
 		t.Fatalf("expected non-suffix color properties in script: %s", script)
+	}
+}
+
+func TestObserveTreeExpressionSupportsAllCSSProperties(t *testing.T) {
+	script := observeTreeExpression([]string{"*"}, "", nil, "")
+	if !strings.Contains(script, "properties.includes('*') ? Array.from(style) : properties") {
+		t.Fatalf("expected exhaustive computed style enumeration: %s", script)
+	}
+}
+
+func TestObserveTreeExpressionSupportsScopedCustomSelector(t *testing.T) {
+	script := observeTreeExpressionWithSelector(nil, "#dialog", nil, "", `button[aria-label]`, true)
+	for _, expected := range []string{
+		`const scopeSelector = "#dialog";`,
+		`const selector = "button[aria-label]";`,
+		`const includeScopeRoot = false;`,
+		`match selector is invalid`,
+	} {
+		if !strings.Contains(script, expected) {
+			t.Fatalf("expected custom selector contract %q in script", expected)
+		}
 	}
 }
 
@@ -446,6 +477,12 @@ func TestTypeExpression(t *testing.T) {
 	if !strings.Contains(script, "3") {
 		t.Fatalf("unexpected script: %s", script)
 	}
+	if !strings.Contains(script, "HTMLInputElement.prototype") || !strings.Contains(script, "valueDescriptor.set.call") {
+		t.Fatalf("expected native value setter contract: %s", script)
+	}
+	if !strings.Contains(script, "new InputEvent('input'") || !strings.Contains(script, "composed: true") {
+		t.Fatalf("expected framework-compatible input event contract: %s", script)
+	}
 }
 
 func TestMarkTypeTargetExpression(t *testing.T) {
@@ -465,6 +502,19 @@ func TestMarkTypeTargetExpression(t *testing.T) {
 	}
 }
 
+func TestMarkUploadSelectorExpressionSupportsHiddenInput(t *testing.T) {
+	script := markUploadSelectorExpression(`input[type="file"]`, "token-1")
+	if !strings.Contains(script, `input[type=\"file\"]`) ||
+		!strings.Contains(script, "data-nexus-upload") ||
+		strings.Contains(script, "visible(") {
+		t.Fatalf("unexpected selector upload script: %s", script)
+	}
+	clearScript := clearMarkedUploadExpression("token-1")
+	if !strings.Contains(clearScript, "removeAttribute") || !strings.Contains(clearScript, "token-1") {
+		t.Fatalf("unexpected upload cleanup script: %s", clearScript)
+	}
+}
+
 func TestClearMarkedTypeTargetExpression(t *testing.T) {
 	script := clearMarkedTypeTargetExpression("token-1")
 
@@ -473,6 +523,133 @@ func TestClearMarkedTypeTargetExpression(t *testing.T) {
 	}
 	if !strings.Contains(script, "token-1") {
 		t.Fatalf("unexpected script: %s", script)
+	}
+}
+
+func TestKeyProbeExpressions(t *testing.T) {
+	install := installKeyProbeExpression("token-1")
+	finish := finishKeyProbeExpression("token-1")
+
+	if !strings.Contains(install, "addEventListener('keydown'") || !strings.Contains(install, "token-1") {
+		t.Fatalf("unexpected key probe install script: %s", install)
+	}
+	if !strings.Contains(finish, "removeEventListener('keydown'") || !strings.Contains(finish, "return state.count") {
+		t.Fatalf("unexpected key probe finish script: %s", finish)
+	}
+}
+
+func TestStructurePathToSelector(t *testing.T) {
+	selector := structurePathToSelector("html:1>body:1>main:2>button:3")
+	if selector != "html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(2) > button:nth-of-type(3)" {
+		t.Fatalf("unexpected selector: %q", selector)
+	}
+	for _, value := range []string{"", "html", "html:0", "html:x"} {
+		if selector := structurePathToSelector(value); selector != "" {
+			t.Fatalf("expected invalid structure path %q to return an empty selector, got %q", value, selector)
+		}
+	}
+}
+
+func TestParseNodeReference(t *testing.T) {
+	nodeID, err := parseNodeReference("@e42")
+	if err != nil || nodeID != 42 {
+		t.Fatalf("unexpected parsed ref: id=%d err=%v", nodeID, err)
+	}
+	for _, value := range []string{"42", "@e0", "@ex", "@e-1"} {
+		if _, err := parseNodeReference(value); err == nil {
+			t.Fatalf("expected invalid ref %q to fail", value)
+		}
+	}
+}
+
+func TestJavascriptDialogTracking(t *testing.T) {
+	backend := New()
+	backend.targetInfo.ID = "page1"
+	backend.trackDialogEvent("page1", &page.EventJavascriptDialogOpening{
+		Type:    page.DialogTypeAlert,
+		Message: "Blocked",
+	})
+	err := backend.javascriptDialogError()
+	if err == nil || !strings.Contains(err.Error(), "alert") || !strings.Contains(err.Error(), "Blocked") {
+		t.Fatalf("unexpected dialog error: %v", err)
+	}
+	backend.trackDialogEvent("other", &page.EventJavascriptDialogClosed{})
+	if backend.javascriptDialogError() == nil {
+		t.Fatal("expected events from another target to be ignored")
+	}
+	backend.trackDialogEvent("page1", &page.EventJavascriptDialogClosed{})
+	if err := backend.javascriptDialogError(); err != nil {
+		t.Fatalf("expected closed dialog state: %v", err)
+	}
+}
+
+func TestValidateFullScreenshotSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		width   int64
+		height  int64
+		wantErr error
+	}{
+		{name: "within limits", width: 1000, height: 1000},
+		{name: "at pixel limit", width: 12000, height: 10000},
+		{name: "invalid width", width: 0, height: 1000, wantErr: errors.New("invalid")},
+		{name: "width limit", width: maxFullScreenshotWidth + 1, height: 1, wantErr: errFullScreenshotTooLarge},
+		{name: "height limit", width: 1, height: maxFullScreenshotHeight + 1, wantErr: errFullScreenshotTooLarge},
+		{name: "pixel limit", width: 12001, height: 10000, wantErr: errFullScreenshotTooLarge},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateFullScreenshotSize(tt.width, tt.height)
+			switch {
+			case tt.wantErr == nil && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tt.wantErr != nil && err == nil:
+				t.Fatalf("expected error matching %v", tt.wantErr)
+			case errors.Is(tt.wantErr, errFullScreenshotTooLarge) && !errors.Is(err, errFullScreenshotTooLarge):
+				t.Fatalf("expected full screenshot limit error, got %v", err)
+			case tt.wantErr != nil && !errors.Is(tt.wantErr, errFullScreenshotTooLarge) && !strings.Contains(err.Error(), tt.wantErr.Error()):
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr.Error(), err)
+			}
+		})
+	}
+}
+
+func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
+	requestCtx, requestCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer requestCancel()
+
+	attemptCtx, attemptCancel := screenshotAttemptContext(requestCtx)
+	defer attemptCancel()
+
+	requestDeadline, requestOK := requestCtx.Deadline()
+	attemptDeadline, attemptOK := attemptCtx.Deadline()
+	if !requestOK || !attemptOK {
+		t.Fatal("expected request and attempt deadlines")
+	}
+	difference := requestDeadline.Sub(attemptDeadline)
+	if difference < 0 {
+		difference = -difference
+	}
+	if difference > 10*time.Millisecond {
+		t.Fatalf("short request deadline was divided or shortened: %s", difference)
+	}
+}
+
+func TestReattachPageTargetIsBounded(t *testing.T) {
+	backend := New()
+	backend.runCtx = context.Background()
+	backend.staleContexts = []remoteContext{{}}
+	_, _, _, err := backend.reattachPageTarget(context.Background(), pageTargetInfo{ID: "page1"})
+	if err == nil || !strings.Contains(err.Error(), "already reattached once") {
+		t.Fatalf("unexpected bounded reattach error: %v", err)
+	}
+}
+
+func TestHydrationBarrierWaitsForDOMQuiet(t *testing.T) {
+	for _, expected := range []string{"DOMContentLoaded", "MutationObserver", "setTimeout", "requestAnimationFrame"} {
+		if !strings.Contains(hydrationBarrierExpression, expected) {
+			t.Fatalf("expected hydration barrier contract %q", expected)
+		}
 	}
 }
 
@@ -592,6 +769,11 @@ func TestGetExpressions(t *testing.T) {
 	if !strings.Contains(script, "querySelector") || !strings.Contains(script, ".hero") || !strings.Contains(script, "getBoundingClientRect") {
 		t.Fatalf("unexpected bbox script: %s", script)
 	}
+
+	script = getFocusedBBoxExpression(".hero")
+	if !strings.Contains(script, "scrollIntoView") || !strings.Contains(script, ".hero") || !strings.Contains(script, "getBoundingClientRect") {
+		t.Fatalf("unexpected focused bbox script: %s", script)
+	}
 }
 
 func TestViewportOptions(t *testing.T) {
@@ -673,10 +855,17 @@ func TestChromiumE2E(t *testing.T) {
 		case "/":
 			fmt.Fprint(w, `<!doctype html>
 <html>
+<head>
+  <style>
+    #hover-target { width: 120px; height: 40px; background: rgb(0, 0, 255); }
+    #hover-target:hover { background: rgb(255, 0, 0); }
+  </style>
+</head>
 <body>
   <input id="name" name="name" placeholder="Name">
   <input id="email" type="email" name="email" placeholder="Email">
   <input id="replace" name="replace" value="before@example.com">
+  <input id="hidden-upload" type="file" style="display:none">
   <button id="submit" onclick="document.getElementById('message').textContent = 'Hello, ' + document.getElementById('name').value">Submit</button>
   <div id="message"></div>
   <div id="hover-target" tabindex="0" onmouseenter="document.getElementById('hover-status').textContent='hovered'">Hover</div>
@@ -685,9 +874,20 @@ func TestChromiumE2E(t *testing.T) {
   <div id="dbl-status"></div>
   <div id="ctx-target" oncontextmenu="event.preventDefault(); document.getElementById('ctx-status').textContent='context menu'">Context</div>
   <div id="ctx-status"></div>
+  <div id="key-status"></div>
+  <div id="fill-status"></div>
   <button id="detach-loader" onclick="document.getElementById('loader').remove()">Detach Loader</button>
   <div id="loader">loading</div>
+  <section id="dialog"><button id="aria-button" aria-label="Points explanation">?</button></section>
   <a id="next" href="/next">Next</a>
+  <script>
+    document.addEventListener('keydown', (event) => {
+      document.getElementById('key-status').textContent = 'key:' + event.key
+    })
+    document.getElementById('replace').addEventListener('input', (event) => {
+      document.getElementById('fill-status').textContent = 'filled:' + event.target.value
+    })
+  </script>
 </body>
 </html>`)
 		case "/next":
@@ -716,6 +916,9 @@ func TestChromiumE2E(t *testing.T) {
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "selector", "value": "#submit", "state": "visible", "timeout_ms": "10000"}}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "hydrated", "timeout_ms": "10000"}}); err != nil {
+		t.Fatal(err)
+	}
 
 	obs, err := backend.Observe(context.Background(), api.ObserveOptions{WithTree: true, WithText: true})
 	if err != nil {
@@ -723,6 +926,32 @@ func TestChromiumE2E(t *testing.T) {
 	}
 	if !strings.Contains(obs.Text, "Submit") {
 		t.Fatalf("unexpected observation text: %s", obs.Text)
+	}
+	ariaButton := requireNodeByAttrNode(t, obs.Tree, "id", "aria-button")
+	if ariaButton.Name != "Points explanation" {
+		t.Fatalf("unexpected aria-label accessible name: %+v", ariaButton)
+	}
+
+	allNodes, err := backend.Observe(context.Background(), api.ObserveOptions{WithTree: true, NodeScope: "all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialog := requireNodeByAttrNode(t, allNodes.Tree, "id", "dialog")
+	scoped, err := backend.Observe(context.Background(), api.ObserveOptions{
+		WithTree:         true,
+		MatchSelector:    "button[aria-label]",
+		WithinRef:        dialog.Ref,
+		ExcludeScopeRoot: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scoped.Tree) != 1 || scoped.Tree[0].Attrs["id"] != "aria-button" {
+		t.Fatalf("unexpected scoped selector observation: %+v", scoped.Tree)
+	}
+	obs, err = backend.Observe(context.Background(), api.ObserveOptions{WithTree: true, WithText: true})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	evalRes, err := backend.Act(context.Background(), api.Action{Kind: "eval", Text: `document.getElementById("submit").textContent.trim()`})
@@ -740,6 +969,19 @@ func TestChromiumE2E(t *testing.T) {
 	if value, ok := evalRes.Value.(bool); !ok || value {
 		t.Fatalf("unexpected eval false value: %#v", evalRes.Value)
 	}
+	for expected := 1; expected <= 2; expected++ {
+		evalRes, err = backend.Act(context.Background(), api.Action{
+			Kind: "eval",
+			Text: `globalThis.nexusCounter = (globalThis.nexusCounter || 0) + 1`,
+			Args: map[string]string{"world": "persistent"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value, ok := evalRes.Value.(float64); !ok || int(value) != expected {
+			t.Fatalf("unexpected persistent eval value: %#v", evalRes.Value)
+		}
+	}
 
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "function", "value": `document.getElementById("submit") !== null`, "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
@@ -749,19 +991,28 @@ func TestChromiumE2E(t *testing.T) {
 	emailID := requireNodeByAttr(t, obs.Tree, "id", "email")
 	replaceID := requireNodeByAttr(t, obs.Tree, "id", "replace")
 	submitID := requireNodeByAttr(t, obs.Tree, "id", "submit")
-	hoverID := requireNodeByAttr(t, obs.Tree, "id", "hover-target")
+	hoverNode := requireNodeByAttrNode(t, obs.Tree, "id", "hover-target")
+	hoverID := hoverNode.ID
 	dblID := requireNodeByAttr(t, obs.Tree, "id", "dbl-target")
 	ctxID := requireNodeByAttr(t, obs.Tree, "id", "ctx-target")
 	detachID := requireNodeByAttr(t, obs.Tree, "id", "detach-loader")
-	nextID := requireNodeByAttr(t, obs.Tree, "id", "next")
+	nextNode := requireNodeByAttrNode(t, obs.Tree, "id", "next")
+	nextID := nextNode.ID
 
-	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &nameID, Text: "hiro"}); err != nil {
+	typeResult, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &nameID, Text: "hiro"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if value, ok := typeResult.Value.(map[string]interface{}); !ok || value["delivery_verified"] != true {
+		t.Fatalf("type delivery was not verified: %#v", typeResult.Value)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &emailID, Text: "user@example.com"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "fill", NodeID: &replaceID, Text: "after@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "text", "value": "filled:after@example.com", "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "invoke", NodeID: &submitID}); err != nil {
@@ -795,11 +1046,53 @@ func TestChromiumE2E(t *testing.T) {
 		t.Fatalf("unexpected fill value: %#v", res.Value)
 	}
 
+	uploadPath := filepath.Join(t.TempDir(), "artifact.txt")
+	if err := os.WriteFile(uploadPath, []byte("upload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{
+		Kind:     "upload",
+		Selector: "#hidden-upload",
+		Text:     uploadPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	res, err = backend.Act(context.Background(), api.Action{
+		Kind: "eval",
+		Text: `document.getElementById("hidden-upload").files[0].name`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := res.Value.(string); value != "artifact.txt" {
+		t.Fatalf("unexpected uploaded file: %#v", res.Value)
+	}
+
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "hover", NodeID: &hoverID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "text", "value": "hovered", "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
+	}
+	hoverScreenshot, err := backend.Observe(context.Background(), api.ObserveOptions{WithScreenshot: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := png.Decode(bytes.NewReader(hoverScreenshot.ScreenshotData))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sample := color.RGBAModel.Convert(image.At(int(hoverNode.Bounds.X)+5, int(hoverNode.Bounds.Y)+5)).(color.RGBA)
+	if sample.R < 200 || sample.G > 80 || sample.B > 80 {
+		t.Fatalf("hover style was not preserved in screenshot: %+v", sample)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{
+		Kind:    "get",
+		NodeID:  &hoverID,
+		NodeRef: hoverNode.Ref,
+		Args:    map[string]string{"target": "text"},
+	}); err != nil {
+		t.Fatalf("tree-less screenshot invalidated a current ref: %v", err)
 	}
 
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "dblclick", NodeID: &dblID}); err != nil {
@@ -828,6 +1121,9 @@ func TestChromiumE2E(t *testing.T) {
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "url", "value": "/next", "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := backend.Act(context.Background(), api.Action{Kind: "invoke", NodeID: &nextID, NodeRef: nextNode.Ref}); err == nil || !strings.Contains(err.Error(), "stale node ref") {
+		t.Fatalf("expected stale ref after navigation, got %v", err)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "back"}); err != nil {
 		t.Fatal(err)
@@ -875,15 +1171,21 @@ func resolveChromiumForE2E(t *testing.T) string {
 func requireNodeByAttr(t *testing.T, nodes []api.Node, key string, value string) int {
 	t.Helper()
 
+	return requireNodeByAttrNode(t, nodes, key, value).ID
+}
+
+func requireNodeByAttrNode(t *testing.T, nodes []api.Node, key string, value string) api.Node {
+	t.Helper()
+
 	for _, node := range nodes {
 		if node.Attrs[key] == value {
 			if node.Fingerprint == "" {
 				t.Fatalf("expected fingerprint for node %s", value)
 			}
-			return node.ID
+			return node
 		}
 	}
 
 	t.Fatalf("node with %s=%s not found", key, value)
-	return 0
+	return api.Node{}
 }

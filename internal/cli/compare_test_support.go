@@ -160,7 +160,10 @@ type compareURLRPCHandler struct {
 }
 
 func (compareRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
-	return api.PingResponse{}, nil
+	return api.PingResponse{
+		ProtocolVersion: api.ProtocolVersion,
+		DaemonVersion:   api.DaemonVersion,
+	}, nil
 }
 
 func (compareRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
@@ -237,7 +240,10 @@ func (compareRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest
 }
 
 func (h *compareURLRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
-	return api.PingResponse{}, nil
+	return api.PingResponse{
+		ProtocolVersion: api.ProtocolVersion,
+		DaemonVersion:   api.DaemonVersion,
+	}, nil
 }
 
 func (h *compareURLRPCHandler) AttachSession(_ context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {

@@ -14,12 +14,15 @@ import (
 )
 
 func observeTreeForFind(ctx context.Context, client *rpc.Client, sessionID string) (api.Observation, error) {
+	return observeTreeForFindWithOptions(ctx, client, sessionID, api.ObserveOptions{})
+}
+
+func observeTreeForFindWithOptions(ctx context.Context, client *rpc.Client, sessionID string, options api.ObserveOptions) (api.Observation, error) {
+	options.WithTree = true
+	options.WithText = true
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
-		Options: api.ObserveOptions{
-			WithTree: true,
-			WithText: true,
-		},
+		Options:   options,
 	})
 	if err != nil {
 		return api.Observation{}, err
@@ -39,6 +42,21 @@ func selectNodes(nodes []api.Node, match func(api.Node) bool) []api.Node {
 
 type nodeSelectionOptions struct {
 	Nth int
+}
+
+func directRefNode(locator string, selection nodeSelectionOptions) (api.Node, bool, error) {
+	value := strings.TrimSpace(locator)
+	if !strings.HasPrefix(value, "@e") {
+		return api.Node{}, false, nil
+	}
+	nodeID, nodeRef, err := parseNodeSelector(value)
+	if err != nil || nodeRef == "" {
+		return api.Node{}, true, fmt.Errorf("invalid node ref: %s", value)
+	}
+	if selection.Nth > 1 {
+		return api.Node{}, true, errors.New("a direct node ref has one match; --nth must be 1")
+	}
+	return api.Node{ID: nodeID, Ref: nodeRef}, true, nil
 }
 
 func chooseNode(matches []api.Node, query string, options nodeSelectionOptions) (api.Node, error) {
@@ -170,21 +188,21 @@ func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID strin
 			fmt.Fprintln(stderr, "click action does not accept an extra value")
 			return 1
 		}
-		action = api.Action{Kind: "invoke", NodeID: &node.ID}
+		action = api.Action{Kind: "invoke", NodeID: &node.ID, NodeRef: node.Ref, Selector: node.Selector}
 		fallbackMessage = fmt.Sprintf("clicked %s", displayNodeRef(node))
 	case "input":
 		if actionValue == "" {
 			fmt.Fprintln(stderr, `input action requires "text"`)
 			return 1
 		}
-		action = api.Action{Kind: "type", NodeID: &node.ID, Text: actionValue}
+		action = api.Action{Kind: "type", NodeID: &node.ID, NodeRef: node.Ref, Selector: node.Selector, Text: actionValue}
 		fallbackMessage = fmt.Sprintf("typed into %s", displayNodeRef(node))
 	case "fill":
 		if actionValue == "" {
 			fmt.Fprintln(stderr, `fill action requires "text"`)
 			return 1
 		}
-		action = api.Action{Kind: "fill", NodeID: &node.ID, Text: actionValue}
+		action = api.Action{Kind: "fill", NodeID: &node.ID, NodeRef: node.Ref, Selector: node.Selector, Text: actionValue}
 		fallbackMessage = fmt.Sprintf("filled into %s", displayNodeRef(node))
 	case "get":
 		if !isFindGetTarget(actionValue) {
@@ -192,8 +210,10 @@ func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID strin
 			return 1
 		}
 		action = api.Action{
-			Kind:   "get",
-			NodeID: &node.ID,
+			Kind:     "get",
+			NodeID:   &node.ID,
+			NodeRef:  node.Ref,
+			Selector: node.Selector,
 			Args: map[string]string{
 				"target": actionValue,
 			},

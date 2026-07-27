@@ -31,6 +31,14 @@ func runFindHrefInvocation(ctx context.Context, invocation *nagicli.Invocation, 
 	return runFindInvocation(ctx, invocation, "href", []string{"href"}, stdout, stderr)
 }
 
+func runFindAriaLabelInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	return runFindInvocation(ctx, invocation, "aria-label", []string{"aria-label"}, stdout, stderr)
+}
+
+func runFindCSSInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	return runFindInvocation(ctx, invocation, "css", nil, stdout, stderr)
+}
+
 func runFindInvocation(
 	ctx context.Context,
 	invocation *nagicli.Invocation,
@@ -47,6 +55,7 @@ func runFindInvocation(
 	action := nagiRawValue(invocation, "action")
 	actionValue := nagiRawValue(invocation, "action-value")
 	name := nagiStringValue(invocation, "name")
+	withinRef := strings.TrimSpace(nagiStringValue(invocation, "within"))
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -55,7 +64,18 @@ func runFindInvocation(
 	}
 	defer client.Close()
 
-	observation, err := observeTreeForFind(ctx, client, sessionID)
+	matchSelector := ""
+	switch kind {
+	case "css":
+		matchSelector = query
+	case "aria-label":
+		matchSelector = "[aria-label]"
+	}
+	observation, err := observeTreeForFindWithOptions(ctx, client, sessionID, api.ObserveOptions{
+		MatchSelector:    matchSelector,
+		WithinRef:        withinRef,
+		ExcludeScopeRoot: withinRef != "",
+	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -63,6 +83,8 @@ func runFindInvocation(
 
 	nodes := selectNodes(observation.Tree, func(node api.Node) bool {
 		switch kind {
+		case "css":
+			return true
 		case "role":
 			if !strings.EqualFold(strings.TrimSpace(node.Role), strings.TrimSpace(query)) {
 				return false

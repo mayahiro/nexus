@@ -3,7 +3,6 @@ package comparecmd
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -435,11 +434,14 @@ func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, ses
 	if err != nil {
 		return nil, err
 	}
-	screenshot := strings.TrimSpace(res.Observation.Screenshot)
-	if screenshot == "" {
+	screenshot, err := res.Observation.ScreenshotBytes()
+	if err != nil {
+		return nil, err
+	}
+	if len(screenshot) == 0 {
 		return nil, fmt.Errorf("empty screenshot")
 	}
-	return base64.StdEncoding.DecodeString(screenshot)
+	return screenshot, nil
 }
 
 func writeCompareManifestReviewPacket(dir string, report compareManifestReport, pageDirectories []compareManifestReviewPageDirectory) error {

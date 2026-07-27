@@ -13,7 +13,7 @@ import (
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
-const compareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
+const compareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
 const compareDirectOutputUsage = "[--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>]"
 const compareReportOutputUsage = "[--output-json <file>] [--output-md <file>] [--json]"
 const compareURLUsage = "<old-url> <new-url> " + compareExecutionUsage + " " + compareDirectOutputUsage + " " + compareReportOutputUsage
@@ -55,6 +55,7 @@ type nagiCompareArguments struct {
 	WaitFunction                   string
 	WaitNetworkIdle                bool
 	CompareCSS                     bool
+	AllCSSProperties               bool
 	CompareLayout                  bool
 	NoDefaultIgnores               bool
 	WaitTimeout                    int
@@ -130,6 +131,7 @@ func buildNagiCompareCommand(connectClient func(context.Context) (*rpc.Client, e
 		Option(nagiCompareValueOption("wait-function", "wait javascript expression")).
 		Option(nagicli.Flag("wait-network-idle").Long("wait-network-idle").Help("wait for network idle")).
 		Option(nagicli.Flag("compare-css").Long("compare-css").Help("compare computed css values")).
+		Option(nagicli.Flag("all-css-properties").Long("all-css-properties").Help("compare every computed css property")).
 		Option(nagicli.Flag("compare-layout").Long("compare-layout").Help("compare element bounds")).
 		Option(nagicli.Flag("no-default-ignores").Long("no-default-ignores").Help("disable default ignored nodes")).
 		Option(
@@ -152,6 +154,7 @@ func buildNagiCompareCommand(connectClient func(context.Context) (*rpc.Client, e
 		Note("--decisions-file applies reviewed pair, subtree, and finding decisions before and after automatic matching").
 		Note("--node-scope all requires an explicit common scope or both old and new scopes").
 		Note("--scope-selector applies to both sides and old or new scope selectors override it per side").
+		Note("--all-css-properties is exhaustive and can produce browser-version noise; use --compare-css for the stable default allowlist").
 		Link("Compare guide", aiCompareDocURL).
 		Link("Migration playbook", migrationPlaybookDocURL).
 		Link("AI usage guide", aiUsageDocURL).
@@ -333,6 +336,11 @@ func validateNagiCompareInvocation(invocation *nagicli.Invocation) *nagicli.Diag
 	if arguments.Limit < 0 {
 		return nagiCompareValidationDiagnostic("limit must be a non-negative integer").
 			WithTarget(nagicli.OptionTarget("limit"))
+	}
+	if arguments.AllCSSProperties && len(arguments.CSSProperty) > 0 {
+		return nagiCompareValidationDiagnostic("--all-css-properties can not be combined with --css-property").
+			WithTarget(nagicli.OptionTarget("all-css-properties")).
+			WithTarget(nagicli.OptionTarget("css-property"))
 	}
 	switch strings.ToLower(strings.TrimSpace(arguments.Backend)) {
 	case "chromium", "lightpanda":
@@ -559,6 +567,7 @@ func nagiCompareArgumentsFromInvocation(invocation *nagicli.Invocation) nagiComp
 		WaitFunction:                   nagiCompareRawValue(invocation, "wait-function"),
 		WaitNetworkIdle:                nagiCompareFlag(invocation, "wait-network-idle"),
 		CompareCSS:                     nagiCompareFlag(invocation, "compare-css"),
+		AllCSSProperties:               nagiCompareFlag(invocation, "all-css-properties"),
 		CompareLayout:                  nagiCompareFlag(invocation, "compare-layout"),
 		NoDefaultIgnores:               nagiCompareFlag(invocation, "no-default-ignores"),
 		WaitTimeout:                    nagiCompareIntValue(invocation, "wait-timeout"),

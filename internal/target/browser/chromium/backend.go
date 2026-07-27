@@ -2,7 +2,6 @@ package chromium
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,13 +10,16 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/input"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -32,6 +34,10 @@ const shutdownTimeout = 5 * time.Second
 const maxLogEntries = 200
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
+const screenshotAttemptTimeout = 10 * time.Second
+const maxFullScreenshotWidth = 16384
+const maxFullScreenshotHeight = 50000
+const maxFullScreenshotPixels = 120_000_000
 
 var pageTargetTimeout = 5 * time.Second
 
@@ -125,6 +131,10 @@ func selectorHintSupportExpression() string {
 }
 
 func observeTreeExpression(cssProperties []string, scopeSelector string, layoutProperties []string, nodeScope string) string {
+	return observeTreeExpressionWithSelector(cssProperties, scopeSelector, layoutProperties, nodeScope, "", false)
+}
+
+func observeTreeExpressionWithSelector(cssProperties []string, scopeSelector string, layoutProperties []string, nodeScope string, matchSelector string, excludeScopeRoot bool) string {
 	properties := make([]string, 0, len(cssProperties))
 	for _, value := range cssProperties {
 		trimmed := strings.TrimSpace(value)
@@ -143,15 +153,21 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 	}
 
 	scope := strconv.Quote(strings.TrimSpace(scopeSelector))
-	candidateSelector := strconv.Quote(observeCandidateSelector(nodeScope))
+	includeScopeRoot := !excludeScopeRoot
+	selectorValue := strings.TrimSpace(matchSelector)
+	if selectorValue == "" {
+		selectorValue = observeCandidateSelector(nodeScope)
+	}
+	candidateSelector := strconv.Quote(selectorValue)
 	selectorHints := ""
-	if strings.TrimSpace(scopeSelector) != "" {
+	if strings.TrimSpace(scopeSelector) != "" || strings.TrimSpace(matchSelector) != "" {
 		selectorHints = selectorHintSupportExpression()
 	}
 
 	return `(function () {
 	  const scopeSelector = ` + scope + `;
 	  const selector = ` + candidateSelector + `;
+	  const includeScopeRoot = ` + strconv.FormatBool(includeScopeRoot) + `;
 
   const roleFor = (el) => {
     const ariaRole = (el.getAttribute('role') || '').trim();
@@ -329,7 +345,8 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
     if (properties.length === 0) return {};
     const style = window.getComputedStyle(el);
     const values = {};
-    for (const property of properties) {
+    const selectedProperties = properties.includes('*') ? Array.from(style) : properties;
+    for (const property of selectedProperties) {
       values[property] = normalizeStyleValue(property, style.getPropertyValue(property).trim());
     }
     return values;
@@ -414,12 +431,18 @@ func observeTreeExpression(cssProperties []string, scopeSelector string, layoutP
 	    scopeRoot = scopeMatches[0];
 	  }
 
-	  const baseCandidates = Array.from(document.querySelectorAll(selector))
-	    .filter((el) => !scopeRoot || scopeRoot.contains(el))
+	  let selectorMatches;
+	  try {
+	    selectorMatches = Array.from((scopeRoot || document).querySelectorAll(selector));
+	  } catch (error) {
+	    throw new Error('match selector is invalid: ' + selector);
+	  }
+
+	  const baseCandidates = selectorMatches
 	    .filter((el) => visible(el));
 
 	  const candidates = [];
-	  if (scopeRoot) {
+	  if (scopeRoot && includeScopeRoot) {
 	    candidates.push(scopeRoot);
 	  }
 	  for (const el of baseCandidates) {
@@ -698,7 +721,12 @@ const typeNodeJS = `(function (nodeID, text) {
   el.focus();
 
   if (tag === 'input' || tag === 'textarea') {
-    el.value = text;
+    const prototype = tag === 'input' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+    const valueDescriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+    if (!valueDescriptor || typeof valueDescriptor.set !== 'function') {
+      throw new Error('native value setter is unavailable');
+    }
+    valueDescriptor.set.call(el, text);
     if (typeof el.setSelectionRange === 'function') {
       try {
         el.setSelectionRange(text.length, text.length);
@@ -709,8 +737,19 @@ const typeNodeJS = `(function (nodeID, text) {
     el.textContent = text;
   }
 
-  el.dispatchEvent(new Event('input', {bubbles: true}));
-  el.dispatchEvent(new Event('change', {bubbles: true}));
+  let inputEvent;
+  try {
+    inputEvent = new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: text,
+      inputType: 'insertReplacementText'
+    });
+  } catch (_) {
+    inputEvent = new Event('input', {bubbles: true, composed: true});
+  }
+  el.dispatchEvent(inputEvent);
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
 
   return {
     id: nodeID > 0 ? nodeID : null,
@@ -1003,6 +1042,30 @@ const clearMarkedTypeTargetJS = `(function (token) {
   return true;
 })($TOKEN$)`
 
+const installKeyProbeJS = `(function (token) {
+  const probes = globalThis.__nexusKeyProbes || (globalThis.__nexusKeyProbes = {});
+  const existing = probes[token];
+  if (existing) {
+    window.removeEventListener('keydown', existing.handler, true);
+  }
+  const state = {count: 0};
+  state.handler = () => {
+    state.count++;
+  };
+  probes[token] = state;
+  window.addEventListener('keydown', state.handler, true);
+  return true;
+})($TOKEN$)`
+
+const finishKeyProbeJS = `(function (token) {
+  const probes = globalThis.__nexusKeyProbes || {};
+  const state = probes[token];
+  if (!state) return -1;
+  window.removeEventListener('keydown', state.handler, true);
+  delete probes[token];
+  return state.count;
+})($TOKEN$)`
+
 const nodePointJS = `(function (nodeID) {
   const selector = [
     'button',
@@ -1061,19 +1124,49 @@ type typeTarget struct {
 }
 
 type Backend struct {
-	mu          sync.Mutex
-	cmd         *exec.Cmd
-	cancel      context.CancelFunc
-	waitCh      chan error
-	userDataDir string
-	devtoolsURL string
-	logs        []api.LogEntry
+	mu                  sync.Mutex
+	opMu                sync.Mutex
+	cmd                 *exec.Cmd
+	runCtx              context.Context
+	cancel              context.CancelFunc
+	waitCh              chan error
+	userDataDir         string
+	devtoolsURL         string
+	logs                []api.LogEntry
+	allocCtx            context.Context
+	allocCancel         context.CancelFunc
+	targetCtx           context.Context
+	targetCancel        context.CancelFunc
+	targetInfo          pageTargetInfo
+	staleContexts       []remoteContext
+	allocatorOptions    []chromedp.RemoteAllocatorOption
+	refLoaderID         string
+	refURL              string
+	refs                map[int]nodeReference
+	persistentContextID runtime.ExecutionContextID
+	persistentLoaderID  string
+	persistentWorldName string
+	dialogOpen          bool
+	dialogType          string
+	dialogMessage       string
+	activateBeforeOp    bool
 }
 
 var errPageTargetNotFound = errors.New("page target not found")
+var errFullScreenshotTooLarge = errors.New("full screenshot exceeds capture limits")
+
+type nodeReference struct {
+	Selector string
+	Identity string
+}
+
+type remoteContext struct {
+	targetCancel context.CancelFunc
+	allocCancel  context.CancelFunc
+}
 
 func New() *Backend {
-	return &Backend{}
+	return &Backend{activateBeforeOp: true}
 }
 
 func (*Backend) Name() spec.BackendName {
@@ -1147,6 +1240,7 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 
 	b.mu.Lock()
 	b.cmd = cmd
+	b.runCtx = runCtx
 	b.cancel = cancel
 	b.waitCh = waitCh
 	b.userDataDir = userDataDir
@@ -1185,16 +1279,38 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 }
 
 func (b *Backend) Detach(_ context.Context) error {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
 	b.mu.Lock()
 	cmd := b.cmd
 	cancel := b.cancel
+	allocCancel := b.allocCancel
+	targetCancel := b.targetCancel
+	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	waitCh := b.waitCh
 	userDataDir := b.userDataDir
 	b.cmd = nil
+	b.runCtx = nil
 	b.cancel = nil
 	b.waitCh = nil
 	b.userDataDir = ""
 	b.devtoolsURL = ""
+	b.allocCtx = nil
+	b.allocCancel = nil
+	b.targetCtx = nil
+	b.targetCancel = nil
+	b.targetInfo = pageTargetInfo{}
+	b.staleContexts = nil
+	b.refLoaderID = ""
+	b.refURL = ""
+	b.refs = nil
+	b.persistentContextID = 0
+	b.persistentLoaderID = ""
+	b.persistentWorldName = ""
+	b.dialogOpen = false
+	b.dialogType = ""
+	b.dialogMessage = ""
 	b.mu.Unlock()
 
 	if cmd == nil {
@@ -1202,6 +1318,13 @@ func (b *Backend) Detach(_ context.Context) error {
 	}
 
 	cancel()
+	if targetCancel != nil {
+		targetCancel()
+	}
+	if allocCancel != nil {
+		allocCancel()
+	}
+	cancelRemoteContexts(staleContexts)
 
 	timer := time.NewTimer(shutdownTimeout)
 	defer timer.Stop()
@@ -1219,6 +1342,9 @@ func (b *Backend) Detach(_ context.Context) error {
 }
 
 func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
 	b.mu.Lock()
 	url := b.devtoolsURL
 	b.mu.Unlock()
@@ -1231,12 +1357,23 @@ func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Ob
 }
 
 func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult, error) {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
 	b.mu.Lock()
 	url := b.devtoolsURL
 	b.mu.Unlock()
 
 	if url == "" {
 		return nil, errors.New("chromium backend is not attached")
+	}
+
+	if strings.TrimSpace(action.NodeRef) != "" {
+		selector, err := b.resolveNodeReference(ctx, url, action.NodeRef)
+		if err != nil {
+			return nil, err
+		}
+		action.Selector = selector
 	}
 
 	switch action.Kind {
@@ -1355,13 +1492,39 @@ func (b *Backend) appendLog(message string) {
 func (b *Backend) cleanupAfterExit() {
 	b.mu.Lock()
 	userDataDir := b.userDataDir
+	allocCancel := b.allocCancel
+	targetCancel := b.targetCancel
+	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	b.cmd = nil
+	b.runCtx = nil
 	b.cancel = nil
 	b.waitCh = nil
 	b.userDataDir = ""
 	b.devtoolsURL = ""
+	b.allocCtx = nil
+	b.allocCancel = nil
+	b.targetCtx = nil
+	b.targetCancel = nil
+	b.targetInfo = pageTargetInfo{}
+	b.staleContexts = nil
+	b.refLoaderID = ""
+	b.refURL = ""
+	b.refs = nil
+	b.persistentContextID = 0
+	b.persistentLoaderID = ""
+	b.persistentWorldName = ""
+	b.dialogOpen = false
+	b.dialogType = ""
+	b.dialogMessage = ""
 	b.mu.Unlock()
 
+	if targetCancel != nil {
+		targetCancel()
+	}
+	if allocCancel != nil {
+		allocCancel()
+	}
+	cancelRemoteContexts(staleContexts)
 	if userDataDir != "" {
 		os.RemoveAll(userDataDir)
 	}
@@ -1412,155 +1575,925 @@ type pageTargetInfo struct {
 	WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
 }
 
-func withTargetContext[T any](ctx context.Context, devtoolsURL string, targetID string, fn func(context.Context) (T, error), allocatorOptions ...chromedp.RemoteAllocatorOption) (T, error) {
+func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoolsURL string, fn func(context.Context, pageTargetInfo) (T, error)) (T, error) {
 	var zero T
 
-	allocCtx, allocCancel := chromedp.NewRemoteAllocator(ctx, devtoolsURL, allocatorOptions...)
-
-	options := make([]chromedp.ContextOption, 0, 1)
-	if targetID != "" {
-		options = append(options, chromedp.WithTargetID(target.ID(targetID)))
-	}
-
-	targetCtx, targetCancel := chromedp.NewContext(allocCtx, options...)
-	defer closeTargetContext(targetCtx, targetCancel, allocCancel)
-
-	result, err := fn(targetCtx)
+	targetCtx, targetInfo, release, err := b.pageTargetContext(ctx, devtoolsURL)
 	if err != nil {
 		return zero, err
 	}
+	defer release()
 
+	result, err := fn(targetCtx, targetInfo)
+	if err != nil {
+		return zero, err
+	}
 	return result, nil
 }
 
-func withPageTargetContext[T any](ctx context.Context, devtoolsURL string, fn func(context.Context, pageTargetInfo) (T, error), allocatorOptions ...chromedp.RemoteAllocatorOption) (T, error) {
-	var zero T
+func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (context.Context, pageTargetInfo, func(), error) {
+	b.mu.Lock()
+	targetCtx := b.targetCtx
+	targetInfo := b.targetInfo
+	runCtx := b.runCtx
+	b.mu.Unlock()
 
-	targetInfo, err := currentPageTarget(ctx, devtoolsURL)
-	if err != nil {
-		return zero, err
+	if targetCtx == nil {
+		if runCtx == nil {
+			return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
+		}
+		var err error
+		targetInfo, err = currentPageTarget(ctx, devtoolsURL)
+		if err != nil {
+			return nil, pageTargetInfo{}, nil, err
+		}
+		if err := b.activatePageTargetBeforeAttach(ctx, devtoolsURL, targetInfo.ID); err != nil {
+			return nil, pageTargetInfo{}, nil, err
+		}
+
+		allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
+		targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
+		chromedp.ListenTarget(targetCtx, func(event any) {
+			b.trackDialogEvent(targetInfo.ID, event)
+		})
+
+		b.mu.Lock()
+		b.allocCtx = allocCtx
+		b.allocCancel = allocCancel
+		b.targetCtx = targetCtx
+		b.targetCancel = targetCancel
+		b.targetInfo = targetInfo
+		b.mu.Unlock()
 	}
 
-	return withTargetContext(ctx, devtoolsURL, targetInfo.ID, func(targetCtx context.Context) (T, error) {
-		return fn(targetCtx, targetInfo)
-	}, allocatorOptions...)
+	operationCtx, release := operationContext(targetCtx, ctx)
+	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
+		release()
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	return operationCtx, targetInfo, release, nil
 }
 
-func closeTargetContext(targetCtx context.Context, targetCancel context.CancelFunc, allocCancel context.CancelFunc) {
-	preserveTarget(targetCtx)
-	targetCancel()
-	allocCancel()
+func activateTarget(ctx context.Context, targetID string) error {
+	return chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		chromedpContext := chromedp.FromContext(runCtx)
+		if chromedpContext == nil || chromedpContext.Browser == nil {
+			return errors.New("chromium browser context is unavailable")
+		}
+		return target.ActivateTarget(target.ID(targetID)).Do(cdp.WithExecutor(runCtx, chromedpContext.Browser))
+	}))
 }
 
-func preserveTarget(targetCtx context.Context) {
-	chromedpCtx := chromedp.FromContext(targetCtx)
-	if chromedpCtx == nil || chromedpCtx.Target == nil {
+func (b *Backend) activatePageTarget(ctx context.Context, targetID string) error {
+	if !b.activateBeforeOp {
+		return nil
+	}
+	return activateTarget(ctx, targetID)
+}
+
+func (b *Backend) activatePageTargetBeforeAttach(ctx context.Context, devtoolsURL string, targetID string) error {
+	if !b.activateBeforeOp {
+		return nil
+	}
+	return activatePageTargetHTTP(ctx, devtoolsURL, targetID)
+}
+
+type Remote struct {
+	backend *Backend
+	cancel  context.CancelFunc
+}
+
+func NewRemote(ctx context.Context, devtoolsURL string, allocatorOptions ...chromedp.RemoteAllocatorOption) *Remote {
+	runCtx, cancel := context.WithCancel(ctx)
+	return &Remote{
+		backend: &Backend{
+			runCtx:           runCtx,
+			devtoolsURL:      devtoolsURL,
+			allocatorOptions: append([]chromedp.RemoteAllocatorOption(nil), allocatorOptions...),
+		},
+		cancel: cancel,
+	}
+}
+
+func (r *Remote) Navigate(ctx context.Context, navigateURL string) error {
+	r.backend.opMu.Lock()
+	defer r.backend.opMu.Unlock()
+
+	_, err := withBackendPageTargetContext(r.backend, ctx, r.backend.devtoolsURL, func(targetCtx context.Context, _ pageTargetInfo) (struct{}, error) {
+		return struct{}{}, chromedp.Run(targetCtx, chromedp.Navigate(navigateURL))
+	})
+	return err
+}
+
+func (r *Remote) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
+	return r.backend.Observe(ctx, opts)
+}
+
+func (r *Remote) Close() {
+	r.cancel()
+	r.backend.closeRemoteContexts()
+}
+
+func (b *Backend) closeRemoteContexts() {
+	b.mu.Lock()
+	targetCancel := b.targetCancel
+	allocCancel := b.allocCancel
+	staleContexts := append([]remoteContext(nil), b.staleContexts...)
+	b.allocCtx = nil
+	b.allocCancel = nil
+	b.targetCtx = nil
+	b.targetCancel = nil
+	b.targetInfo = pageTargetInfo{}
+	b.staleContexts = nil
+	b.refLoaderID = ""
+	b.refURL = ""
+	b.refs = nil
+	b.persistentContextID = 0
+	b.persistentLoaderID = ""
+	b.persistentWorldName = ""
+	b.dialogOpen = false
+	b.dialogType = ""
+	b.dialogMessage = ""
+	b.mu.Unlock()
+
+	if targetCancel != nil {
+		targetCancel()
+	}
+	if allocCancel != nil {
+		allocCancel()
+	}
+	cancelRemoteContexts(staleContexts)
+}
+
+func cancelRemoteContexts(contexts []remoteContext) {
+	for _, current := range contexts {
+		if current.targetCancel != nil {
+			current.targetCancel()
+		}
+		if current.allocCancel != nil {
+			current.allocCancel()
+		}
+	}
+}
+
+func (b *Backend) trackDialogEvent(targetID string, event any) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.targetInfo.ID != "" && b.targetInfo.ID != targetID {
 		return
 	}
+	switch value := event.(type) {
+	case *page.EventJavascriptDialogOpening:
+		b.dialogOpen = true
+		b.dialogType = string(value.Type)
+		b.dialogMessage = strings.TrimSpace(value.Message)
+	case *page.EventJavascriptDialogClosed:
+		b.dialogOpen = false
+		b.dialogType = ""
+		b.dialogMessage = ""
+	}
+}
 
-	chromedpCtx.Target.SessionID = ""
-	chromedpCtx.Target.TargetID = ""
+func (b *Backend) javascriptDialogError() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if !b.dialogOpen {
+		return nil
+	}
+	dialogType := b.dialogType
+	if dialogType == "" {
+		dialogType = "unknown"
+	}
+	message := b.dialogMessage
+	if message == "" {
+		message = "(empty message)"
+	}
+	return fmt.Errorf("screenshot is blocked by an open %s JavaScript dialog: %s", dialogType, message)
+}
+
+func operationContext(targetCtx context.Context, requestCtx context.Context) (context.Context, func()) {
+	var operationCtx context.Context
+	var cancel context.CancelFunc
+	if deadline, ok := requestCtx.Deadline(); ok {
+		operationCtx, cancel = context.WithDeadline(targetCtx, deadline)
+	} else {
+		operationCtx, cancel = context.WithCancel(targetCtx)
+	}
+	stop := context.AfterFunc(requestCtx, cancel)
+	return operationCtx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 	return p.WithAwaitPromise(true)
 }
 
-func ObserveViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions, allocatorOptions ...chromedp.RemoteAllocatorOption) (*api.Observation, error) {
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.Observation, error) {
-		var currentURL string
-		var title string
-		var text string
-		var treeJSON string
-		var scopeMeta map[string]string
-		var viewportMeta map[string]int
-		var screenshot []byte
-		var layoutProperties []string
-		if opts.WithLayoutContext {
-			layoutProperties = opts.LayoutProperties
-		}
-		actions := []chromedp.Action{
-			chromedp.Location(&currentURL),
-			chromedp.Title(&title),
-			chromedp.Evaluate(`({width: window.innerWidth || 0, height: window.innerHeight || 0})`, &viewportMeta),
-		}
-		if opts.WithText {
-			if strings.TrimSpace(opts.ScopeSelector) != "" {
-				actions = append(actions, chromedp.Evaluate(scopeTextExpression(opts.ScopeSelector), &text))
-			} else {
-				actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
+func observeTarget(ctx context.Context, devtoolsURL string, targetInfo pageTargetInfo, opts api.ObserveOptions) (*api.Observation, error) {
+	var currentURL string
+	var title string
+	var text string
+	var treeJSON string
+	var scopeMeta map[string]string
+	var viewportMeta map[string]int
+	var loaderID string
+	var layoutProperties []string
+	if opts.WithLayoutContext {
+		layoutProperties = opts.LayoutProperties
+	}
+	actions := []chromedp.Action{
+		chromedp.ActionFunc(func(runCtx context.Context) error {
+			frameTree, err := page.GetFrameTree().Do(runCtx)
+			if err != nil {
+				return err
 			}
-		}
-		if opts.WithTree {
-			actions = append(actions, chromedp.Evaluate(observeTreeExpression(opts.CSSProperties, opts.ScopeSelector, layoutProperties, opts.NodeScope), &treeJSON))
-			if strings.TrimSpace(opts.ScopeSelector) != "" {
-				actions = append(actions, chromedp.Evaluate(scopeMetaExpression(opts.ScopeSelector), &scopeMeta))
+			if frameTree != nil && frameTree.Frame != nil {
+				loaderID = string(frameTree.Frame.LoaderID)
 			}
+			return nil
+		}),
+		chromedp.Location(&currentURL),
+		chromedp.Title(&title),
+		chromedp.Evaluate(`({
+			width: window.innerWidth || 0,
+			height: window.innerHeight || 0,
+			scroll_x: Math.round(window.scrollX || window.pageXOffset || 0),
+			scroll_y: Math.round(window.scrollY || window.pageYOffset || 0)
+		})`, &viewportMeta),
+	}
+	if opts.WithText {
+		if strings.TrimSpace(opts.ScopeSelector) != "" {
+			actions = append(actions, chromedp.Evaluate(scopeTextExpression(opts.ScopeSelector), &text))
+		} else {
+			actions = append(actions, chromedp.Evaluate(`document.body ? document.body.innerText : ""`, &text))
 		}
-		if opts.WithScreenshot {
-			if opts.FullScreenshot {
-				actions = append(actions, chromedp.FullScreenshot(&screenshot, 100))
-			} else {
-				actions = append(actions, chromedp.CaptureScreenshot(&screenshot))
-			}
+	}
+	if opts.WithTree {
+		actions = append(actions, chromedp.Evaluate(observeTreeExpressionWithSelector(opts.CSSProperties, opts.ScopeSelector, layoutProperties, opts.NodeScope, opts.MatchSelector, opts.ExcludeScopeRoot), &treeJSON))
+		if strings.TrimSpace(opts.ScopeSelector) != "" {
+			actions = append(actions, chromedp.Evaluate(scopeMetaExpression(opts.ScopeSelector), &scopeMeta))
 		}
+	}
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		return nil, err
+	}
 
-		if err := chromedp.Run(targetCtx, actions...); err != nil {
-			return nil, err
-		}
+	tree, err := parseTreeJSON(treeJSON)
+	if err != nil {
+		return nil, err
+	}
 
-		tree, err := parseTreeJSON(treeJSON)
-		if err != nil {
-			return nil, err
+	meta := map[string]string{
+		"devtools_url":   devtoolsURL,
+		"page_target_id": targetInfo.ID,
+		"loader_id":      loaderID,
+	}
+	if viewportMeta["width"] > 0 {
+		meta["viewport_width"] = strconv.Itoa(viewportMeta["width"])
+	}
+	if viewportMeta["height"] > 0 {
+		meta["viewport_height"] = strconv.Itoa(viewportMeta["height"])
+	}
+	meta["scroll_x"] = strconv.Itoa(viewportMeta["scroll_x"])
+	meta["scroll_y"] = strconv.Itoa(viewportMeta["scroll_y"])
+	for key, value := range scopeMeta {
+		if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			continue
 		}
+		meta[key] = strings.TrimSpace(value)
+	}
 
-		meta := map[string]string{
-			"devtools_url":   devtoolsURL,
-			"page_target_id": targetInfo.ID,
-		}
-		if viewportMeta["width"] > 0 {
-			meta["viewport_width"] = strconv.Itoa(viewportMeta["width"])
-		}
-		if viewportMeta["height"] > 0 {
-			meta["viewport_height"] = strconv.Itoa(viewportMeta["height"])
-		}
-		for key, value := range scopeMeta {
-			if strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-				continue
-			}
-			meta[key] = strings.TrimSpace(value)
-		}
-
-		return &api.Observation{
-			URLOrScreen: currentURL,
-			Title:       title,
-			Text:        strings.TrimSpace(text),
-			Tree:        tree,
-			Screenshot:  base64.StdEncoding.EncodeToString(screenshot),
-			Meta:        meta,
-		}, nil
-	}, allocatorOptions...)
-}
-
-func NavigateViaCDP(ctx context.Context, devtoolsURL string, navigateURL string, allocatorOptions ...chromedp.RemoteAllocatorOption) error {
-	_, err := withTargetContext(ctx, devtoolsURL, "", func(targetCtx context.Context) (struct{}, error) {
-		return struct{}{}, chromedp.Run(targetCtx, chromedp.Navigate(navigateURL))
-	}, allocatorOptions...)
-	return err
+	return &api.Observation{
+		URLOrScreen: currentURL,
+		Title:       title,
+		Text:        strings.TrimSpace(text),
+		Tree:        tree,
+		Meta:        meta,
+	}, nil
 }
 
 func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts api.ObserveOptions) (*api.Observation, error) {
-	return ObserveViaCDP(ctx, devtoolsURL, opts)
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.Observation, error) {
+		if opts.WithScreenshot {
+			if err := b.javascriptDialogError(); err != nil {
+				return nil, err
+			}
+		}
+		if strings.TrimSpace(opts.WithinRef) != "" {
+			selector, err := b.resolveNodeReferenceInContext(targetCtx, opts.WithinRef)
+			if err != nil {
+				return nil, err
+			}
+			opts.ScopeSelector = selector
+		}
+
+		startedAt := time.Now()
+		observation, err := observeTarget(targetCtx, devtoolsURL, targetInfo, opts)
+		if err != nil {
+			return nil, err
+		}
+		observation.Meta["observe_duration_ms"] = strconv.FormatInt(time.Since(startedAt).Milliseconds(), 10)
+		if !opts.WithScreenshot {
+			if opts.WithTree {
+				b.storeObservationReferences(observation)
+			}
+			return observation, nil
+		}
+
+		screenshot, screenshotMeta, err := b.captureScreenshot(ctx, targetCtx, targetInfo, observation, opts)
+		if err != nil {
+			return nil, err
+		}
+		observation.ScreenshotData = screenshot
+		for key, value := range screenshotMeta {
+			observation.Meta[key] = value
+		}
+		if screenshotMeta["screenshot_recovery"] == "target_replaced" {
+			recoveredCtx, recoveredTarget, release, err := b.pageTargetContext(ctx, devtoolsURL)
+			if err != nil {
+				return nil, err
+			}
+			recoveredObservation, err := observeTarget(recoveredCtx, devtoolsURL, recoveredTarget, opts)
+			release()
+			if err != nil {
+				return nil, err
+			}
+			recoveredObservation.ScreenshotData = screenshot
+			for key, value := range screenshotMeta {
+				recoveredObservation.Meta[key] = value
+			}
+			observation = recoveredObservation
+		}
+		if opts.WithTree {
+			b.storeObservationReferences(observation)
+		}
+		return observation, nil
+	})
 }
+
+func (b *Backend) storeObservationReferences(observation *api.Observation) {
+	references := make(map[int]nodeReference, len(observation.Tree))
+	for _, node := range observation.Tree {
+		if node.ID <= 0 || strings.TrimSpace(node.Selector) == "" {
+			continue
+		}
+		references[node.ID] = nodeReference{
+			Selector: node.Selector,
+			Identity: stableNodeIdentity(node),
+		}
+	}
+	b.refLoaderID = strings.TrimSpace(observation.Meta["loader_id"])
+	b.refURL = strings.TrimSpace(observation.URLOrScreen)
+	b.refs = references
+}
+
+func (b *Backend) clearObservationReferences() {
+	b.refLoaderID = ""
+	b.refURL = ""
+	b.refs = nil
+	b.persistentContextID = 0
+	b.persistentLoaderID = ""
+	b.persistentWorldName = ""
+}
+
+func stableNodeIdentity(node api.Node) string {
+	return strings.Join([]string{
+		strings.TrimSpace(node.Attrs["tag"]),
+		strings.TrimSpace(node.Role),
+		strings.TrimSpace(node.Attrs["id"]),
+		strings.TrimSpace(node.Attrs["name"]),
+		strings.TrimSpace(node.Attrs["data-testid"]),
+		strings.TrimSpace(node.Attrs["data-test"]),
+		strings.TrimSpace(node.Attrs["aria-label"]),
+		strings.TrimSpace(node.Attrs["href"]),
+		strings.TrimSpace(node.Attrs["placeholder"]),
+	}, "|")
+}
+
+func (b *Backend) resolveNodeReference(ctx context.Context, devtoolsURL string, nodeRef string) (string, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, _ pageTargetInfo) (string, error) {
+		return b.resolveNodeReferenceInContext(targetCtx, nodeRef)
+	})
+}
+
+func (b *Backend) resolveNodeReferenceInContext(ctx context.Context, nodeRef string) (string, error) {
+	nodeID, err := parseNodeReference(nodeRef)
+	if err != nil {
+		return "", err
+	}
+	reference, ok := b.refs[nodeID]
+	if !ok || strings.TrimSpace(b.refLoaderID) == "" {
+		return "", fmt.Errorf("stale node ref %s: run nxctl state or find again", nodeRef)
+	}
+
+	var loaderID string
+	var currentURL string
+	var identity string
+	if err := chromedp.Run(
+		ctx,
+		chromedp.ActionFunc(func(runCtx context.Context) error {
+			frameTree, err := page.GetFrameTree().Do(runCtx)
+			if err != nil {
+				return err
+			}
+			if frameTree != nil && frameTree.Frame != nil {
+				loaderID = string(frameTree.Frame.LoaderID)
+			}
+			return nil
+		}),
+		chromedp.Location(&currentURL),
+		chromedp.Evaluate(nodeIdentityExpression(reference.Selector), &identity),
+	); err != nil {
+		return "", err
+	}
+	if loaderID == "" || loaderID != b.refLoaderID {
+		return "", fmt.Errorf("stale node ref %s: page navigated; run nxctl state or find again", nodeRef)
+	}
+	if strings.TrimSpace(currentURL) != b.refURL {
+		return "", fmt.Errorf("stale node ref %s: page URL changed; run nxctl state or find again", nodeRef)
+	}
+	if identity == "" || identity != reference.Identity {
+		return "", fmt.Errorf("stale node ref %s: referenced node changed; run nxctl state or find again", nodeRef)
+	}
+	return reference.Selector, nil
+}
+
+func parseNodeReference(nodeRef string) (int, error) {
+	value := strings.TrimSpace(nodeRef)
+	if !strings.HasPrefix(value, "@e") {
+		return 0, fmt.Errorf("invalid node ref: %s", nodeRef)
+	}
+	nodeID, err := strconv.Atoi(strings.TrimPrefix(value, "@e"))
+	if err != nil || nodeID <= 0 {
+		return 0, fmt.Errorf("invalid node ref: %s", nodeRef)
+	}
+	return nodeID, nil
+}
+
+func nodeIdentityExpression(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) return '';
+  const roleFor = (element) => {
+    const ariaRole = (element.getAttribute('role') || '').trim();
+    if (ariaRole) return ariaRole;
+    const tag = element.tagName.toLowerCase();
+    if (tag === 'a') return 'link';
+    if (tag === 'button') return 'button';
+    if (tag === 'textarea') return 'textbox';
+    if (tag === 'select') return 'combobox';
+    if (tag === 'summary') return 'button';
+    if (tag === 'input') {
+      const type = (element.getAttribute('type') || 'text').toLowerCase();
+      if (type === 'checkbox') return 'checkbox';
+      if (type === 'radio') return 'radio';
+      if (type === 'submit' || type === 'button' || type === 'reset') return 'button';
+      return 'textbox';
+    }
+    if (element.isContentEditable) return 'textbox';
+    return tag;
+  };
+  return [
+    el.tagName.toLowerCase(),
+    roleFor(el),
+    (el.getAttribute('id') || '').trim(),
+    (el.getAttribute('name') || '').trim(),
+    (el.getAttribute('data-testid') || '').trim(),
+    (el.getAttribute('data-test') || '').trim(),
+    (el.getAttribute('aria-label') || '').trim(),
+    (el.getAttribute('href') || '').trim(),
+    (el.getAttribute('placeholder') || '').trim()
+  ].join('|');
+})()`
+}
+
+func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx context.Context, targetInfo pageTargetInfo, observation *api.Observation, opts api.ObserveOptions) ([]byte, map[string]string, error) {
+	meta := map[string]string{
+		"screenshot_full": "false",
+	}
+	if opts.FullScreenshot {
+		meta["screenshot_full"] = "true"
+	}
+	if err := b.javascriptDialogError(); err != nil {
+		return nil, nil, err
+	}
+
+	totalStartedAt := time.Now()
+	attemptCtx, cancel := screenshotAttemptContext(targetCtx)
+	attemptStartedAt := time.Now()
+	data, width, height, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+	cancel()
+	b.logScreenshotAttempt(targetInfo.ID, "capture", 1, attemptStartedAt, data, lastErr)
+	if lastErr == nil {
+		return screenshotResult(data, width, height, 1, totalStartedAt, meta)
+	}
+	if errors.Is(lastErr, errFullScreenshotTooLarge) {
+		return nil, nil, lastErr
+	}
+	if requestCtx.Err() != nil {
+		return nil, nil, requestCtx.Err()
+	}
+	if err := b.javascriptDialogError(); err != nil {
+		return nil, nil, err
+	}
+
+	reattachStartedAt := time.Now()
+	reattachedCtx, reattachedTarget, releaseReattached, reattachErr := b.reattachPageTarget(requestCtx, targetInfo)
+	b.appendLog(fmt.Sprintf(
+		"nexus screenshot target=%s phase=reattach duration_ms=%d error=%q",
+		targetInfo.ID,
+		time.Since(reattachStartedAt).Milliseconds(),
+		errorMessage(reattachErr),
+	))
+	if reattachErr == nil {
+		defer releaseReattached()
+		targetCtx = reattachedCtx
+		targetInfo = reattachedTarget
+		meta["screenshot_recovery"] = "target_reattached"
+
+		attemptCtx, cancel = screenshotAttemptContext(targetCtx)
+		attemptStartedAt = time.Now()
+		data, width, height, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+		cancel()
+		b.logScreenshotAttempt(targetInfo.ID, "capture", 2, attemptStartedAt, data, lastErr)
+		if lastErr == nil {
+			return screenshotResult(data, width, height, 2, totalStartedAt, meta)
+		}
+		if errors.Is(lastErr, errFullScreenshotTooLarge) {
+			return nil, nil, lastErr
+		}
+		if requestCtx.Err() != nil {
+			return nil, nil, requestCtx.Err()
+		}
+		if err := b.javascriptDialogError(); err != nil {
+			return nil, nil, err
+		}
+	} else {
+		lastErr = fmt.Errorf("capture failed and target reattach failed: %w", reattachErr)
+	}
+
+	if !opts.RecoverScreenshot {
+		return nil, nil, fmt.Errorf("capture screenshot failed after automatic target reattach on target %s: %w", targetInfo.ID, lastErr)
+	}
+
+	recoveryStartedAt := time.Now()
+	recoveryCtx, recoveredTarget, release, err := b.replacePageTarget(
+		requestCtx,
+		targetCtx,
+		observation.URLOrScreen,
+		parseMetaInt(observation.Meta, "viewport_width"),
+		parseMetaInt(observation.Meta, "viewport_height"),
+		parseMetaInt(observation.Meta, "scroll_x"),
+		parseMetaInt(observation.Meta, "scroll_y"),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("capture screenshot failed and target recovery failed: %w", err)
+	}
+	defer release()
+
+	attemptCtx, cancel = screenshotAttemptContext(recoveryCtx)
+	data, width, height, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+	cancel()
+	b.appendLog(fmt.Sprintf(
+		"nexus screenshot target=%s phase=recovery duration_ms=%d bytes=%d error=%q",
+		recoveredTarget.ID,
+		time.Since(recoveryStartedAt).Milliseconds(),
+		len(data),
+		errorMessage(err),
+	))
+	if err != nil {
+		return nil, nil, fmt.Errorf("capture screenshot failed after replacing target %s with %s: %w", targetInfo.ID, recoveredTarget.ID, err)
+	}
+
+	meta["page_target_id"] = recoveredTarget.ID
+	meta["screenshot_recovery"] = "target_replaced"
+	meta["screenshot_recovery_warning"] = "the unresponsive tab was replaced and transient page state was lost"
+	return screenshotResult(data, width, height, 3, totalStartedAt, meta)
+}
+
+func (b *Backend) logScreenshotAttempt(targetID string, phase string, attempt int, startedAt time.Time, data []byte, err error) {
+	b.appendLog(fmt.Sprintf(
+		"nexus screenshot target=%s phase=%s attempt=%d duration_ms=%d bytes=%d error=%q",
+		targetID,
+		phase,
+		attempt,
+		time.Since(startedAt).Milliseconds(),
+		len(data),
+		errorMessage(err),
+	))
+}
+
+func screenshotResult(data []byte, width int64, height int64, attempts int, startedAt time.Time, meta map[string]string) ([]byte, map[string]string, error) {
+	meta["screenshot_attempts"] = strconv.Itoa(attempts)
+	meta["screenshot_duration_ms"] = strconv.FormatInt(time.Since(startedAt).Milliseconds(), 10)
+	if width > 0 {
+		meta["screenshot_width"] = strconv.FormatInt(width, 10)
+	}
+	if height > 0 {
+		meta["screenshot_height"] = strconv.FormatInt(height, 10)
+	}
+	return data, meta, nil
+}
+
+func captureScreenshotOnce(ctx context.Context, full bool) ([]byte, int64, int64, error) {
+	var data []byte
+	var width int64
+	var height int64
+	actions := []chromedp.Action{
+		chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise),
+	}
+	if full {
+		actions = append(actions, chromedp.ActionFunc(func(runCtx context.Context) error {
+			_, _, _, _, _, contentSize, err := page.GetLayoutMetrics().Do(runCtx)
+			if err != nil {
+				return err
+			}
+			if contentSize == nil {
+				return errors.New("full screenshot content size is unavailable")
+			}
+			width = int64(contentSize.Width + 0.999999)
+			height = int64(contentSize.Height + 0.999999)
+			if err := validateFullScreenshotSize(width, height); err != nil {
+				return err
+			}
+			return nil
+		}))
+		actions = append(actions, chromedp.FullScreenshot(&data, 100))
+	} else {
+		actions = append(actions, chromedp.CaptureScreenshot(&data))
+	}
+	if err := chromedp.Run(ctx, actions...); err != nil {
+		return nil, width, height, err
+	}
+	return data, width, height, nil
+}
+
+func validateFullScreenshotSize(width int64, height int64) error {
+	if width <= 0 || height <= 0 {
+		return fmt.Errorf("invalid full screenshot dimensions: %dx%d", width, height)
+	}
+	if width > maxFullScreenshotWidth || height > maxFullScreenshotHeight {
+		return fmt.Errorf(
+			"%w: page is %dx%d, dimension limits are %dx%d",
+			errFullScreenshotTooLarge,
+			width,
+			height,
+			maxFullScreenshotWidth,
+			maxFullScreenshotHeight,
+		)
+	}
+	pixels := width * height
+	if pixels <= maxFullScreenshotPixels {
+		return nil
+	}
+	return fmt.Errorf(
+		"%w: page is %dx%d (%d pixels), pixel limit is %d",
+		errFullScreenshotTooLarge,
+		width,
+		height,
+		pixels,
+		maxFullScreenshotPixels,
+	)
+}
+
+func screenshotAttemptContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := screenshotAttemptTimeout
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo pageTargetInfo) (context.Context, pageTargetInfo, func(), error) {
+	b.mu.Lock()
+	runCtx := b.runCtx
+	devtoolsURL := b.devtoolsURL
+	alreadyReattached := len(b.staleContexts) > 0
+	b.mu.Unlock()
+	if runCtx == nil {
+		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
+	}
+	if alreadyReattached {
+		return nil, pageTargetInfo{}, nil, errors.New("target was already reattached once; use recover-target to replace it")
+	}
+	if err := b.activatePageTargetBeforeAttach(requestCtx, devtoolsURL, targetInfo.ID); err != nil {
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
+	persistentTargetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
+	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
+		b.trackDialogEvent(targetInfo.ID, event)
+	})
+	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
+	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
+		release()
+		b.mu.Lock()
+		b.staleContexts = append(b.staleContexts, remoteContext{
+			targetCancel: targetCancel,
+			allocCancel:  allocCancel,
+		})
+		b.mu.Unlock()
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	b.mu.Lock()
+	if b.targetInfo.ID != targetInfo.ID {
+		b.staleContexts = append(b.staleContexts, remoteContext{
+			targetCancel: targetCancel,
+			allocCancel:  allocCancel,
+		})
+		b.mu.Unlock()
+		release()
+		return nil, pageTargetInfo{}, nil, errors.New("page target changed during reattach")
+	}
+	b.staleContexts = append(b.staleContexts, remoteContext{
+		targetCancel: b.targetCancel,
+		allocCancel:  b.allocCancel,
+	})
+	b.allocCtx = allocCtx
+	b.allocCancel = allocCancel
+	b.targetCtx = persistentTargetCtx
+	b.targetCancel = targetCancel
+	b.targetInfo = targetInfo
+	b.persistentContextID = 0
+	b.persistentLoaderID = ""
+	b.persistentWorldName = ""
+	b.mu.Unlock()
+
+	return operationCtx, targetInfo, release, nil
+}
+
+func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx context.Context, currentURL string, viewportWidth int, viewportHeight int, scrollX int, scrollY int) (context.Context, pageTargetInfo, func(), error) {
+	var newTargetID target.ID
+	createCtx, createCancel := screenshotAttemptContext(currentTargetCtx)
+	err := chromedp.Run(createCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		chromedpContext := chromedp.FromContext(runCtx)
+		if chromedpContext == nil || chromedpContext.Browser == nil {
+			return errors.New("chromium browser context is unavailable")
+		}
+		var err error
+		newTargetID, err = target.CreateTarget("about:blank").Do(cdp.WithExecutor(runCtx, chromedpContext.Browser))
+		return err
+	}))
+	createCancel()
+	if err != nil {
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	b.mu.Lock()
+	runCtx := b.runCtx
+	devtoolsURL := b.devtoolsURL
+	oldTargetCancel := b.targetCancel
+	oldAllocCancel := b.allocCancel
+	staleContexts := append([]remoteContext(nil), b.staleContexts...)
+	b.mu.Unlock()
+	if runCtx == nil {
+		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
+	}
+
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
+	persistentTargetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(newTargetID))
+	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
+		b.trackDialogEvent(string(newTargetID), event)
+	})
+	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
+
+	actions := []chromedp.Action{
+		chromedp.ActionFunc(func(runCtx context.Context) error {
+			chromedpContext := chromedp.FromContext(runCtx)
+			if chromedpContext == nil || chromedpContext.Browser == nil {
+				return errors.New("chromium browser context is unavailable")
+			}
+			if !b.activateBeforeOp {
+				return nil
+			}
+			return target.ActivateTarget(newTargetID).Do(cdp.WithExecutor(runCtx, chromedpContext.Browser))
+		}),
+	}
+	if viewportWidth > 0 && viewportHeight > 0 {
+		actions = append(actions, chromedp.EmulateViewport(int64(viewportWidth), int64(viewportHeight)))
+	}
+	if strings.TrimSpace(currentURL) != "" {
+		actions = append(actions, chromedp.Navigate(currentURL))
+	}
+	actions = append(actions, chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise))
+	if scrollX != 0 || scrollY != 0 {
+		actions = append(actions, chromedp.Evaluate(fmt.Sprintf("window.scrollTo(%d, %d)", scrollX, scrollY), nil))
+	}
+	if err := chromedp.Run(operationCtx, actions...); err != nil {
+		release()
+		targetCancel()
+		allocCancel()
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	targetInfo := pageTargetInfo{
+		ID:   string(newTargetID),
+		Type: "page",
+		URL:  currentURL,
+	}
+	b.mu.Lock()
+	b.allocCtx = allocCtx
+	b.allocCancel = allocCancel
+	b.targetCtx = persistentTargetCtx
+	b.targetCancel = targetCancel
+	b.targetInfo = targetInfo
+	b.staleContexts = nil
+	b.clearObservationReferences()
+	b.dialogOpen = false
+	b.dialogType = ""
+	b.dialogMessage = ""
+	b.mu.Unlock()
+
+	if oldTargetCancel != nil {
+		oldTargetCancel()
+	}
+	if oldAllocCancel != nil {
+		oldAllocCancel()
+	}
+	cancelRemoteContexts(staleContexts)
+
+	return operationCtx, targetInfo, release, nil
+}
+
+func parseMetaInt(meta map[string]string, key string) int {
+	value, _ := strconv.Atoi(strings.TrimSpace(meta[key]))
+	return value
+}
+
+func errorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+const paintBarrierExpression = `(async () => {
+  if (document.readyState === 'loading') {
+    await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
+  }
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return document.readyState;
+})()`
+
+const hydrationBarrierExpression = `(async () => {
+  if (document.readyState === 'loading') {
+    await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
+  }
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await new Promise((resolve) => {
+    let timer;
+    const observer = new MutationObserver(() => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        observer.disconnect();
+        resolve();
+      }, 100);
+    });
+    observer.observe(document, {subtree: true, childList: true, attributes: true, characterData: true});
+    timer = setTimeout(() => {
+      observer.disconnect();
+      resolve();
+    }, 100);
+  });
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  return document.readyState;
+})()`
 
 func (b *Backend) evalViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
 	if strings.TrimSpace(action.Text) == "" {
 		return nil, errors.New("eval script is required")
 	}
+	world := "main"
+	if action.Args != nil && strings.TrimSpace(action.Args["world"]) != "" {
+		world = strings.TrimSpace(action.Args["world"])
+	}
+	if world != "main" && world != "persistent" {
+		return nil, errors.New("eval world must be main or persistent")
+	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var value interface{}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(evalExpression(action.Text), &value, chromedp.EvalAsValue, awaitPromise)); err != nil {
+		evaluateOptions := []chromedp.EvaluateOption{chromedp.EvalAsValue, awaitPromise}
+		if world == "persistent" {
+			contextID, err := b.persistentEvalContext(targetCtx)
+			if err != nil {
+				return nil, err
+			}
+			evaluateOptions = append(evaluateOptions, evalInContext(contextID))
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(evalExpression(action.Text), &value, evaluateOptions...)); err != nil {
 			return nil, err
 		}
 
@@ -1571,9 +2504,48 @@ func (b *Backend) evalViaCDP(ctx context.Context, devtoolsURL string, action api
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,
 				"page_target_id": targetInfo.ID,
+				"eval_world":     world,
 			},
 		}, nil
 	})
+}
+
+func (b *Backend) persistentEvalContext(ctx context.Context) (runtime.ExecutionContextID, error) {
+	var contextID runtime.ExecutionContextID
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		frameTree, err := page.GetFrameTree().Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if frameTree == nil || frameTree.Frame == nil {
+			return errors.New("main frame is unavailable")
+		}
+		loaderID := string(frameTree.Frame.LoaderID)
+		if b.persistentContextID != 0 && loaderID != "" && loaderID == b.persistentLoaderID {
+			contextID = b.persistentContextID
+			return nil
+		}
+
+		if b.persistentWorldName == "" {
+			b.persistentWorldName = fmt.Sprintf("nexus-persistent-%d", time.Now().UnixNano())
+		}
+		contextID, err = page.CreateIsolatedWorld(frameTree.Frame.ID).
+			WithWorldName(b.persistentWorldName).
+			Do(runCtx)
+		if err != nil {
+			return err
+		}
+		b.persistentContextID = contextID
+		b.persistentLoaderID = loaderID
+		return nil
+	}))
+	return contextID, err
+}
+
+func evalInContext(contextID runtime.ExecutionContextID) chromedp.EvaluateOption {
+	return func(params *runtime.EvaluateParams) *runtime.EvaluateParams {
+		return params.WithContextID(contextID)
+	}
 }
 
 func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
@@ -1590,7 +2562,7 @@ func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action
 		return nil, errors.New("viewport height must be a positive integer")
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		if err := chromedp.Run(targetCtx, chromedp.EmulateViewport(int64(width), int64(height))); err != nil {
 			return nil, err
 		}
@@ -1612,12 +2584,17 @@ func (b *Backend) viewportViaCDP(ctx context.Context, devtoolsURL string, action
 }
 
 func (b *Backend) invokeViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var (
 			message string
 			value   map[string]interface{}
 		)
 		switch {
+		case strings.TrimSpace(action.Selector) != "":
+			if err := chromedp.Run(targetCtx, chromedp.Evaluate(clickSelectorExpression(action.Selector), &value, chromedp.EvalAsValue)); err != nil {
+				return nil, err
+			}
+			message = fmt.Sprintf("clicked %s", action.Selector)
 		case action.NodeID != nil:
 			if *action.NodeID <= 0 {
 				return nil, errors.New("invoke node_id must be positive")
@@ -1665,9 +2642,13 @@ func (b *Backend) mouseNodeViaCDP(ctx context.Context, devtoolsURL string, actio
 		return nil, fmt.Errorf("%s requires a positive index", kind)
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var point nodePoint
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(nodePointExpression(*action.NodeID), &point, chromedp.EvalAsValue)); err != nil {
+		pointExpression := nodePointExpression(*action.NodeID)
+		if strings.TrimSpace(action.Selector) != "" {
+			pointExpression = nodePointSelectorExpression(action.Selector)
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(pointExpression, &point, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
 
@@ -1710,12 +2691,32 @@ func (b *Backend) mouseNodeViaCDP(ctx context.Context, devtoolsURL string, actio
 	})
 }
 
+func dispatchKeyEventsWithProbe(ctx context.Context, action chromedp.Action) (int, bool, error) {
+	token := fmt.Sprintf("nexus-key-probe-%d", time.Now().UnixNano())
+	if err := chromedp.Run(ctx, chromedp.Evaluate(installKeyProbeExpression(token), nil)); err != nil {
+		return 0, false, err
+	}
+	if err := chromedp.Run(ctx, action); err != nil {
+		_ = chromedp.Run(ctx, chromedp.Evaluate(finishKeyProbeExpression(token), nil))
+		return 0, false, err
+	}
+
+	var count int
+	if err := chromedp.Run(ctx, chromedp.Evaluate(finishKeyProbeExpression(token), &count)); err != nil {
+		return 0, false, nil
+	}
+	if count < 0 {
+		return 0, false, nil
+	}
+	return count, true, nil
+}
+
 func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
 	if strings.TrimSpace(action.Text) == "" {
 		return nil, errors.New("type text is required")
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var nodeID int
 		if action.NodeID != nil {
 			nodeID = *action.NodeID
@@ -1731,7 +2732,11 @@ func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api
 
 		token := fmt.Sprintf("nexus-type-%d", time.Now().UnixNano())
 		var targetValue typeTarget
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(markTypeTargetExpression(nodeID, token), &targetValue, chromedp.EvalAsValue)); err != nil {
+		markExpression := markTypeTargetExpression(nodeID, token)
+		if strings.TrimSpace(action.Selector) != "" {
+			markExpression = markTypeTargetSelectorExpression(action.Selector, token)
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(markExpression, &targetValue, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
 		defer func() {
@@ -1743,18 +2748,31 @@ func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api
 			"tag":  targetValue.Tag,
 			"text": action.Text,
 		}
-		if err := chromedp.Run(targetCtx, chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery)); err == nil {
-			value["method"] = "key_events"
-		} else {
-			var fallback map[string]interface{}
-			if fallbackErr := chromedp.Run(targetCtx, chromedp.Evaluate(typeExpression(nodeID, action.Text), &fallback, chromedp.EvalAsValue)); fallbackErr != nil {
+		keydownCount, verified, err := dispatchKeyEventsWithProbe(
+			targetCtx,
+			chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery),
+		)
+		if err != nil {
+			return nil, err
+		}
+		if verified && keydownCount == 0 {
+			if err := b.activatePageTarget(targetCtx, targetInfo.ID); err != nil {
 				return nil, err
 			}
-			for key, v := range fallback {
-				value[key] = v
+			keydownCount, verified, err = dispatchKeyEventsWithProbe(
+				targetCtx,
+				chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery),
+			)
+			if err != nil {
+				return nil, err
 			}
-			value["method"] = "dom_set"
+			if verified && keydownCount == 0 {
+				return nil, errors.New("type key events were not delivered to the page")
+			}
 		}
+		value["method"] = "key_events"
+		value["keydown_events"] = keydownCount
+		value["delivery_verified"] = verified
 
 		return &api.ActionResult{
 			OK:      true,
@@ -1777,12 +2795,16 @@ func (b *Backend) fillViaCDP(ctx context.Context, devtoolsURL string, action api
 		return nil, errors.New("fill text is required")
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var value map[string]interface{}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(typeExpression(*action.NodeID, action.Text), &value, chromedp.EvalAsValue)); err != nil {
+		expression := typeExpression(*action.NodeID, action.Text)
+		if strings.TrimSpace(action.Selector) != "" {
+			expression = typeSelectorExpression(action.Selector, action.Text)
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(expression, &value, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
-		value["method"] = "dom_set"
+		value["method"] = "native_value_setter"
 
 		return &api.ActionResult{
 			OK:      true,
@@ -1808,15 +2830,33 @@ func (b *Backend) keyViaCDP(ctx context.Context, devtoolsURL string, action api.
 		return nil, err
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
-		if err := chromedp.Run(targetCtx, chromedp.KeyEvent(keyValue, chromedp.KeyModifiers(modifiers...))); err != nil {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+		keyAction := chromedp.KeyEvent(keyValue, chromedp.KeyModifiers(modifiers...))
+		keydownCount, verified, err := dispatchKeyEventsWithProbe(targetCtx, keyAction)
+		if err != nil {
 			return nil, err
+		}
+		if verified && keydownCount == 0 {
+			if err := b.activatePageTarget(targetCtx, targetInfo.ID); err != nil {
+				return nil, err
+			}
+			keydownCount, verified, err = dispatchKeyEventsWithProbe(targetCtx, keyAction)
+			if err != nil {
+				return nil, err
+			}
+			if verified && keydownCount == 0 {
+				return nil, errors.New("key event was not delivered to the page")
+			}
 		}
 
 		return &api.ActionResult{
 			OK:      true,
 			Changed: true,
 			Message: fmt.Sprintf("sent keys %s", keySpec),
+			Value: map[string]interface{}{
+				"keydown_events":    keydownCount,
+				"delivery_verified": verified,
+			},
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,
 				"page_target_id": targetInfo.ID,
@@ -1831,10 +2871,11 @@ func (b *Backend) navigateViaCDP(ctx context.Context, devtoolsURL string, action
 	}
 
 	navigateURL := strings.TrimSpace(action.Args["url"])
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		if err := chromedp.Run(targetCtx, chromedp.Navigate(navigateURL)); err != nil {
 			return nil, err
 		}
+		b.clearObservationReferences()
 
 		return &api.ActionResult{
 			OK:      true,
@@ -1852,10 +2893,11 @@ func (b *Backend) navigateViaCDP(ctx context.Context, devtoolsURL string, action
 }
 
 func (b *Backend) backViaCDP(ctx context.Context, devtoolsURL string) (*api.ActionResult, error) {
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		if err := chromedp.Run(targetCtx, chromedp.Evaluate(`history.back()`, nil)); err != nil {
 			return nil, err
 		}
+		b.clearObservationReferences()
 
 		return &api.ActionResult{
 			OK:      true,
@@ -1875,7 +2917,7 @@ func (b *Backend) getViaCDP(ctx context.Context, devtoolsURL string, action api.
 	}
 
 	targetKind := strings.TrimSpace(action.Args["target"])
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var value interface{}
 		switch targetKind {
 		case "title":
@@ -1898,16 +2940,28 @@ func (b *Backend) getViaCDP(ctx context.Context, devtoolsURL string, action api.
 			}
 			value = html
 		case "text", "value", "attributes":
-			if action.NodeID == nil || *action.NodeID <= 0 {
+			if strings.TrimSpace(action.Selector) != "" {
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getSelectorNodeExpression(targetKind, action.Selector), &value, chromedp.EvalAsValue)); err != nil {
+					return nil, err
+				}
+			} else if action.NodeID == nil || *action.NodeID <= 0 {
 				return nil, fmt.Errorf("get %s requires a positive index", targetKind)
-			}
-			if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
-				return nil, err
+			} else {
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getNodeExpression(targetKind, *action.NodeID), &value, chromedp.EvalAsValue)); err != nil {
+					return nil, err
+				}
 			}
 		case "bbox":
 			selector := strings.TrimSpace(action.Args["selector"])
+			if selector == "" {
+				selector = strings.TrimSpace(action.Selector)
+			}
 			if selector != "" {
-				if err := chromedp.Run(targetCtx, chromedp.Evaluate(getBBoxExpression(selector), &value, chromedp.EvalAsValue)); err != nil {
+				expression := getBBoxExpression(selector)
+				if action.Args["scroll_into_view"] == "true" {
+					expression = getFocusedBBoxExpression(selector)
+				}
+				if err := chromedp.Run(targetCtx, chromedp.Evaluate(expression, &value, chromedp.EvalAsValue)); err != nil {
 					return nil, err
 				}
 			} else {
@@ -1943,9 +2997,13 @@ func (b *Backend) selectViaCDP(ctx context.Context, devtoolsURL string, action a
 		return nil, errors.New("select value is required")
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var value map[string]interface{}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(selectExpression(*action.NodeID, action.Text), &value, chromedp.EvalAsValue)); err != nil {
+		expression := selectExpression(*action.NodeID, action.Text)
+		if strings.TrimSpace(action.Selector) != "" {
+			expression = selectSelectorExpression(action.Selector, action.Text)
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(expression, &value, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
 
@@ -1963,23 +3021,43 @@ func (b *Backend) selectViaCDP(ctx context.Context, devtoolsURL string, action a
 }
 
 func (b *Backend) uploadViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
-	if action.NodeID == nil || *action.NodeID <= 0 {
+	selector := strings.TrimSpace(action.Selector)
+	if selector == "" && (action.NodeID == nil || *action.NodeID <= 0) {
 		return nil, errors.New("upload requires a positive index")
 	}
 	if strings.TrimSpace(action.Text) == "" {
 		return nil, errors.New("upload path is required")
 	}
-	if _, err := os.Stat(action.Text); err != nil {
+	uploadPath, err := filepath.Abs(action.Text)
+	if err != nil {
 		return nil, err
 	}
+	info, err := os.Stat(uploadPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("upload path must be a regular file")
+	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		token := fmt.Sprintf("nexus-upload-%d", time.Now().UnixNano())
+		defer func() {
+			_ = chromedp.Run(targetCtx, chromedp.Evaluate(clearMarkedUploadExpression(token), nil))
+		}()
 		var marked map[string]interface{}
+		markExpression := ""
+		targetLabel := selector
+		if selector != "" {
+			markExpression = markUploadSelectorExpression(selector, token)
+		} else {
+			markExpression = markUploadNodeExpression(*action.NodeID, token)
+			targetLabel = strconv.Itoa(*action.NodeID)
+		}
 		if err := chromedp.Run(
 			targetCtx,
-			chromedp.Evaluate(markUploadNodeExpression(*action.NodeID, token), &marked, chromedp.EvalAsValue),
-			chromedp.SetUploadFiles(`[data-nexus-upload="`+token+`"]`, []string{action.Text}, chromedp.ByQuery),
+			chromedp.Evaluate(markExpression, &marked, chromedp.EvalAsValue),
+			chromedp.SetUploadFiles(`[data-nexus-upload="`+token+`"]`, []string{uploadPath}, chromedp.ByQuery),
 		); err != nil {
 			return nil, err
 		}
@@ -1987,7 +3065,7 @@ func (b *Backend) uploadViaCDP(ctx context.Context, devtoolsURL string, action a
 		return &api.ActionResult{
 			OK:      true,
 			Changed: true,
-			Message: fmt.Sprintf("uploaded %s to %d", action.Text, *action.NodeID),
+			Message: fmt.Sprintf("uploaded %s to %s", action.Text, targetLabel),
 			Value:   marked,
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,
@@ -2019,9 +3097,13 @@ func (b *Backend) scrollViaCDP(ctx context.Context, devtoolsURL string, action a
 		amount = parsed
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var value map[string]interface{}
-		if err := chromedp.Run(targetCtx, chromedp.Evaluate(scrollExpression(nodeID, action.Dir, amount), &value, chromedp.EvalAsValue)); err != nil {
+		expression := scrollExpression(nodeID, action.Dir, amount)
+		if strings.TrimSpace(action.Selector) != "" {
+			expression = scrollSelectorExpression(action.Selector, action.Dir, amount)
+		}
+		if err := chromedp.Run(targetCtx, chromedp.Evaluate(expression, &value, chromedp.EvalAsValue)); err != nil {
 			return nil, err
 		}
 
@@ -2058,7 +3140,7 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 		timeout = time.Duration(ms) * time.Millisecond
 	}
 
-	return withPageTargetContext(ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
+	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		var (
 			expression string
 			waitErr    error
@@ -2089,6 +3171,8 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 			expression = waitURLExpression(value)
 		case "navigation":
 			waitErr = waitForNavigation(targetCtx, timeout)
+		case "hydrated":
+			waitErr = waitForHydration(targetCtx, timeout)
 		case "function":
 			if value == "" {
 				return nil, errors.New("wait function value is required")
@@ -2115,6 +3199,12 @@ func (b *Backend) waitViaCDP(ctx context.Context, devtoolsURL string, action api
 			},
 		}, nil
 	})
+}
+
+func waitForHydration(ctx context.Context, timeout time.Duration) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return chromedp.Run(waitCtx, chromedp.Evaluate(hydrationBarrierExpression, nil, awaitPromise))
 }
 
 func waitForNavigation(ctx context.Context, timeout time.Duration) error {
@@ -2200,13 +3290,77 @@ func nodePointExpression(nodeID int) string {
 	return strings.ReplaceAll(nodePointJS, "$NODE_ID$", strconv.Itoa(nodeID))
 }
 
+func clickSelectorExpression(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  if (el.disabled || el.getAttribute('aria-disabled') === 'true') throw new Error('node is disabled');
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  el.focus();
+  el.click();
+  return {
+    id: null,
+    tag: el.tagName.toLowerCase(),
+    text: (el.innerText || el.textContent || '').trim()
+  };
+})()`
+}
+
+func nodePointSelectorExpression(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const rect = el.getBoundingClientRect();
+  return {
+    id: 0,
+    tag: el.tagName.toLowerCase(),
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2
+  };
+})()`
+}
+
 func markTypeTargetExpression(nodeID int, token string) string {
 	script := strings.ReplaceAll(markTypeTargetJS, "$NODE_ID$", strconv.Itoa(nodeID))
 	return strings.ReplaceAll(script, "$TOKEN$", strconv.Quote(token))
 }
 
+func markTypeTargetSelectorExpression(selector string, token string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  const tag = el.tagName.toLowerCase();
+  if (!el.isContentEditable && tag !== 'input' && tag !== 'textarea') throw new Error('node is not editable');
+  if (el.disabled || el.getAttribute('aria-disabled') === 'true') throw new Error('node is disabled');
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  el.focus();
+  if ((tag === 'input' || tag === 'textarea') && typeof el.setSelectionRange === 'function' && typeof el.value === 'string') {
+    try {
+      el.setSelectionRange(el.value.length, el.value.length);
+    } catch (_) {
+    }
+  }
+  const token = ` + strconv.Quote(token) + `;
+  el.setAttribute('data-nexus-type', token);
+  return {
+    id: null,
+    tag,
+    selector: '[data-nexus-type="' + token + '"]'
+  };
+})()`
+}
+
 func clearMarkedTypeTargetExpression(token string) string {
 	return strings.ReplaceAll(clearMarkedTypeTargetJS, "$TOKEN$", strconv.Quote(token))
+}
+
+func installKeyProbeExpression(token string) string {
+	return strings.ReplaceAll(installKeyProbeJS, "$TOKEN$", strconv.Quote(token))
+}
+
+func finishKeyProbeExpression(token string) string {
+	return strings.ReplaceAll(finishKeyProbeJS, "$TOKEN$", strconv.Quote(token))
 }
 
 func typeExpression(nodeID int, text string) string {
@@ -2214,10 +3368,69 @@ func typeExpression(nodeID int, text string) string {
 	return strings.ReplaceAll(script, "$TEXT$", strconv.Quote(text))
 }
 
+func typeSelectorExpression(selector string, text string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  const tag = el.tagName.toLowerCase();
+  if (!el.isContentEditable && tag !== 'input' && tag !== 'textarea') throw new Error('node is not editable');
+  if (el.disabled || el.getAttribute('aria-disabled') === 'true') throw new Error('node is disabled');
+  const text = ` + strconv.Quote(text) + `;
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  el.focus();
+  if (tag === 'input' || tag === 'textarea') {
+    const prototype = tag === 'input' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+    const valueDescriptor = Object.getOwnPropertyDescriptor(prototype, 'value');
+    if (!valueDescriptor || typeof valueDescriptor.set !== 'function') throw new Error('native value setter is unavailable');
+    valueDescriptor.set.call(el, text);
+    if (typeof el.setSelectionRange === 'function') {
+      try {
+        el.setSelectionRange(text.length, text.length);
+      } catch (_) {
+      }
+    }
+  } else {
+    el.textContent = text;
+  }
+  let inputEvent;
+  try {
+    inputEvent = new InputEvent('input', {
+      bubbles: true,
+      composed: true,
+      data: text,
+      inputType: 'insertReplacementText'
+    });
+  } catch (_) {
+    inputEvent = new Event('input', {bubbles: true, composed: true});
+  }
+  el.dispatchEvent(inputEvent);
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+  return {id: null, tag, text};
+})()`
+}
+
 func scrollExpression(nodeID int, dir string, amount int) string {
 	script := strings.ReplaceAll(scrollJS, "$NODE_ID$", strconv.Itoa(nodeID))
 	script = strings.ReplaceAll(script, "$DIR$", strconv.Quote(dir))
 	return strings.ReplaceAll(script, "$AMOUNT$", strconv.Itoa(amount))
+}
+
+func scrollSelectorExpression(selector string, dir string, amount int) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  const amount = ` + strconv.Itoa(amount) + `;
+  const delta = (` + strconv.Quote(dir) + ` === 'up' ? -1 : 1) *
+    (amount > 0 ? amount : Math.max(100, Math.round((el.clientHeight || window.innerHeight) * 0.8)));
+  el.scrollTop += delta;
+  return {
+    scope: 'node',
+    id: null,
+    dir: ` + strconv.Quote(dir) + `,
+    amount: Math.abs(delta),
+    top: el.scrollTop
+  };
+})()`
 }
 
 func getHTMLExpression(selector string) string {
@@ -2246,9 +3459,38 @@ func getBBoxExpression(selector string) string {
 })()`
 }
 
+func getFocusedBBoxExpression(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const rect = el.getBoundingClientRect();
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    w: Math.round(rect.width),
+    h: Math.round(rect.height)
+  };
+})()`
+}
+
 func getNodeExpression(kind string, nodeID int) string {
 	script := strings.ReplaceAll(getNodeJS, "$KIND$", strconv.Quote(kind))
 	return strings.ReplaceAll(script, "$NODE_ID$", strconv.Itoa(nodeID))
+}
+
+func getSelectorNodeExpression(kind string, selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  const kind = ` + strconv.Quote(kind) + `;
+  if (kind === 'text') return (el.innerText || el.textContent || '').trim();
+  if (kind === 'value') return 'value' in el ? el.value : '';
+  if (kind === 'attributes') {
+    return Object.fromEntries(Array.from(el.attributes || []).map((attr) => [attr.name, attr.value]));
+  }
+  throw new Error('unsupported get target');
+})()`
 }
 
 func selectExpression(nodeID int, value string) string {
@@ -2256,9 +3498,47 @@ func selectExpression(nodeID int, value string) string {
 	return strings.ReplaceAll(script, "$VALUE$", strconv.Quote(value))
 }
 
+func selectSelectorExpression(selector string, value string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) throw new Error('selector not found');
+  if (el.tagName !== 'SELECT') throw new Error('node is not a select');
+  const value = ` + strconv.Quote(value) + `;
+  const option = Array.from(el.options).find((item) => item.value === value || item.text === value);
+  if (!option) throw new Error('select option not found');
+  el.value = option.value;
+  el.dispatchEvent(new Event('input', {bubbles: true, composed: true}));
+  el.dispatchEvent(new Event('change', {bubbles: true, composed: true}));
+  return {id: null, value: el.value, text: option.text};
+})()`
+}
+
 func markUploadNodeExpression(nodeID int, token string) string {
 	script := strings.ReplaceAll(markUploadNodeJS, "$NODE_ID$", strconv.Itoa(nodeID))
 	return strings.ReplaceAll(script, "$TOKEN$", strconv.Quote(token))
+}
+
+func markUploadSelectorExpression(selector string, token string) string {
+	return `(function () {
+  const matches = Array.from(document.querySelectorAll(` + strconv.Quote(selector) + `));
+  if (matches.length === 0) throw new Error('selector not found');
+  if (matches.length > 1) throw new Error('selector matched multiple file inputs');
+  const el = matches[0];
+  if (el.tagName !== 'INPUT' || (el.getAttribute('type') || '').toLowerCase() !== 'file') {
+    throw new Error('node is not a file input');
+  }
+  const token = ` + strconv.Quote(token) + `;
+  el.setAttribute('data-nexus-upload', token);
+  return {id: null, selector: '[data-nexus-upload="' + token + '"]'};
+})()`
+}
+
+func clearMarkedUploadExpression(token string) string {
+	return `(function () {
+  const el = document.querySelector('[data-nexus-upload="' + ` + strconv.Quote(token) + ` + '"]');
+  if (el) el.removeAttribute('data-nexus-upload');
+  return true;
+})()`
 }
 
 func waitTextExpression(value string) string {
@@ -2457,6 +3737,34 @@ func currentPageTargetOnce(ctx context.Context, devtoolsURL string) (pageTargetI
 	return pageTargetInfo{}, errPageTargetNotFound
 }
 
+func activatePageTargetHTTP(ctx context.Context, devtoolsURL string, targetID string) error {
+	activateCtx, cancel := context.WithTimeout(ctx, pageTargetTimeout)
+	defer cancel()
+
+	baseURL, err := debugHTTPBaseURL(devtoolsURL)
+	if err != nil {
+		return err
+	}
+	requestURL := baseURL + "/json/activate/" + url.PathEscape(strings.TrimSpace(targetID))
+	req, err := http.NewRequestWithContext(activateCtx, http.MethodGet, requestURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	message, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if detail := strings.TrimSpace(string(message)); detail != "" {
+		return fmt.Errorf("failed to activate page target %s: %s: %s", targetID, resp.Status, detail)
+	}
+	return fmt.Errorf("failed to activate page target %s: %s", targetID, resp.Status)
+}
+
 func isRetryablePageTargetError(err error) bool {
 	if err == nil {
 		return false
@@ -2536,6 +3844,7 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			Ref:            formatNodeRef(node.ID),
 			Fingerprint:    strings.TrimSpace(node.Fingerprint),
 			StructurePath:  strings.TrimSpace(node.StructurePath),
+			Selector:       structurePathToSelector(node.StructurePath),
 			TextLength:     node.TextLength,
 			Descendants:    node.Descendants,
 			Role:           node.Role,
@@ -2561,6 +3870,23 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 	}
 
 	return nodes, nil
+}
+
+func structurePathToSelector(structurePath string) string {
+	parts := strings.Split(strings.TrimSpace(structurePath), ">")
+	selector := make([]string, 0, len(parts))
+	for _, part := range parts {
+		tag, ordinal, ok := strings.Cut(strings.TrimSpace(part), ":")
+		if !ok || strings.TrimSpace(tag) == "" {
+			return ""
+		}
+		index, err := strconv.Atoi(strings.TrimSpace(ordinal))
+		if err != nil || index <= 0 {
+			return ""
+		}
+		selector = append(selector, fmt.Sprintf("%s:nth-of-type(%d)", strings.TrimSpace(tag), index))
+	}
+	return strings.Join(selector, " > ")
 }
 
 func normalizeLayoutContext(nodes []api.LayoutContextNode) []api.LayoutContextNode {
@@ -2607,7 +3933,7 @@ func formatNodeRef(id int) string {
 }
 
 func buildLocatorHints(node api.Node) []api.LocatorHint {
-	hints := make([]api.LocatorHint, 0, 5)
+	hints := make([]api.LocatorHint, 0, 7)
 	seen := map[string]struct{}{}
 
 	add := func(hint api.LocatorHint) {
@@ -2654,6 +3980,14 @@ func buildLocatorHints(node api.Node) []api.LocatorHint {
 		})
 	}
 
+	if ariaLabel := strings.TrimSpace(node.Attrs["aria-label"]); ariaLabel != "" {
+		add(api.LocatorHint{
+			Kind:    "aria-label",
+			Value:   ariaLabel,
+			Command: fmt.Sprintf("aria-label %s", strconv.Quote(ariaLabel)),
+		})
+	}
+
 	if testID := strings.TrimSpace(locatorTestID(node)); testID != "" {
 		add(api.LocatorHint{
 			Kind:    "testid",
@@ -2670,6 +4004,14 @@ func buildLocatorHints(node api.Node) []api.LocatorHint {
 				Command: fmt.Sprintf("href %s", strconv.Quote(href)),
 			})
 		}
+	}
+
+	if selector := strings.TrimSpace(node.Selector); selector != "" && len(hints) == 0 {
+		add(api.LocatorHint{
+			Kind:    "css",
+			Value:   selector,
+			Command: fmt.Sprintf("css %s", strconv.Quote(selector)),
+		})
 	}
 
 	return hints

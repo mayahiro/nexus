@@ -2,6 +2,7 @@ package comparecmd
 
 import (
 	"crypto/sha1"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -651,6 +652,14 @@ func compareNodeCSS(node api.Node, properties []string) map[string]string {
 		return nil
 	}
 
+	if len(properties) == 1 && properties[0] == allCSSPropertiesMarker {
+		values := make(map[string]string, len(node.Styles))
+		for property, value := range node.Styles {
+			values[property] = strings.TrimSpace(value)
+		}
+		return values
+	}
+
 	values := make(map[string]string, len(properties))
 	for _, property := range properties {
 		values[property] = strings.TrimSpace(node.Styles[property])
@@ -820,8 +829,19 @@ func sortedCompareCSSPropertyKeys(left map[string]string, right map[string]strin
 }
 
 func ResolveCSSProperties(compareCSS bool, requested []string) []string {
+	properties, _ := ResolveCSSPropertiesMode(compareCSS, false, requested)
+	return properties
+}
+
+func ResolveCSSPropertiesMode(compareCSS bool, all bool, requested []string) ([]string, error) {
+	if all && len(requested) > 0 {
+		return nil, errors.New("all css properties can not be combined with explicit css properties")
+	}
+	if all {
+		return []string{allCSSPropertiesMarker}, nil
+	}
 	if len(requested) == 0 && !compareCSS {
-		return nil
+		return nil, nil
 	}
 
 	source := requested
@@ -843,9 +863,9 @@ func ResolveCSSProperties(compareCSS bool, requested []string) []string {
 		values = append(values, trimmed)
 	}
 	if len(values) == 0 {
-		return nil
+		return nil, nil
 	}
-	return values
+	return values, nil
 }
 
 func summarizeCompareValue(value string) string {

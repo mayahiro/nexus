@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/png"
 	"strconv"
+	"testing"
 
 	"github.com/mayahiro/nexus/internal/api"
 )
@@ -15,7 +16,10 @@ import (
 type noopRPCHandler struct{}
 
 func (noopRPCHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
-	return api.PingResponse{}, nil
+	return api.PingResponse{
+		ProtocolVersion: api.ProtocolVersion,
+		DaemonVersion:   api.DaemonVersion,
+	}, nil
 }
 
 func (noopRPCHandler) AttachSession(context.Context, api.AttachSessionRequest) (api.AttachSessionResponse, error) {
@@ -60,6 +64,30 @@ type getRPCHandler struct{ noopRPCHandler }
 type findRPCHandler struct{ noopRPCHandler }
 type inspectRPCHandler struct{ noopRPCHandler }
 type selectUploadRPCHandler struct{ noopRPCHandler }
+
+func TestRPCTestHandlersReportCompatibleDaemon(t *testing.T) {
+	handlers := map[string]interface {
+		Ping(context.Context, api.PingRequest) (api.PingResponse, error)
+	}{
+		"noop":        noopRPCHandler{},
+		"compare":     compareRPCHandler{},
+		"compare URL": &compareURLRPCHandler{},
+	}
+
+	for name, handler := range handlers {
+		t.Run(name, func(t *testing.T) {
+			response, err := handler.Ping(context.Background(), api.PingRequest{
+				ProtocolVersion: api.ProtocolVersion,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !daemonCompatible(response) {
+				t.Fatalf("test handler returned an incompatible ping response: %+v", response)
+			}
+		})
+	}
+}
 
 func (evalRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
 	switch req.Action.Text {
@@ -188,9 +216,9 @@ func (elementScreenshotRPCHandler) ObserveSession(_ context.Context, req api.Obs
 		Observation: api.Observation{
 			Screenshot: testPNGBase64(),
 			Tree: []api.Node{
-				{ID: 1, Ref: "@e1", Role: "button", Name: "Submit", Visible: true, Enabled: true, Attrs: map[string]string{"data-testid": "submit-primary"}, Bounds: api.Rect{X: 4, Y: 6, W: 18, H: 12}},
-				{ID: 2, Ref: "@e2", Role: "link", Text: "Sign In", Visible: true, Enabled: true, Attrs: map[string]string{"href": "/signin"}, Bounds: api.Rect{X: 8, Y: 20, W: 20, H: 10}},
-				{ID: 3, Ref: "@e3", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true, Bounds: api.Rect{X: 10, Y: 12, W: 15, H: 8}},
+				{ID: 1, Ref: "@e1", Selector: "#submit-primary", Role: "button", Name: "Submit", Visible: true, Enabled: true, Attrs: map[string]string{"data-testid": "submit-primary"}, Bounds: api.Rect{X: 4, Y: 6, W: 18, H: 12}},
+				{ID: 2, Ref: "@e2", Selector: "#sign-in", Role: "link", Text: "Sign In", Visible: true, Enabled: true, Attrs: map[string]string{"href": "/signin"}, Bounds: api.Rect{X: 8, Y: 20, W: 20, H: 10}},
+				{ID: 3, Ref: "@e3", Selector: "#email", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true, Bounds: api.Rect{X: 10, Y: 12, W: 15, H: 8}},
 			},
 		},
 	}, nil

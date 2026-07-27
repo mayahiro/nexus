@@ -37,6 +37,7 @@ type flowDefaults struct {
 	NodeScope        string   `json:"node_scope,omitempty"`
 	MatchingDebug    bool     `json:"matching_debug,omitempty"`
 	CompareCSS       bool     `json:"compare_css,omitempty"`
+	AllCSSProperties bool     `json:"all_css_properties,omitempty"`
 	CompareLayout    bool     `json:"compare_layout,omitempty"`
 	NoDefaultIgnores bool     `json:"no_default_ignores,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
@@ -91,6 +92,7 @@ type flowStep struct {
 	NodeScope        string   `json:"node_scope,omitempty"`
 	MatchingDebug    *bool    `json:"matching_debug,omitempty"`
 	CompareCSS       *bool    `json:"compare_css,omitempty"`
+	AllCSSProperties *bool    `json:"all_css_properties,omitempty"`
 	CompareLayout    *bool    `json:"compare_layout,omitempty"`
 	NoDefaultIgnores *bool    `json:"no_default_ignores,omitempty"`
 	ScopeSelector    string   `json:"scope_selector,omitempty"`
@@ -279,6 +281,20 @@ func loadFlowManifest(path string) (flowManifest, error) {
 	}
 	if len(manifest.Scenarios) == 0 {
 		return flowManifest{}, fmt.Errorf("flow manifest %q requires at least one scenario", path)
+	}
+	if manifest.Defaults.AllCSSProperties && len(manifest.Defaults.CSSProperty) > 0 {
+		return flowManifest{}, fmt.Errorf("flow manifest %q defaults can not combine all_css_properties with css_property", path)
+	}
+	for scenarioIndex, scenario := range manifest.Scenarios {
+		scenarioName := strings.TrimSpace(scenario.Name)
+		if scenarioName == "" {
+			scenarioName = fmt.Sprintf("scenario[%d]", scenarioIndex)
+		}
+		for stepIndex, step := range scenario.Steps {
+			if step.AllCSSProperties != nil && *step.AllCSSProperties && len(step.CSSProperty) > 0 {
+				return flowManifest{}, fmt.Errorf("flow manifest %q scenario %s step[%d] can not combine all_css_properties with css_property", path, scenarioName, stepIndex)
+			}
+		}
 	}
 	return manifest, nil
 }
@@ -747,9 +763,11 @@ func executeFlowNodeStep(ctx context.Context, client *rpc.Client, state flowExec
 			return err
 		}
 		action := api.Action{
-			Kind:   actionKind,
-			NodeID: &node.ID,
-			Text:   step.Text,
+			Kind:     actionKind,
+			NodeID:   &node.ID,
+			NodeRef:  node.Ref,
+			Selector: node.Selector,
+			Text:     step.Text,
 		}
 		res, err := client.ActSession(ctx, api.ActSessionRequest{
 			SessionID: sessionID,
@@ -834,12 +852,12 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	if matchingDebug {
 		args = append(args, "--matching-debug")
 	}
-	compareCSS := state.Defaults.CompareCSS
-	if step.CompareCSS != nil {
-		compareCSS = *step.CompareCSS
-	}
+	compareCSS, allCSSProperties, cssProperties := resolveFlowCSSMode(state.Defaults, step)
 	if compareCSS {
 		args = append(args, "--compare-css")
+	}
+	if allCSSProperties {
+		args = append(args, "--all-css-properties")
 	}
 	compareLayout := state.Defaults.CompareLayout
 	if step.CompareLayout != nil {
@@ -878,10 +896,6 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 	if newScopeSelector != "" {
 		args = append(args, "--new-scope-selector", newScopeSelector)
 	}
-	cssProperties := state.Defaults.CSSProperty
-	if len(step.CSSProperty) > 0 {
-		cssProperties = append([]string(nil), step.CSSProperty...)
-	}
 	for _, value := range cssProperties {
 		args = append(args, "--css-property", value)
 	}
@@ -917,6 +931,40 @@ func executeFlowCompareStep(ctx context.Context, state flowExecutionState, step 
 
 	raw := json.RawMessage(append([]byte(nil), bytes.TrimSpace(stdout.Bytes())...))
 	return raw, nil
+}
+
+func resolveFlowCSSMode(defaults flowDefaults, step flowStep) (bool, bool, []string) {
+	compareCSS := defaults.CompareCSS
+	allCSSProperties := defaults.AllCSSProperties
+	cssProperties := append([]string(nil), defaults.CSSProperty...)
+	if allCSSProperties {
+		compareCSS = true
+		cssProperties = nil
+	}
+
+	if step.CompareCSS != nil {
+		compareCSS = *step.CompareCSS
+		if !*step.CompareCSS && step.AllCSSProperties == nil && len(step.CSSProperty) == 0 {
+			allCSSProperties = false
+			cssProperties = nil
+		}
+	}
+	if step.AllCSSProperties != nil {
+		allCSSProperties = *step.AllCSSProperties
+		if *step.AllCSSProperties {
+			compareCSS = true
+			cssProperties = nil
+		}
+	}
+	if len(step.CSSProperty) > 0 {
+		allCSSProperties = false
+		cssProperties = append([]string(nil), step.CSSProperty...)
+	}
+	if allCSSProperties {
+		compareCSS = true
+		cssProperties = nil
+	}
+	return compareCSS, allCSSProperties, cssProperties
 }
 
 func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep) (map[string]string, error) {
@@ -1030,6 +1078,9 @@ func flowStepName(step flowStep) string {
 }
 
 func resolveFlowLocator(ctx context.Context, client *rpc.Client, sessionID string, locator string, selection nodeSelectionOptions) (api.Node, error) {
+	if node, directRef, err := directRefNode(locator, selection); directRef {
+		return node, err
+	}
 	observation, err := observeTreeForFind(ctx, client, sessionID)
 	if err != nil {
 		return api.Node{}, err

@@ -53,6 +53,8 @@ Nexus is built around sessions.
 - `close` stops `nxd` when it closes the last remaining session
 - `close --all` closes every session and stops `nxd`
 
+Before using an existing daemon, `nxctl` checks both the RPC protocol and daemon build identifier. The identifier includes the VCS revision and dirty state when Go build information provides them. An incompatible daemon is stopped and replaced, and the `nxd` beside the running `nxctl` is preferred over an older `PATH` entry. Each request also carries the protocol version, and `nxd` rejects a missing or mismatched version before decoding the operation.
+
 The primary interaction loop is:
 
 ```text
@@ -60,10 +62,11 @@ open/navigate -> state/find -> click/type/fill/input/keys -> wait/get/state
 ```
 
 `state` prints AI-friendly element refs such as `@e1`, and those refs can be reused in node-targeting commands like `click`, `fill`, `input`, `select`, `upload`, `hover`, `get`, and `screenshot`.
-`state` also prints short locator hints derived from the current tree, so an agent can switch from `@eN` refs to `find role|text|label|testid|href` without recomputing selectors.
+`state` also prints short locator hints derived from the current tree, so an agent can switch from `@eN` refs to `find role|text|label|testid|href|aria-label|css` without recomputing selectors.
+Refs belong to the latest observed page generation. Nexus rejects a ref after navigation, URL changes, or a stable-identity change at the referenced structural selector and asks for a fresh `state` or `find`.
 Use `fill` to replace a node value, `input` to type into a specific node, and `type` to type into the currently focused editable element.
 See the [AI usage guide](docs/ai/usage.md#choosing-fill-input-or-type) for the controlled-form decision matrix.
-`batch` runs commands in order and stops at the first non-zero exit status.
+`batch` runs commands in order and stops at the first non-zero exit status unless `--keep-going` is set.
 
 When you want a meaning-based locator instead of a ref, use `find`:
 
@@ -74,6 +77,9 @@ When you want a meaning-based locator instead of a ref, use `find`:
 - `find text "Sign in" click`
 - `find label "Email" fill "hello@example.com"`
 - `find label "Email" input "hello@example.com"`
+- `find aria-label "Close dialog" click`
+- `find css 'dialog button.primary' click`
+- `find role button --all --within @e7`
 
 If multiple nodes match, `find` fails with candidate refs so you can narrow the query, select one with `--nth`, or switch to `@eN` from `state`.
 
@@ -112,15 +118,21 @@ nxctl find role button click --nth 2
 nxctl find role link get attributes --name "Docs"
 nxctl find label "Email" fill "hello@example.com"
 nxctl find label "Email" input "hello@example.com"
+nxctl find aria-label "Close dialog" click
+nxctl find css "dialog button.primary" click
+nxctl find role button --all --within @e7
 nxctl click 120 240
 nxctl fill @e4 "hello@example.com"
 nxctl input @e4 "hello@example.com"
 nxctl batch --cmd "state" --cmd "find role button --all"
+nxctl batch --keep-going --cmd "state" --cmd "screenshot checkpoint.png" --cmd "get title"
 nxctl keys "Enter"
 nxctl wait selector ".ready"
 nxctl wait url "/done"
 nxctl wait navigation
+nxctl wait hydrated
 nxctl wait function "window.appReady === true"
+nxctl eval 'globalThis.counter = (globalThis.counter || 0) + 1' --world persistent
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-function "window.appReady === true"
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-network-idle
 nxctl compare https://old.example.com/orders https://new.example.com/orders --wait-selector ".ready"
@@ -144,6 +156,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --no
 nxctl compare --manifest migration-pages.json --review-dir review/migration
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-css
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
+nxctl compare https://old.example.com/orders https://new.example.com/orders --all-css-properties
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
 nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
@@ -164,11 +177,13 @@ nxctl screenshot annotated.png --annotate
 nxctl screenshot email.png --locator label=Email
 nxctl screenshot submit.png --locator @e1
 nxctl screenshot page.png --full --timeout 60000
+nxctl screenshot page.png --recover-target
+nxctl upload --selector 'input[type="file"]' ./artifact.png
 nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page.
+In compare manifests, `backend`, `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page. `all_css_properties: true` and `css_property` cannot coexist in the same object; a page-level property list may override exhaustive mode inherited from defaults.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -219,6 +234,7 @@ Use `--node-scope all` for focused migration work where layout wrappers, anonymo
 Keep `all` scoped to the smallest useful subtree. A whole-page `all` pass is intentionally rejected unless a scope is provided because decorative wrappers, SVG internals, and repeated anonymous `div`/`span` elements can dominate the review. By default, `all` suppresses common structural noise such as SVG descendants, `script`, `style`, `link`, `meta`, `noscript`, `[hidden]`, `[aria-hidden="true"]`, and `[data-nxctl-skip="true"]`; add `--no-default-ignores` when those nodes are the target of review. See the [AI compare guide](docs/ai/compare.md#node-scope-selection) and [migration playbook](docs/ai/playbooks/migration.md) for workflow guidance.
 Use `--compare-css` to compare a default computed-style allowlist on matching nodes.
 Use `--css-property` one or more times when you want explicit computed-style properties instead of the default list.
+Use `--all-css-properties` when the task requires an exhaustive computed-style pass. It is intentionally separate because browser-version defaults and unrelated inherited properties can create substantial noise. Do not combine it with `--css-property`.
 Use `--compare-layout` when you want opt-in viewport-relative bounds findings for matching nodes, such as a button moving from center to left. Layout findings report observed placement changes; use `inspect --layout-context` when you need ancestor CSS context to investigate why the movement happened.
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
@@ -239,7 +255,11 @@ Scenarios can define `old` and `new` endpoints, optional `matrix` names, and str
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.
 Screenshot steps can also target one element with `locator` and optional `nth`, using the same selector DSL as flow `click` and `fill`.
-Screenshot capture times out after 30000 ms by default. Use `nxctl screenshot --timeout <ms>` or a flow screenshot step `timeout` value when a large page legitimately needs more time.
+Viewport capture is the default and `--full` opts into full-page capture.
+Screenshot capture times out after 30000 ms by default. `screenshot` and screenshot-enabled `observe` apply the same overall timeout on both the client request and daemon capture. Each `Page.captureScreenshot` attempt is capped at 10000 ms so a stuck target cannot monopolize the session. A failed capture automatically reconnects to the same tab once and preserves page state. Use `--recover-target` to permit a final tab replacement when that reconnect also fails; replacement reloads the current URL and loses transient page state. `--recover-target` is not supported with `--locator`.
+Full-page capture rejects pages above Nexus's safety limits instead of attempting an unbounded PNG transfer. Use `nxctl screenshot --timeout <ms>` or a flow screenshot step `timeout` value to budget enough time for same-target reconnect; increasing it does not extend one capture attempt beyond 10000 ms. For direct screenshots, `--recover-target` uses the remaining budget for optional tab replacement.
+
+Canvas-rendered content such as map tiles is visible in screenshots, but it usually does not expose semantic nodes or DOM coordinates that Nexus can validate. Treat screenshot review or an application-specific API assertion as the source of truth for canvas internals.
 
 ## Viewport
 

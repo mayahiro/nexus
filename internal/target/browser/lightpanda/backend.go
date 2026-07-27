@@ -33,6 +33,7 @@ type Backend struct {
 	waitCh      chan error
 	devtoolsURL string
 	logs        []api.LogEntry
+	remote      *chromium.Remote
 }
 
 func New() *Backend {
@@ -124,10 +125,15 @@ func (b *Backend) Attach(ctx context.Context, cfg spec.SessionConfig) error {
 	navigateCtx, navigateCancel := context.WithTimeout(ctx, startupTimeout)
 	defer navigateCancel()
 
-	if err := chromium.NavigateViaCDP(navigateCtx, devtoolsURL, navigateURL, chromedp.NoModifyURL); err != nil {
+	remote := chromium.NewRemote(context.Background(), devtoolsURL, chromedp.NoModifyURL)
+	if err := remote.Navigate(navigateCtx, navigateURL); err != nil {
+		remote.Close()
 		b.Detach(context.Background())
 		return err
 	}
+	b.mu.Lock()
+	b.remote = remote
+	b.mu.Unlock()
 
 	return nil
 }
@@ -137,16 +143,21 @@ func (b *Backend) Detach(_ context.Context) error {
 	cmd := b.cmd
 	cancel := b.cancel
 	waitCh := b.waitCh
+	remote := b.remote
 	b.cmd = nil
 	b.cancel = nil
 	b.waitCh = nil
 	b.devtoolsURL = ""
+	b.remote = nil
 	b.mu.Unlock()
 
 	if cmd == nil {
 		return nil
 	}
 
+	if remote != nil {
+		remote.Close()
+	}
 	cancel()
 
 	timer := time.NewTimer(shutdownTimeout)
@@ -166,14 +177,14 @@ func (b *Backend) Detach(_ context.Context) error {
 
 func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
 	b.mu.Lock()
-	devtoolsURL := b.devtoolsURL
+	remote := b.remote
 	b.mu.Unlock()
 
-	if devtoolsURL == "" {
+	if remote == nil {
 		return nil, errors.New("lightpanda backend is not attached")
 	}
 
-	return chromium.ObserveViaCDP(ctx, devtoolsURL, opts, chromedp.NoModifyURL)
+	return remote.Observe(ctx, opts)
 }
 
 func (*Backend) Act(context.Context, api.Action) (*api.ActionResult, error) {

@@ -40,8 +40,8 @@ func TestNagiCoreSchemas(t *testing.T) {
 			variants: []nagiUsageVariantContract{
 				{
 					ID:     "capture",
-					Syntax: "[path] [--session <id>] [--full] [--annotate] [--locator <locator>] [--nth <n>] [--timeout <ms>]",
-					Args:   []string{"screenshot", "capture.png", "--timeout", "45000"},
+					Syntax: "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--locator <locator>] [--nth <n>] [--timeout <ms>]",
+					Args:   []string{"screenshot", "capture.png", "--recover-target", "--timeout", "45000"},
 				},
 			},
 		},
@@ -143,17 +143,27 @@ func TestNagiClickInvocationValidation(t *testing.T) {
 
 func TestNagiScreenshotTypedInvocation(t *testing.T) {
 	result, err := newNagiScreenshotRoot(30000).Parse(
-		[]string{"screenshot", "capture.png", "--locator", "label=Email", "--nth", "2", "--timeout", "45000"},
+		[]string{"screenshot", "capture.png", "--recover-target", "--timeout", "45000"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	arguments := nagiScreenshotArgumentsFromInvocation(result.Invocation())
-	if arguments.Paths[0] != "capture.png" || arguments.Locator != "label=Email" {
+	if arguments.Paths[0] != "capture.png" || !arguments.Recover {
 		t.Fatalf("unexpected screenshot arguments: %#v", arguments)
 	}
-	if arguments.Nth != 2 || arguments.Timeout != 45000 {
+	if arguments.Timeout != 45000 {
 		t.Fatalf("unexpected typed values: %#v", arguments)
+	}
+	result, err = newNagiScreenshotRoot(30000).Parse(
+		[]string{"screenshot", "capture.png", "--locator", "label=Email", "--nth", "2", "--timeout", "45000"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments = nagiScreenshotArgumentsFromInvocation(result.Invocation())
+	if arguments.Locator != "label=Email" || arguments.Nth != 2 {
+		t.Fatalf("unexpected locator arguments: %#v", arguments)
 	}
 	result, err = newNagiScreenshotRoot(30000).Parse([]string{"screenshot"})
 	if err != nil {
@@ -171,6 +181,7 @@ func TestNagiScreenshotTypedInvocation(t *testing.T) {
 	for _, args := range [][]string{
 		{"--nth", "1"},
 		{"--locator", "@e1", "--full"},
+		{"--locator", "@e1", "--recover-target"},
 		{"--timeout", "0"},
 		{"one.png", "two.png"},
 	} {

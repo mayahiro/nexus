@@ -20,6 +20,8 @@ import (
 )
 
 const daemonStartTimeout = 3 * time.Second
+const daemonHandshakeTimeout = 2 * time.Second
+const daemonStopTimeout = 8 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 
@@ -130,8 +132,13 @@ func runDoctor(ctx context.Context, stdout io.Writer) (exitCode int) {
 		fmt.Fprintf(stdout, "protocol: mismatch (client=%s daemon=%s)\n", api.ProtocolVersion, res.ProtocolVersion)
 		return 1
 	}
+	if res.DaemonVersion != api.DaemonVersion {
+		fmt.Fprintf(stdout, "daemon build: mismatch (client=%s daemon=%s)\n", api.DaemonVersion, res.DaemonVersion)
+		return 1
+	}
 
 	fmt.Fprintf(stdout, "protocol: ok (%s)\n", res.ProtocolVersion)
+	fmt.Fprintf(stdout, "daemon build: ok (%s)\n", res.DaemonVersion)
 	return 0
 }
 
@@ -146,22 +153,25 @@ type batchStepResult struct {
 func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
 	commands := nagiStringValues(invocation, "cmd")
 	asJSON := nagiBoolValue(invocation, "json")
+	keepGoing := nagiBoolValue(invocation, "keep-going")
 
 	results := make([]batchStepResult, 0, len(commands))
+	firstFailure := 0
 	for _, raw := range commands {
-		argv, err := splitBatchCommand(raw)
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		if len(argv) == 0 {
-			fmt.Fprintln(stderr, "batch command must not be empty")
-			return 1
-		}
-
 		var stepStdout bytes.Buffer
 		var stepStderr bytes.Buffer
-		exitCode := Run(ctx, argv, &stepStdout, &stepStderr)
+		argv, err := splitBatchCommand(raw)
+		exitCode := 0
+		if err != nil {
+			fmt.Fprintln(&stepStderr, err)
+			exitCode = 1
+		} else if len(argv) == 0 {
+			fmt.Fprintln(&stepStderr, "batch command must not be empty")
+			exitCode = 1
+		} else {
+			exitCode = Run(ctx, argv, &stepStdout, &stepStderr)
+		}
+
 		results = append(results, batchStepResult{
 			Command:  raw,
 			Args:     argv,
@@ -169,9 +179,12 @@ func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, std
 			Stdout:   stepStdout.String(),
 			Stderr:   stepStderr.String(),
 		})
+		if exitCode != 0 && firstFailure == 0 {
+			firstFailure = exitCode
+		}
 
 		if asJSON {
-			if exitCode != 0 {
+			if exitCode != 0 && !keepGoing {
 				break
 			}
 			continue
@@ -185,6 +198,10 @@ func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, std
 			io.Copy(stderr, &stepStderr)
 		}
 		if exitCode != 0 {
+			if keepGoing {
+				fmt.Fprintf(stderr, "batch step failed: %s\n", raw)
+				continue
+			}
 			fmt.Fprintf(stderr, "batch stopped at: %s\n", raw)
 			return exitCode
 		}
@@ -197,13 +214,10 @@ func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, std
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if len(results) > 0 && results[len(results)-1].ExitCode != 0 {
-			return results[len(results)-1].ExitCode
-		}
-		return 0
+		return firstFailure
 	}
 
-	return 0
+	return firstFailure
 }
 
 func runDaemonInvocation(ctx context.Context, _ *nagicli.Invocation, _ io.Writer, stderr io.Writer) int {

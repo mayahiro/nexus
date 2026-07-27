@@ -15,7 +15,7 @@ import (
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
-const expectedCompareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
+const expectedCompareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
 const expectedCompareDirectOutputUsage = "[--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>]"
 const expectedCompareReportOutputUsage = "[--output-json <file>] [--output-md <file>] [--json]"
 const expectedCompareURLUsage = "<old-url> <new-url> " + expectedCompareExecutionUsage + " " + expectedCompareDirectOutputUsage + " " + expectedCompareReportOutputUsage
@@ -259,6 +259,19 @@ func TestNagiCompareDirectInvocation(t *testing.T) {
 	}
 	if arguments.Backend != "chromium" || arguments.WaitTimeout != 15000 || !arguments.JSON {
 		t.Fatalf("unexpected compare arguments: %#v", arguments)
+	}
+}
+
+func TestNagiCompareRejectsAllAndExplicitCSSProperties(t *testing.T) {
+	_, err := newNagiCompareRoot().Parse([]string{
+		"compare",
+		"https://old.example.com",
+		"https://new.example.com",
+		"--all-css-properties",
+		"--css-property", "color",
+	})
+	if err == nil {
+		t.Fatal("expected all and explicit css properties to be rejected")
 	}
 }
 

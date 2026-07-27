@@ -481,6 +481,7 @@ type compareManifestDefaults struct {
 	WaitFunction     string   `json:"wait_function,omitempty"`
 	WaitNetworkIdle  bool     `json:"wait_network_idle,omitempty"`
 	CompareCSS       bool     `json:"compare_css,omitempty"`
+	AllCSSProperties bool     `json:"all_css_properties,omitempty"`
 	CompareLayout    bool     `json:"compare_layout,omitempty"`
 	NoDefaultIgnores bool     `json:"no_default_ignores,omitempty"`
 	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
@@ -509,6 +510,7 @@ type compareManifestPage struct {
 	WaitFunction     *string  `json:"wait_function,omitempty"`
 	WaitNetworkIdle  *bool    `json:"wait_network_idle,omitempty"`
 	CompareCSS       *bool    `json:"compare_css,omitempty"`
+	AllCSSProperties *bool    `json:"all_css_properties,omitempty"`
 	CompareLayout    *bool    `json:"compare_layout,omitempty"`
 	NoDefaultIgnores *bool    `json:"no_default_ignores,omitempty"`
 	WaitTimeout      *int     `json:"wait_timeout,omitempty"`
@@ -561,6 +563,7 @@ type compareRun struct {
 	WaitFunction            string
 	WaitNetworkIdle         bool
 	CompareCSS              bool
+	AllCSSProperties        bool
 	CompareLayout           bool
 	NoDefaultIgnores        bool
 	WaitTimeout             int
@@ -614,3 +617,5 @@ var DefaultCSSProperties = []string{
 	"opacity",
 	"pointer-events",
 }
+
+const allCSSPropertiesMarker = "*"

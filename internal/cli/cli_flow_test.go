@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -35,6 +36,96 @@ type flowLocatorScreenshotRPCHandler struct {
 	mu              sync.Mutex
 	observeRequests []api.ObserveSessionRequest
 	actRequests     []api.ActSessionRequest
+}
+
+func TestLoadFlowManifestRejectsConflictingCSSModes(t *testing.T) {
+	tests := map[string]string{
+		"defaults": `{
+			"defaults": {
+				"all_css_properties": true,
+				"css_property": ["color"]
+			},
+			"scenarios": [{"old": {}, "new": {}}]
+		}`,
+		"step": `{
+			"scenarios": [{
+				"name": "orders",
+				"old": {},
+				"new": {},
+				"steps": [{
+					"action": "compare",
+					"all_css_properties": true,
+					"css_property": ["color"]
+				}]
+			}]
+		}`,
+	}
+
+	for name, manifest := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "flow.json")
+			if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadFlowManifest(path); err == nil || !strings.Contains(err.Error(), "can not combine all_css_properties with css_property") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestResolveFlowCSSMode(t *testing.T) {
+	disabled := false
+	enabled := true
+	tests := []struct {
+		name       string
+		defaults   flowDefaults
+		step       flowStep
+		compareCSS bool
+		allCSS     bool
+		properties []string
+	}{
+		{
+			name:       "inherited exhaustive mode",
+			defaults:   flowDefaults{AllCSSProperties: true},
+			compareCSS: true,
+			allCSS:     true,
+		},
+		{
+			name:       "step properties override exhaustive mode",
+			defaults:   flowDefaults{AllCSSProperties: true},
+			step:       flowStep{CSSProperty: []string{"color"}},
+			compareCSS: true,
+			properties: []string{"color"},
+		},
+		{
+			name:       "step exhaustive false falls back to stable mode",
+			defaults:   flowDefaults{AllCSSProperties: true},
+			step:       flowStep{AllCSSProperties: &disabled},
+			compareCSS: true,
+		},
+		{
+			name:     "compare false disables inherited modes",
+			defaults: flowDefaults{CompareCSS: true, AllCSSProperties: true},
+			step:     flowStep{CompareCSS: &disabled},
+		},
+		{
+			name:       "explicit exhaustive mode overrides compare false",
+			defaults:   flowDefaults{CompareCSS: true},
+			step:       flowStep{CompareCSS: &disabled, AllCSSProperties: &enabled},
+			compareCSS: true,
+			allCSS:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			compareCSS, allCSS, properties := resolveFlowCSSMode(test.defaults, test.step)
+			if compareCSS != test.compareCSS || allCSS != test.allCSS || !slices.Equal(properties, test.properties) {
+				t.Fatalf("unexpected CSS mode: compare=%t all=%t properties=%v", compareCSS, allCSS, properties)
+			}
+		})
+	}
 }
 
 func (h *flowRPCHandler) AttachSession(_ context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
@@ -378,8 +469,8 @@ func (h *flowLocatorScreenshotRPCHandler) ObserveSession(_ context.Context, req 
 				SessionID:  req.SessionID,
 				Screenshot: testPNGBase64(),
 				Tree: []api.Node{
-					{ID: 1, Ref: "@e1", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
-					{ID: 2, Ref: "@e2", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+					{ID: 1, Ref: "@e1", Selector: "#email", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
+					{ID: 2, Ref: "@e2", Selector: "#submit", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
 				},
 			},
 		}, nil
@@ -389,8 +480,8 @@ func (h *flowLocatorScreenshotRPCHandler) ObserveSession(_ context.Context, req 
 		Observation: api.Observation{
 			SessionID: req.SessionID,
 			Tree: []api.Node{
-				{ID: 1, Ref: "@e1", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
-				{ID: 2, Ref: "@e2", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
+				{ID: 1, Ref: "@e1", Selector: "#email", Role: "textbox", Name: "Email", Visible: true, Enabled: true, Editable: true},
+				{ID: 2, Ref: "@e2", Selector: "#submit", Role: "button", Name: "Submit", Visible: true, Enabled: true, Invokable: true},
 			},
 		},
 	}, nil

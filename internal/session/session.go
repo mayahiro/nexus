@@ -21,18 +21,21 @@ var (
 )
 
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]entry
+	mu           sync.RWMutex
+	sessions     map[string]*entry
+	shuttingDown bool
 }
 
 type entry struct {
 	session api.Session
 	adapter target.Adapter
+	opGate  chan struct{}
+	closed  bool
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		sessions: map[string]entry{},
+		sessions: map[string]*entry{},
 	}
 }
 
@@ -52,6 +55,9 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	if m.shuttingDown {
+		return api.Session{}, errors.New("session manager is shutting down")
+	}
 	if _, exists := m.sessions[req.SessionID]; exists {
 		return api.Session{}, fmt.Errorf("%w: %s", ErrSessionExists, req.SessionID)
 	}
@@ -76,10 +82,13 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 		LastUsedAt: now,
 	}
 
-	m.sessions[req.SessionID] = entry{
+	sessionEntry := &entry{
 		session: session,
 		adapter: adapter,
+		opGate:  make(chan struct{}, 1),
 	}
+	sessionEntry.opGate <- struct{}{}
+	m.sessions[req.SessionID] = sessionEntry
 
 	return session, nil
 }
@@ -112,20 +121,33 @@ func (m *Manager) Detach(ctx context.Context, sessionID string) (api.Session, er
 		return api.Session{}, errors.New("session_id is required")
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	entry, ok := m.sessions[sessionID]
+	m.mu.RLock()
+	sessionEntry, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
 	if !ok {
 		return api.Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
 
-	if err := entry.adapter.Detach(ctx); err != nil {
+	if err := sessionEntry.acquire(ctx); err != nil {
+		return api.Session{}, err
+	}
+	defer sessionEntry.release()
+
+	if sessionEntry.closed {
+		return api.Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	if err := sessionEntry.adapter.Detach(ctx); err != nil {
 		return api.Session{}, err
 	}
 
-	delete(m.sessions, sessionID)
-	return entry.session, nil
+	m.mu.Lock()
+	if current, exists := m.sessions[sessionID]; exists && current == sessionEntry {
+		delete(m.sessions, sessionID)
+	}
+	sessionEntry.closed = true
+	m.mu.Unlock()
+
+	return sessionEntry.session, nil
 }
 
 func (m *Manager) Observe(ctx context.Context, sessionID string, opts api.ObserveOptions) (api.Observation, error) {
@@ -133,17 +155,24 @@ func (m *Manager) Observe(ctx context.Context, sessionID string, opts api.Observ
 		return api.Observation{}, errors.New("session_id is required")
 	}
 
-	m.mu.Lock()
-	entry, ok := m.sessions[sessionID]
+	m.mu.RLock()
+	sessionEntry, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.Unlock()
 		return api.Observation{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
-	entry.session.LastUsedAt = time.Now()
-	m.sessions[sessionID] = entry
-	m.mu.Unlock()
 
-	observation, err := entry.adapter.Observe(ctx, opts)
+	if err := sessionEntry.acquire(ctx); err != nil {
+		return api.Observation{}, err
+	}
+	defer sessionEntry.release()
+
+	if sessionEntry.closed {
+		return api.Observation{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	m.touch(sessionID, sessionEntry)
+
+	observation, err := sessionEntry.adapter.Observe(ctx, opts)
 	if err != nil {
 		return api.Observation{}, err
 	}
@@ -151,7 +180,7 @@ func (m *Manager) Observe(ctx context.Context, sessionID string, opts api.Observ
 		return api.Observation{}, errors.New("empty observation")
 	}
 
-	observation.SessionID = entry.session.ID
+	observation.SessionID = sessionEntry.session.ID
 	return *observation, nil
 }
 
@@ -160,17 +189,24 @@ func (m *Manager) Act(ctx context.Context, sessionID string, action api.Action) 
 		return api.ActionResult{}, errors.New("session_id is required")
 	}
 
-	m.mu.Lock()
-	entry, ok := m.sessions[sessionID]
+	m.mu.RLock()
+	sessionEntry, ok := m.sessions[sessionID]
+	m.mu.RUnlock()
 	if !ok {
-		m.mu.Unlock()
 		return api.ActionResult{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
-	entry.session.LastUsedAt = time.Now()
-	m.sessions[sessionID] = entry
-	m.mu.Unlock()
 
-	result, err := entry.adapter.Act(ctx, action)
+	if err := sessionEntry.acquire(ctx); err != nil {
+		return api.ActionResult{}, err
+	}
+	defer sessionEntry.release()
+
+	if sessionEntry.closed {
+		return api.ActionResult{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	m.touch(sessionID, sessionEntry)
+
+	result, err := sessionEntry.adapter.Act(ctx, action)
 	if err != nil {
 		return api.ActionResult{}, err
 	}
@@ -184,6 +220,28 @@ func (m *Manager) Act(ctx context.Context, sessionID string, action api.Action) 
 	return *result, nil
 }
 
+func (m *Manager) touch(sessionID string, sessionEntry *entry) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if current, ok := m.sessions[sessionID]; ok && current == sessionEntry {
+		sessionEntry.session.LastUsedAt = time.Now()
+	}
+}
+
+func (e *entry) acquire(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-e.opGate:
+		return nil
+	}
+}
+
+func (e *entry) release() {
+	e.opGate <- struct{}{}
+}
+
 func (m *Manager) applyActionOptions(sessionID string, action api.Action) {
 	if action.Kind != "viewport" || action.Args == nil {
 		return
@@ -192,33 +250,43 @@ func (m *Manager) applyActionOptions(sessionID string, action api.Action) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	entry, ok := m.sessions[sessionID]
+	sessionEntry, ok := m.sessions[sessionID]
 	if !ok {
 		return
 	}
-	if entry.session.Options == nil {
-		entry.session.Options = map[string]string{}
+	if sessionEntry.session.Options == nil {
+		sessionEntry.session.Options = map[string]string{}
 	}
 	if width := strings.TrimSpace(action.Args["width"]); width != "" {
-		entry.session.Options["viewport_width"] = width
+		sessionEntry.session.Options["viewport_width"] = width
 	}
 	if height := strings.TrimSpace(action.Args["height"]); height != "" {
-		entry.session.Options["viewport_height"] = height
+		sessionEntry.session.Options["viewport_height"] = height
 	}
-	m.sessions[sessionID] = entry
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
-	entries := make([]entry, 0, len(m.sessions))
-	for _, entry := range m.sessions {
-		entries = append(entries, entry)
+	entries := make([]*entry, 0, len(m.sessions))
+	for _, sessionEntry := range m.sessions {
+		entries = append(entries, sessionEntry)
 	}
-	m.sessions = map[string]entry{}
+	m.sessions = map[string]*entry{}
+	m.shuttingDown = true
 	m.mu.Unlock()
 
-	for _, entry := range entries {
-		if err := entry.adapter.Detach(ctx); err != nil {
+	for _, sessionEntry := range entries {
+		if err := sessionEntry.acquire(ctx); err != nil {
+			return err
+		}
+		if sessionEntry.closed {
+			sessionEntry.release()
+			continue
+		}
+		err := sessionEntry.adapter.Detach(ctx)
+		sessionEntry.closed = true
+		sessionEntry.release()
+		if err != nil {
 			return err
 		}
 	}

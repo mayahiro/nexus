@@ -1,6 +1,10 @@
 package api
 
-import "time"
+import (
+	"encoding/base64"
+	"encoding/json"
+	"time"
+)
 
 type Session struct {
 	ID         string            `json:"id"`
@@ -73,10 +77,14 @@ type ObserveOptions struct {
 	WithTree          bool     `json:"with_tree"`
 	WithScreenshot    bool     `json:"with_screenshot"`
 	FullScreenshot    bool     `json:"full_screenshot"`
+	RecoverScreenshot bool     `json:"recover_screenshot,omitempty"`
 	WithLayoutContext bool     `json:"with_layout_context,omitempty"`
 	CSSProperties     []string `json:"css_properties,omitempty"`
 	LayoutProperties  []string `json:"layout_properties,omitempty"`
 	ScopeSelector     string   `json:"scope_selector,omitempty"`
+	MatchSelector     string   `json:"match_selector,omitempty"`
+	WithinRef         string   `json:"within_ref,omitempty"`
+	ExcludeScopeRoot  bool     `json:"exclude_scope_root,omitempty"`
 	NodeScope         string   `json:"node_scope,omitempty"`
 	TimeoutMS         int      `json:"timeout_ms,omitempty"`
 }
@@ -86,16 +94,37 @@ type LogOptions struct {
 }
 
 type Observation struct {
-	SessionID    string            `json:"session_id"`
-	TargetType   string            `json:"target_type"`
-	URLOrScreen  string            `json:"url_or_screen,omitempty"`
-	Title        string            `json:"title,omitempty"`
-	Text         string            `json:"text,omitempty"`
-	Tree         []Node            `json:"tree,omitempty"`
-	Screenshot   string            `json:"screenshot,omitempty"`
-	Logs         []LogEntry        `json:"logs,omitempty"`
-	Capabilities []string          `json:"capabilities,omitempty"`
-	Meta         map[string]string `json:"meta,omitempty"`
+	SessionID      string            `json:"session_id"`
+	TargetType     string            `json:"target_type"`
+	URLOrScreen    string            `json:"url_or_screen,omitempty"`
+	Title          string            `json:"title,omitempty"`
+	Text           string            `json:"text,omitempty"`
+	Tree           []Node            `json:"tree,omitempty"`
+	Screenshot     string            `json:"screenshot,omitempty"`
+	Logs           []LogEntry        `json:"logs,omitempty"`
+	Capabilities   []string          `json:"capabilities,omitempty"`
+	Meta           map[string]string `json:"meta,omitempty"`
+	ScreenshotData []byte            `json:"-"`
+}
+
+func (o Observation) MarshalJSON() ([]byte, error) {
+	type observation Observation
+
+	value := observation(o)
+	if value.Screenshot == "" && len(o.ScreenshotData) > 0 {
+		value.Screenshot = base64.StdEncoding.EncodeToString(o.ScreenshotData)
+	}
+	return json.Marshal(value)
+}
+
+func (o Observation) ScreenshotBytes() ([]byte, error) {
+	if len(o.ScreenshotData) > 0 {
+		return o.ScreenshotData, nil
+	}
+	if o.Screenshot == "" {
+		return nil, nil
+	}
+	return base64.StdEncoding.DecodeString(o.Screenshot)
 }
 
 type Node struct {
@@ -104,6 +133,7 @@ type Node struct {
 	Fingerprint    string              `json:"fingerprint,omitempty"`
 	LocatorHints   []LocatorHint       `json:"locator_hints,omitempty"`
 	StructurePath  string              `json:"structure_path,omitempty"`
+	Selector       string              `json:"selector,omitempty"`
 	TextLength     int                 `json:"text_length,omitempty"`
 	Descendants    int                 `json:"descendants,omitempty"`
 	Role           string              `json:"role"`
@@ -143,12 +173,14 @@ type LocatorHint struct {
 }
 
 type Action struct {
-	Kind   string            `json:"kind"`
-	NodeID *int              `json:"node_id,omitempty"`
-	Text   string            `json:"text,omitempty"`
-	Dir    string            `json:"dir,omitempty"`
-	Keys   []string          `json:"keys,omitempty"`
-	Args   map[string]string `json:"args,omitempty"`
+	Kind     string            `json:"kind"`
+	NodeID   *int              `json:"node_id,omitempty"`
+	NodeRef  string            `json:"node_ref,omitempty"`
+	Selector string            `json:"selector,omitempty"`
+	Text     string            `json:"text,omitempty"`
+	Dir      string            `json:"dir,omitempty"`
+	Keys     []string          `json:"keys,omitempty"`
+	Args     map[string]string `json:"args,omitempty"`
 }
 
 type ActionResult struct {

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"image"
@@ -28,9 +27,11 @@ import (
 type screenshotCaptureOptions struct {
 	Annotate bool
 	Full     bool
+	Recover  bool
 	Locator  string
 	Nth      int
 	Timeout  time.Duration
+	Warnings io.Writer
 }
 
 var screenshotCaptureTimeout = 30 * time.Second
@@ -55,9 +56,11 @@ func runScreenshotInvocation(ctx context.Context, invocation *nagicli.Invocation
 	data, err := captureScreenshotBytes(ctx, client, arguments.SessionID, screenshotCaptureOptions{
 		Annotate: arguments.Annotate,
 		Full:     arguments.Full,
+		Recover:  arguments.Recover,
 		Locator:  strings.TrimSpace(arguments.Locator),
 		Nth:      arguments.Nth,
 		Timeout:  time.Duration(arguments.Timeout) * time.Millisecond,
+		Warnings: stderr,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
@@ -84,22 +87,25 @@ func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID s
 	res, err := client.ObserveSession(captureCtx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithScreenshot: true,
-			WithTree:       opts.Annotate,
-			FullScreenshot: opts.Full,
-			TimeoutMS:      int(timeout / time.Millisecond),
+			WithScreenshot:    true,
+			WithTree:          opts.Annotate,
+			FullScreenshot:    opts.Full,
+			RecoverScreenshot: opts.Recover,
+			TimeoutMS:         int(timeout / time.Millisecond),
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	if res.Observation.Screenshot == "" {
-		return nil, fmt.Errorf("empty screenshot")
-	}
-
-	data, err := base64.StdEncoding.DecodeString(res.Observation.Screenshot)
+	data, err := res.Observation.ScreenshotBytes()
 	if err != nil {
 		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty screenshot")
+	}
+	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" && opts.Warnings != nil {
+		fmt.Fprintf(opts.Warnings, "warning: %s\n", warning)
 	}
 	if !opts.Annotate {
 		return data, nil
@@ -116,39 +122,52 @@ func screenshotTimeout(timeout time.Duration) time.Duration {
 }
 
 func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID string, opts screenshotCaptureOptions) ([]byte, error) {
-	observation, err := observeTreeForFind(ctx, client, sessionID)
+	timeout := screenshotTimeout(opts.Timeout)
+	captureCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	selection := nodeSelectionOptions{Nth: opts.Nth}
+	node, directRef, err := directRefNode(opts.Locator, selection)
+	if err != nil {
+		return nil, err
+	}
+	if !directRef {
+		observation, err := observeTreeForFind(captureCtx, client, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		node, err = resolveScreenshotNode(observation.Tree, opts.Locator, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	rect, err := focusScreenshotNode(captureCtx, client, sessionID, node)
 	if err != nil {
 		return nil, err
 	}
 
-	node, err := resolveScreenshotNode(observation.Tree, opts.Locator, nodeSelectionOptions{Nth: opts.Nth})
-	if err != nil {
-		return nil, err
-	}
-
-	rect, err := focusScreenshotNode(ctx, client, sessionID, node.ID)
-	if err != nil {
-		return nil, err
-	}
-
-	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
+	res, err := client.ObserveSession(captureCtx, api.ObserveSessionRequest{
 		SessionID: sessionID,
 		Options: api.ObserveOptions{
-			WithScreenshot: true,
-			WithTree:       opts.Annotate,
-			TimeoutMS:      int(screenshotTimeout(opts.Timeout) / time.Millisecond),
+			WithScreenshot:    true,
+			WithTree:          opts.Annotate,
+			RecoverScreenshot: opts.Recover,
+			TimeoutMS:         int(timeout / time.Millisecond),
 		},
 	})
 	if err != nil {
 		return nil, err
 	}
-	if res.Observation.Screenshot == "" {
-		return nil, fmt.Errorf("empty screenshot")
-	}
-
-	data, err := base64.StdEncoding.DecodeString(res.Observation.Screenshot)
+	data, err := res.Observation.ScreenshotBytes()
 	if err != nil {
 		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("empty screenshot")
+	}
+	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" && opts.Warnings != nil {
+		fmt.Fprintf(opts.Warnings, "warning: %s\n", warning)
 	}
 	if opts.Annotate {
 		data, err = annotateScreenshot(data, res.Observation.Tree)
@@ -176,12 +195,43 @@ func resolveScreenshotNode(nodes []api.Node, locator string, selection nodeSelec
 	return chooseNode(matches, locator, selection)
 }
 
-func focusScreenshotNode(ctx context.Context, client *rpc.Client, sessionID string, nodeID int) (api.Rect, error) {
+func focusScreenshotNode(ctx context.Context, client *rpc.Client, sessionID string, node api.Node) (api.Rect, error) {
+	if strings.TrimSpace(node.Ref) != "" && strings.TrimSpace(node.Selector) == "" {
+		res, err := client.ActSession(ctx, api.ActSessionRequest{
+			SessionID: sessionID,
+			Action: api.Action{
+				Kind:    "get",
+				NodeID:  &node.ID,
+				NodeRef: node.Ref,
+				Args: map[string]string{
+					"target":           "bbox",
+					"scroll_into_view": "true",
+				},
+			},
+		})
+		if err != nil {
+			return api.Rect{}, err
+		}
+		if !res.Result.OK {
+			if strings.TrimSpace(res.Result.Message) != "" {
+				return api.Rect{}, errors.New(res.Result.Message)
+			}
+			return api.Rect{}, fmt.Errorf("failed to focus screenshot node")
+		}
+		return parseRectValue(res.Result.Value)
+	}
+
+	source := screenshotNodeRectJS(node.ID)
+	if strings.TrimSpace(node.Selector) != "" {
+		source = screenshotSelectorRectJS(node.Selector)
+	}
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
 		SessionID: sessionID,
 		Action: api.Action{
-			Kind: "eval",
-			Text: screenshotNodeRectJS(nodeID),
+			Kind:    "eval",
+			NodeID:  &node.ID,
+			NodeRef: node.Ref,
+			Text:    source,
 		},
 	})
 	if err != nil {
@@ -243,6 +293,23 @@ func screenshotNodeRectJS(nodeID int) string {
 })()`
 }
 
+func screenshotSelectorRectJS(selector string) string {
+	return `(function () {
+  const el = document.querySelector(` + strconv.Quote(selector) + `);
+  if (!el) {
+    throw new Error('node not found');
+  }
+  el.scrollIntoView({block: 'center', inline: 'center'});
+  const rect = el.getBoundingClientRect();
+  return {
+    x: Math.round(rect.x),
+    y: Math.round(rect.y),
+    w: Math.round(rect.width),
+    h: Math.round(rect.height)
+  };
+})()`
+}
+
 func parseRectValue(value interface{}) (api.Rect, error) {
 	fields, ok := value.(map[string]interface{})
 	if !ok {
@@ -271,6 +338,12 @@ func parseRectValue(value interface{}) (api.Rect, error) {
 
 func rectField(fields map[string]interface{}, key string) (int, error) {
 	value, ok := fields[key]
+	if !ok && key == "w" {
+		value, ok = fields["width"]
+	}
+	if !ok && key == "h" {
+		value, ok = fields["height"]
+	}
 	if !ok {
 		return 0, fmt.Errorf("invalid screenshot bounds")
 	}

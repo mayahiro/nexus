@@ -25,7 +25,7 @@ Insert `screenshot` before `compare` when the flow should keep visual artifacts.
 
 Use a JSON manifest with these top-level keys:
 
-- `defaults`: shared defaults such as `backend`, `target_ref`, `viewport`, `wait_timeout`, `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`
+- `defaults`: shared defaults such as `backend`, `target_ref`, `viewport`, `wait_timeout`, `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`
 - `matrices`: named viewport or variable sets that a scenario can replay against
 - `scenarios`: the runnable flow list
 
@@ -76,9 +76,12 @@ Useful step fields:
 With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
 When `locator` is present, `screenshot` captures just the matched element instead of the whole viewport.
 Use `nth` when multiple nodes intentionally share the same locator.
-Screenshot capture times out after 30000 ms by default. Set `timeout` on the step when a large page needs more time.
+Screenshot capture times out after 30000 ms by default. Each `Page.captureScreenshot` attempt is capped at 10000 ms. Set `timeout` on the step to budget enough time for same-target reconnect; it does not extend one capture attempt beyond 10000 ms. Flow screenshot steps do not opt into destructive tab replacement.
 `full` is not supported together with `locator`.
-`compare` supports step-level overrides such as `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
+For a generic post-load stabilization barrier, use a wait step with `"target": "hydrated"` and no `value`. It is a DOM-quiet rendering heuristic; use `"target": "function"` with an application expression when a stronger readiness signal exists.
+`compare` supports step-level overrides such as `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
+`all_css_properties` and `css_property` are alternative modes. Do not set both in the same defaults or step object; the manifest is rejected. A step-level `css_property` list overrides an inherited exhaustive mode.
+Set step-level `compare_css` to false without another step-level CSS mode to disable inherited CSS comparison.
 
 ## Why `navigate` Matters
 

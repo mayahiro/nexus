@@ -9,6 +9,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -2421,5 +2422,87 @@ func TestCompareManifestMatchModeAndNodeScopeMerge(t *testing.T) {
 	run = mergeCompareManifestPage(run, compareManifestDefaults{}, compareManifestPage{NoDefaultIgnores: &enabled})
 	if run.NoDefaultIgnores {
 		t.Fatalf("expected page no_default_ignores override")
+	}
+}
+
+func TestResolveCSSPropertiesModeAll(t *testing.T) {
+	properties, err := ResolveCSSPropertiesMode(false, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(properties, []string{allCSSPropertiesMarker}) {
+		t.Fatalf("unexpected all css marker: %#v", properties)
+	}
+
+	if _, err := ResolveCSSPropertiesMode(false, true, []string{"color"}); err == nil {
+		t.Fatal("expected all and explicit css properties to conflict")
+	}
+}
+
+func TestCompareNodeCSSAll(t *testing.T) {
+	node := api.Node{
+		Styles: map[string]string{
+			"color":   " rgb(1, 2, 3) ",
+			"display": " block ",
+		},
+	}
+	values := compareNodeCSS(node, []string{allCSSPropertiesMarker})
+	expected := map[string]string{
+		"color":   "rgb(1, 2, 3)",
+		"display": "block",
+	}
+	if !reflect.DeepEqual(values, expected) {
+		t.Fatalf("unexpected all css values: %#v", values)
+	}
+}
+
+func TestCompareManifestAllCSSOverrides(t *testing.T) {
+	run := mergeCompareManifestPage(
+		compareRun{},
+		compareManifestDefaults{AllCSSProperties: true},
+		compareManifestPage{},
+	)
+	if !run.AllCSSProperties || !run.CompareCSS || len(run.CSSProperties) != 0 {
+		t.Fatalf("unexpected exhaustive css defaults: %+v", run)
+	}
+
+	run = mergeCompareManifestPage(
+		run,
+		compareManifestDefaults{},
+		compareManifestPage{CSSProperty: []string{"color"}},
+	)
+	if run.AllCSSProperties || !reflect.DeepEqual(run.CSSProperties, []string{"color"}) {
+		t.Fatalf("expected page css properties to override exhaustive mode: %+v", run)
+	}
+}
+
+func TestLoadCompareManifestRejectsConflictingCSSModes(t *testing.T) {
+	tests := map[string]string{
+		"defaults": `{
+			"defaults": {
+				"all_css_properties": true,
+				"css_property": ["color"]
+			},
+			"pages": [{}]
+		}`,
+		"page": `{
+			"pages": [{
+				"name": "orders",
+				"all_css_properties": true,
+				"css_property": ["color"]
+			}]
+		}`,
+	}
+
+	for name, manifest := range tests {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "manifest.json")
+			if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadCompareManifest(path); err == nil || !strings.Contains(err.Error(), "can not combine all_css_properties with css_property") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
 	}
 }

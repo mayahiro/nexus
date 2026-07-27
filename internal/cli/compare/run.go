@@ -108,6 +108,7 @@ func runCompareWithArguments(ctx context.Context, parsed nagiCompareArguments, s
 		WaitFunction:            parsed.WaitFunction,
 		WaitNetworkIdle:         parsed.WaitNetworkIdle,
 		CompareCSS:              parsed.CompareCSS,
+		AllCSSProperties:        parsed.AllCSSProperties,
 		CompareLayout:           parsed.CompareLayout,
 		NoDefaultIgnores:        parsed.NoDefaultIgnores,
 		WaitTimeout:             parsed.WaitTimeout,
@@ -762,7 +763,10 @@ func executeCompare(ctx context.Context, client *rpc.Client, paths config.Paths,
 	if err != nil {
 		return compareReport{}, err
 	}
-	cssProperties := ResolveCSSProperties(run.CompareCSS, run.CSSProperties)
+	cssProperties, err := ResolveCSSPropertiesMode(run.CompareCSS, run.AllCSSProperties, run.CSSProperties)
+	if err != nil {
+		return compareReport{}, err
+	}
 	oldScopeSelector, newScopeSelector, err := resolveCompareScopeSelectors(run.ScopeSelector, run.OldScopeSelector, run.NewScopeSelector)
 	if err != nil {
 		return compareReport{}, err

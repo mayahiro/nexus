@@ -18,6 +18,7 @@ type nagiScreenshotArguments struct {
 	SessionID string
 	Full      bool
 	Annotate  bool
+	Recover   bool
 	Locator   string
 	Nth       int
 	Timeout   int
@@ -81,7 +82,7 @@ func newNagiScreenshotRoot(timeout int) *nagicli.Command {
 func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 	return nagicli.NewCommand("screenshot").
 		About("Capture a page or element screenshot").
-		UsageVariant("capture", "[path] [--session <id>] [--full] [--annotate] [--locator <locator>] [--nth <n>] [--timeout <ms>]").
+		UsageVariant("capture", "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--locator <locator>] [--nth <n>] [--timeout <ms>]").
 		Option(
 			nagicli.ValueOption("session").
 				Long("session").
@@ -91,6 +92,7 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		).
 		Option(nagicli.Flag("full").Long("full").Help("capture full page")).
 		Option(nagicli.Flag("annotate").Long("annotate").Help("draw node refs on the screenshot")).
+		Option(nagicli.Flag("recover-target").Long("recover-target").Help("replace an unresponsive tab and retry, losing transient page state")).
 		Option(
 			nagicli.ValueOption("locator").
 				Long("locator").
@@ -108,12 +110,15 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 				Long("timeout").
 				Parser(nagiIntParser("MS")).
 				Default(strconv.Itoa(timeout)).
-				Help("screenshot timeout in milliseconds"),
+				Help("overall screenshot recovery timeout in milliseconds"),
 		).
 		Argument(nagicli.Positional("paths").Repeated()).
 		Validator(validateNagiScreenshotInvocation).
 		Handle(nagiRunHandler(runScreenshotInvocation)).
-		Note("Locator forms include @eN, role, name, text, label, testid, and href")
+		Note("Locator forms include @eN, role, name, text, label, testid, and href").
+		Note("Viewport capture is the default; --full captures the full page within safety limits").
+		Note("Each capture attempt is capped at 10000 ms within the overall timeout").
+		Note("A failed capture automatically reattaches to the same target once; --recover-target additionally permits tab replacement")
 }
 
 func newNagiCommandRoot(command *nagicli.Command) *nagicli.Command {
@@ -178,6 +183,7 @@ func nagiScreenshotArgumentsFromInvocation(invocation *nagicli.Invocation) nagiS
 	sessionID, _ := invocation.RawValue("session")
 	full, _ := invocation.Flag("full")
 	annotate, _ := invocation.Flag("annotate")
+	recoverTarget, _ := invocation.Flag("recover-target")
 	locator, _ := invocation.RawValue("locator")
 	nth, _ := nagicli.ValueAs[int](invocation, "nth")
 	timeout, _ := nagicli.ValueAs[int](invocation, "timeout")
@@ -185,6 +191,7 @@ func nagiScreenshotArgumentsFromInvocation(invocation *nagicli.Invocation) nagiS
 		SessionID: sessionID,
 		Full:      full,
 		Annotate:  annotate,
+		Recover:   recoverTarget,
 		Locator:   locator,
 		Nth:       nth,
 		Timeout:   timeout,
@@ -210,6 +217,11 @@ func validateNagiScreenshotInvocation(invocation *nagicli.Invocation) *nagicli.D
 	if strings.TrimSpace(arguments.Locator) != "" && arguments.Full {
 		return nagiValidationDiagnostic("--full is not supported with --locator").
 			WithTarget(nagicli.OptionTarget("full")).
+			WithTarget(nagicli.OptionTarget("locator"))
+	}
+	if strings.TrimSpace(arguments.Locator) != "" && arguments.Recover {
+		return nagiValidationDiagnostic("--recover-target is not supported with --locator because target replacement invalidates the crop").
+			WithTarget(nagicli.OptionTarget("recover-target")).
 			WithTarget(nagicli.OptionTarget("locator"))
 	}
 	if arguments.Timeout <= 0 {

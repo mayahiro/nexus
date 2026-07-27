@@ -360,6 +360,14 @@ func TestSelectAndUpload(t *testing.T) {
 		t.Fatalf("unexpected upload ref output: %s", stdout.String())
 	}
 
+	stdout.Reset()
+	if code := Run(context.Background(), []string{"upload", "--selector", "input[type=file]", uploadFile}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected upload selector exit code: %d\n%s", code, stdout.String())
+	}
+	if !strings.Contains(strings.TrimSpace(stdout.String()), "uploaded "+uploadFile+" to input[type=file]") {
+		t.Fatalf("unexpected upload selector output: %s", stdout.String())
+	}
+
 	cancel()
 
 	select {
