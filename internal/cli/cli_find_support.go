@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strconv"
@@ -159,19 +158,6 @@ func formatNodeCandidates(nodes []api.Node) string {
 		parts = append(parts, fmt.Sprintf("%s %s", label, node.Role))
 	}
 	return strings.Join(parts, ", ")
-}
-
-func isInvalidNthFlag(fs interface{ Visit(func(*flag.Flag)) }, nth int) bool {
-	if nth > 0 {
-		return false
-	}
-	invalid := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "nth" {
-			invalid = true
-		}
-	})
-	return invalid
 }
 
 func executeFoundAction(ctx context.Context, client *rpc.Client, sessionID string, node api.Node, actionName string, actionValue string, asJSON bool, stdout io.Writer, stderr io.Writer) int {

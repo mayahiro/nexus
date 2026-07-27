@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"flag"
 	"fmt"
 	"image"
 	"image/color"
@@ -17,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	nagicli "github.com/mayahiro/nagicli-go"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -35,53 +35,11 @@ type screenshotCaptureOptions struct {
 
 var screenshotCaptureTimeout = 30 * time.Second
 
-func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printScreenshotHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("screenshot", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	full := fs.Bool("full", false, "capture full page")
-	annotate := fs.Bool("annotate", false, "draw node refs on top of the screenshot")
-	locator := fs.String("locator", "", "capture a single element such as @e3 or label=Email")
-	nth := fs.Int("nth", 0, "select nth match when --locator matches multiple nodes")
-	timeout := fs.Int("timeout", int(screenshotCaptureTimeout/time.Millisecond), "screenshot timeout in milliseconds")
+func runScreenshotInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	arguments := nagiScreenshotArgumentsFromInvocation(invocation)
 	pathArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		pathArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "screenshot"); err != nil {
-		return 1
-	}
-	if isInvalidNthFlag(fs, *nth) {
-		fmt.Fprintln(stderr, "--nth must be a positive integer")
-		return 1
-	}
-	if *nth > 0 && strings.TrimSpace(*locator) == "" {
-		fmt.Fprintln(stderr, "--nth requires --locator")
-		return 1
-	}
-	if strings.TrimSpace(*locator) != "" && *full {
-		fmt.Fprintln(stderr, "--full is not supported with --locator")
-		return 1
-	}
-	if *timeout <= 0 {
-		fmt.Fprintln(stderr, "--timeout must be a positive integer")
-		return 1
-	}
-
-	if pathArg == "" && fs.NArg() == 1 {
-		pathArg = fs.Arg(0)
-	}
-	if fs.NArg() > 1 {
-		fmt.Fprintln(stderr, "screenshot accepts at most one path")
-		return 1
+	if len(arguments.Paths) == 1 {
+		pathArg = arguments.Paths[0]
 	}
 	if pathArg == "" {
 		pathArg = "screenshot.png"
@@ -94,12 +52,12 @@ func runScreenshot(ctx context.Context, args []string, stdout io.Writer, stderr 
 	}
 	defer client.Close()
 
-	data, err := captureScreenshotBytes(ctx, client, *sessionID, screenshotCaptureOptions{
-		Annotate: *annotate,
-		Full:     *full,
-		Locator:  strings.TrimSpace(*locator),
-		Nth:      *nth,
-		Timeout:  time.Duration(*timeout) * time.Millisecond,
+	data, err := captureScreenshotBytes(ctx, client, arguments.SessionID, screenshotCaptureOptions{
+		Annotate: arguments.Annotate,
+		Full:     arguments.Full,
+		Locator:  strings.TrimSpace(arguments.Locator),
+		Nth:      arguments.Nth,
+		Timeout:  time.Duration(arguments.Timeout) * time.Millisecond,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)

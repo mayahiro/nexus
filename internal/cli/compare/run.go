@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"strings"
+
+	nagicli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/config"
@@ -15,119 +16,66 @@ import (
 )
 
 func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
-	if isHelpArgs(args) {
-		PrintHelp(stdout)
-		return 0
-	}
-	if len(args) > 0 && args[0] == "validate-decisions" {
-		return runCompareValidateDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
-	}
-	if len(args) > 0 && args[0] == "normalize-decisions" {
-		return runCompareNormalizeDecisions(args[1:], stdout, stderr)
-	}
-	if len(args) > 0 && args[0] == "materialize-decisions" {
-		return runCompareMaterializeDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
-	}
-	if len(args) > 0 && args[0] == "repair-decisions" {
-		return runCompareRepairDecisionsWithClient(ctx, args[1:], stdout, stderr, connectClient)
-	}
-	if len(args) > 0 && args[0] == "audit-decisions" {
-		return runCompareAuditDecisions(args[1:], stdout, stderr)
-	}
-	fs := flag.NewFlagSet("compare", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	positional := make([]string, 0, 2)
-	for len(args) > 0 && len(positional) < 2 && !strings.HasPrefix(args[0], "-") {
-		positional = append(positional, args[0])
-		args = args[1:]
-	}
-
-	oldSession := fs.String("old-session", "", "old session id")
-	newSession := fs.String("new-session", "", "new session id")
-	oldURL := fs.String("old-url", "", "old url")
-	newURL := fs.String("new-url", "", "new url")
-	backend := fs.String("backend", "chromium", "browser backend")
-	targetRef := fs.String("target-ref", "", "target ref")
-	viewport := fs.String("viewport", "", "viewport as WIDTHxHEIGHT")
-	matchMode := fs.String("match-mode", defaultCompareMatchMode, "node match mode: exact, stable, heuristic, or histogram")
-	nodeScope := fs.String("node-scope", defaultCompareNodeScope, "node scope: current, actionable, semantic, or all")
-	matchingDebug := fs.Bool("matching-debug", false, "include matching debug details in json and markdown reports")
-	decisionsFile := fs.String("decisions-file", "", "read AI or human pairing decisions from a JSONL file")
-	outputDecisionsTemplate := fs.String("output-decisions-template", "", "write a JSONL decisions template from ambiguous and unmatched matching debug nodes")
-	outputFindingDecisionsTemplate := fs.String("output-finding-decisions-template", "", "write a JSONL decisions template from current findings")
-	manifestPath := fs.String("manifest", "", "compare manifest json")
-	continueOnError := fs.Bool("continue-on-error", false, "continue after manifest page error")
-	limit := fs.Int("limit", 0, "limit manifest pages")
-	waitSelector := fs.String("wait-selector", "", "wait selector before compare")
-	scopeSelector := fs.String("scope-selector", "", "restrict compare to a single CSS selector subtree")
-	oldScopeSelector := fs.String("old-scope-selector", "", "old side CSS selector subtree")
-	newScopeSelector := fs.String("new-scope-selector", "", "new side CSS selector subtree")
-	waitFunction := fs.String("wait-function", "", "wait until javascript expression returns true before compare")
-	waitNetworkIdle := fs.Bool("wait-network-idle", false, "wait for a short post-load network idle window before compare")
-	compareCSS := fs.Bool("compare-css", false, "compare computed css values for matching nodes")
-	compareLayout := fs.Bool("compare-layout", false, "compare viewport-relative element bounds for matching nodes")
-	noDefaultIgnores := fs.Bool("no-default-ignores", false, "disable default ignored nodes for --node-scope all")
-	waitTimeout := fs.Int("wait-timeout", 10000, "wait timeout in ms")
-	asJSON := fs.Bool("json", false, "print as json")
-	outputJSON := fs.String("output-json", "", "write compare report json to file")
-	outputMD := fs.String("output-md", "", "write compare report markdown to file")
-	reviewDir := fs.String("review-dir", "", "write an AI review packet directory")
-	var ignoreRegex compareStringValues
-	var cssProperty compareStringValues
-	var ignoreSelector compareStringValues
-	var maskSelector compareStringValues
-	fs.Var(&cssProperty, "css-property", "computed css property to compare")
-	fs.Var(&ignoreRegex, "ignore-text-regex", "regex to strip from text before compare")
-	fs.Var(&ignoreSelector, "ignore-selector", "node selector to ignore such as @e3, role=button, text=Save")
-	fs.Var(&maskSelector, "mask-selector", "node selector to mask such as @e3, role=textbox, testid=user-id")
-
-	if err := parseCommandFlags(fs, args, stderr, "compare"); err != nil {
+	commandContext := nagicli.NewContextWithCancellation(
+		strings.NewReader(""),
+		stdout,
+		stderr,
+		nil,
+		"",
+		ctx,
+	)
+	application := nagicli.NewCommand("nxctl").
+		RequireSubcommand().
+		Subcommand(NewNagiCommand(connectClient))
+	argv := make([]string, 0, len(args)+1)
+	argv = append(argv, "compare")
+	argv = append(argv, args...)
+	policy := nagicli.DefaultRuntimePolicy().WithExitCodePolicy(
+		nagicli.DefaultExitCodePolicy().
+			WithStatus(nagicli.CategoryUsage, nagicli.StatusFailure),
+	)
+	outcome, err := application.RunWithPolicy(commandContext, argv, policy)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	return int(outcome.Status())
+}
 
-	if strings.TrimSpace(*manifestPath) != "" {
-		if len(positional) > 0 || fs.NArg() > 0 || *oldURL != "" || *newURL != "" || *oldSession != "" || *newSession != "" {
-			fmt.Fprintln(stderr, "compare can not mix --manifest with urls or session flags")
-			fmt.Fprintln(stderr, "hint: nxctl compare --manifest migration-pages.json")
-			fmt.Fprintln(stderr, "hint: run `nxctl help compare` for details")
-			return 1
-		}
-	} else if len(positional) == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
-		*oldURL = positional[0]
-		*newURL = positional[1]
-	} else if fs.NArg() == 2 && *oldURL == "" && *newURL == "" && *oldSession == "" && *newSession == "" {
-		*oldURL = fs.Arg(0)
-		*newURL = fs.Arg(1)
-	} else if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare accepts either two urls, two sessions, or --manifest")
-		PrintHelp(stderr)
-		return 1
+func runCompareWithArguments(ctx context.Context, parsed nagiCompareArguments, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
+	positional := parsed.Positionals
+	if len(positional) == 2 {
+		parsed.OldURL = positional[0]
+		parsed.NewURL = positional[1]
 	}
 
-	if *waitTimeout < 0 {
+	if parsed.WaitTimeout < 0 {
 		fmt.Fprintln(stderr, "wait-timeout must be a non-negative integer")
 		return 1
 	}
-	if *limit < 0 {
+	if parsed.Limit < 0 {
 		fmt.Fprintln(stderr, "limit must be a non-negative integer")
 		return 1
 	}
-	normalizedMatchMode, err := normalizeCompareMatchMode(*matchMode)
+	normalizedMatchMode, err := normalizeCompareMatchMode(parsed.MatchMode)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	normalizedNodeScope, err := normalizeCompareNodeScope(*nodeScope)
+	normalizedNodeScope, err := normalizeCompareNodeScope(parsed.NodeScope)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if strings.TrimSpace(*manifestPath) == "" {
-		if err := validateCompareNodeScopeSelectors(normalizedNodeScope, *scopeSelector, *oldScopeSelector, *newScopeSelector); err != nil {
+	if strings.TrimSpace(parsed.ManifestPath) == "" {
+		if err := validateCompareNodeScopeSelectors(normalizedNodeScope, parsed.ScopeSelector, parsed.OldScopeSelector, parsed.NewScopeSelector); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
+	}
+	if connectClient == nil {
+		fmt.Fprintln(stderr, "compare requires a client connector")
+		return 1
 	}
 
 	client, err := connectClient(ctx)
@@ -144,63 +92,63 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 	}
 
 	base := compareRun{
-		Backend:                 *backend,
-		TargetRef:               *targetRef,
-		Viewport:                *viewport,
+		Backend:                 parsed.Backend,
+		TargetRef:               parsed.TargetRef,
+		Viewport:                parsed.Viewport,
 		MatchMode:               normalizedMatchMode,
 		NodeScope:               normalizedNodeScope,
-		MatchingDebug:           *matchingDebug || strings.TrimSpace(*outputDecisionsTemplate) != "" || strings.TrimSpace(*reviewDir) != "",
-		DecisionsFile:           *decisionsFile,
-		OutputDecisionsTemplate: strings.TrimSpace(*outputDecisionsTemplate),
-		ReviewDir:               strings.TrimSpace(*reviewDir),
-		WaitSelector:            *waitSelector,
-		ScopeSelector:           *scopeSelector,
-		OldScopeSelector:        *oldScopeSelector,
-		NewScopeSelector:        *newScopeSelector,
-		WaitFunction:            *waitFunction,
-		WaitNetworkIdle:         *waitNetworkIdle,
-		CompareCSS:              *compareCSS,
-		CompareLayout:           *compareLayout,
-		NoDefaultIgnores:        *noDefaultIgnores,
-		WaitTimeout:             *waitTimeout,
-		CSSProperties:           append([]string(nil), cssProperty...),
-		IgnoreTextRegex:         append([]string(nil), ignoreRegex...),
-		IgnoreSelector:          append([]string(nil), ignoreSelector...),
-		MaskSelector:            append([]string(nil), maskSelector...),
+		MatchingDebug:           parsed.MatchingDebug || strings.TrimSpace(parsed.OutputDecisionsTemplate) != "" || strings.TrimSpace(parsed.ReviewDir) != "",
+		DecisionsFile:           parsed.DecisionsFile,
+		OutputDecisionsTemplate: strings.TrimSpace(parsed.OutputDecisionsTemplate),
+		ReviewDir:               strings.TrimSpace(parsed.ReviewDir),
+		WaitSelector:            parsed.WaitSelector,
+		ScopeSelector:           parsed.ScopeSelector,
+		OldScopeSelector:        parsed.OldScopeSelector,
+		NewScopeSelector:        parsed.NewScopeSelector,
+		WaitFunction:            parsed.WaitFunction,
+		WaitNetworkIdle:         parsed.WaitNetworkIdle,
+		CompareCSS:              parsed.CompareCSS,
+		CompareLayout:           parsed.CompareLayout,
+		NoDefaultIgnores:        parsed.NoDefaultIgnores,
+		WaitTimeout:             parsed.WaitTimeout,
+		CSSProperties:           append([]string(nil), parsed.CSSProperty...),
+		IgnoreTextRegex:         append([]string(nil), parsed.IgnoreTextRegex...),
+		IgnoreSelector:          append([]string(nil), parsed.IgnoreSelector...),
+		MaskSelector:            append([]string(nil), parsed.MaskSelector...),
 	}
 
-	if strings.TrimSpace(*manifestPath) != "" {
-		if strings.TrimSpace(*outputDecisionsTemplate) != "" {
+	if strings.TrimSpace(parsed.ManifestPath) != "" {
+		if strings.TrimSpace(parsed.OutputDecisionsTemplate) != "" {
 			fmt.Fprintln(stderr, "compare can not use --output-decisions-template with --manifest")
 			return 1
 		}
-		if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
+		if strings.TrimSpace(parsed.OutputFindingDecisionsTemplate) != "" {
 			fmt.Fprintln(stderr, "compare can not use --output-finding-decisions-template with --manifest")
 			return 1
 		}
-		manifest, err := loadCompareManifest(*manifestPath)
+		manifest, err := loadCompareManifest(parsed.ManifestPath)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		report, err := executeCompareManifest(ctx, client, paths, *manifestPath, manifest, base, *continueOnError, *limit)
+		report, err := executeCompareManifest(ctx, client, paths, parsed.ManifestPath, manifest, base, parsed.ContinueOnError, parsed.Limit)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
-		if strings.TrimSpace(*outputJSON) != "" {
-			if err := writeIndentedJSONFile(*outputJSON, report); err != nil {
+		if strings.TrimSpace(parsed.OutputJSON) != "" {
+			if err := writeIndentedJSONFile(parsed.OutputJSON, report); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
 		}
-		if strings.TrimSpace(*outputMD) != "" {
-			if err := writeCompareManifestMarkdown(*outputMD, report); err != nil {
+		if strings.TrimSpace(parsed.OutputMD) != "" {
+			if err := writeCompareManifestMarkdown(parsed.OutputMD, report); err != nil {
 				fmt.Fprintln(stderr, err)
 				return 1
 			}
 		}
-		if *asJSON {
+		if parsed.JSON {
 			encoder := json.NewEncoder(stdout)
 			encoder.SetIndent("", "  ")
 			if err := encoder.Encode(report); err != nil {
@@ -213,14 +161,8 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return 0
 	}
 
-	base.OldEndpoint = compareEndpoint{SessionID: strings.TrimSpace(*oldSession), URL: strings.TrimSpace(*oldURL)}
-	base.NewEndpoint = compareEndpoint{SessionID: strings.TrimSpace(*newSession), URL: strings.TrimSpace(*newURL)}
-	if base.OldEndpoint.SessionID == "" && base.OldEndpoint.URL == "" && base.NewEndpoint.SessionID == "" && base.NewEndpoint.URL == "" {
-		fmt.Fprintln(stderr, "compare requires either two urls, two sessions, or --manifest")
-		fmt.Fprintln(stderr, "hint: nxctl compare https://old.example.com https://new.example.com")
-		fmt.Fprintln(stderr, "hint: run `nxctl help compare` for details")
-		return 1
-	}
+	base.OldEndpoint = compareEndpoint{SessionID: strings.TrimSpace(parsed.OldSession), URL: strings.TrimSpace(parsed.OldURL)}
+	base.NewEndpoint = compareEndpoint{SessionID: strings.TrimSpace(parsed.NewSession), URL: strings.TrimSpace(parsed.NewURL)}
 
 	report, err := executeCompare(ctx, client, paths, base)
 	if err != nil {
@@ -228,31 +170,31 @@ func Run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer,
 		return 1
 	}
 
-	if strings.TrimSpace(*outputJSON) != "" {
-		if err := writeIndentedJSONFile(*outputJSON, report); err != nil {
+	if strings.TrimSpace(parsed.OutputJSON) != "" {
+		if err := writeIndentedJSONFile(parsed.OutputJSON, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	if strings.TrimSpace(*outputMD) != "" {
-		if err := writeCompareMarkdown(*outputMD, report); err != nil {
+	if strings.TrimSpace(parsed.OutputMD) != "" {
+		if err := writeCompareMarkdown(parsed.OutputMD, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	if strings.TrimSpace(*outputDecisionsTemplate) != "" {
-		if err := writeCompareDecisionsTemplate(*outputDecisionsTemplate, report.MatchingDebug); err != nil {
+	if strings.TrimSpace(parsed.OutputDecisionsTemplate) != "" {
+		if err := writeCompareDecisionsTemplate(parsed.OutputDecisionsTemplate, report.MatchingDebug); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	if strings.TrimSpace(*outputFindingDecisionsTemplate) != "" {
-		if err := writeCompareFindingDecisionsTemplate(*outputFindingDecisionsTemplate, report); err != nil {
+	if strings.TrimSpace(parsed.OutputFindingDecisionsTemplate) != "" {
+		if err := writeCompareFindingDecisionsTemplate(parsed.OutputFindingDecisionsTemplate, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -271,61 +213,44 @@ func runCompareValidateDecisions(args []string, stdout io.Writer, stderr io.Writ
 }
 
 func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
-	if isHelpArgs(args) {
-		PrintValidateDecisionsHelp(stdout)
-		return 0
+	parsed, code, done := parseNagiCompareDecisionArguments(
+		"validate-decisions",
+		args,
+		stdout,
+		stderr,
+		PrintValidateDecisionsHelp,
+	)
+	if done {
+		return code
 	}
-	fs := flag.NewFlagSet("compare validate-decisions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	return runCompareValidateDecisionsWithArguments(ctx, parsed, stdout, stderr, connectClient)
+}
 
-	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to validate")
-	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs and fingerprints")
-	reviewSummary := fs.String("review-summary", "", "review-summary.json used to validate finding cluster decisions")
-	oldSession := fs.String("old-session", "", "old browser session used to preflight old_selector")
-	newSession := fs.String("new-session", "", "new browser session used to preflight new_selector")
-	strict := fs.Bool("strict", false, "treat schema-style validation warnings as errors")
-	asJSON := fs.Bool("json", false, "print validation report as json")
+func runCompareValidateDecisionsWithArguments(ctx context.Context, parsed nagiCompareDecisionArguments, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
+	selectorPreflightRequested := strings.TrimSpace(parsed.OldSession) != "" || strings.TrimSpace(parsed.NewSession) != ""
 
-	if err := parseCommandFlags(fs, args, stderr, "compare validate-decisions"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare validate-decisions accepts only flags")
-		PrintValidateDecisionsHelp(stderr)
-		return 1
-	}
-	if strings.TrimSpace(*decisionsFile) == "" {
-		fmt.Fprintln(stderr, "compare validate-decisions requires --decisions-file")
-		return 1
-	}
-	selectorPreflightRequested := strings.TrimSpace(*oldSession) != "" || strings.TrimSpace(*newSession) != ""
-	if selectorPreflightRequested && strings.TrimSpace(*compareJSON) == "" {
-		fmt.Fprintln(stderr, "compare validate-decisions selector preflight requires --compare-json")
-		return 1
-	}
-
-	decisions, err := loadCompareDecisions(*decisionsFile)
+	decisions, err := loadCompareDecisions(parsed.DecisionsFile)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	var loadedCompareReport *compareReport
-	if strings.TrimSpace(*compareJSON) != "" {
-		report, err := loadCompareReport(*compareJSON)
+	if strings.TrimSpace(parsed.CompareJSON) != "" {
+		report, err := loadCompareReport(parsed.CompareJSON)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		loadedCompareReport = &report
 	}
-	reviewClusters, err := loadCompareFindingClusters(*reviewSummary)
+	reviewClusters, err := loadCompareFindingClusters(parsed.ReviewSummary)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	report := validateCompareDecisionsWithOptions(decisions, loadedCompareReport, reviewClusters, compareDecisionValidationOptions{Strict: *strict})
+	report := validateCompareDecisionsWithOptions(decisions, loadedCompareReport, reviewClusters, compareDecisionValidationOptions{Strict: parsed.Strict})
 	if selectorPreflightRequested {
-		selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+		selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(parsed.OldSession), strings.TrimSpace(parsed.NewSession))
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
@@ -334,7 +259,7 @@ func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, s
 		selectorPreflight := preflightCompareDecisionSelectors(decisions, *loadedCompareReport, selectorResolver)
 		applyCompareDecisionSelectorPreflightReport(&report, selectorPreflight)
 	}
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -351,48 +276,36 @@ func runCompareValidateDecisionsWithClient(ctx context.Context, args []string, s
 }
 
 func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		PrintNormalizeDecisionsHelp(stdout)
-		return 0
+	parsed, code, done := parseNagiCompareDecisionArguments(
+		"normalize-decisions",
+		args,
+		stdout,
+		stderr,
+		PrintNormalizeDecisionsHelp,
+	)
+	if done {
+		return code
 	}
-	fs := flag.NewFlagSet("compare normalize-decisions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	return runCompareNormalizeDecisionsWithArguments(parsed, stdout, stderr)
+}
 
-	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to normalize")
-	compareJSON := fs.String("compare-json", "", "compare report JSON used to validate refs, fingerprints, and finding ids")
-	reviewSummary := fs.String("review-summary", "", "review-summary.json used to materialize finding cluster decisions")
-	output := fs.String("output", "", "write normalized decisions JSONL to file")
-	asJSON := fs.Bool("json", false, "print normalization report as json")
-
-	if err := parseCommandFlags(fs, args, stderr, "compare normalize-decisions"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare normalize-decisions accepts only flags")
-		PrintNormalizeDecisionsHelp(stderr)
-		return 1
-	}
-	if strings.TrimSpace(*decisionsFile) == "" {
-		fmt.Fprintln(stderr, "compare normalize-decisions requires --decisions-file")
-		return 1
-	}
-
-	decisions, err := loadCompareDecisions(*decisionsFile)
+func runCompareNormalizeDecisionsWithArguments(parsed nagiCompareDecisionArguments, stdout io.Writer, stderr io.Writer) int {
+	decisions, err := loadCompareDecisions(parsed.DecisionsFile)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
 	var loadedCompareReport *compareReport
-	if strings.TrimSpace(*compareJSON) != "" {
-		report, err := loadCompareReport(*compareJSON)
+	if strings.TrimSpace(parsed.CompareJSON) != "" {
+		report, err := loadCompareReport(parsed.CompareJSON)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 		loadedCompareReport = &report
 	}
-	reviewClusters, err := loadCompareFindingClusters(*reviewSummary)
+	reviewClusters, err := loadCompareFindingClusters(parsed.ReviewSummary)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -404,7 +317,7 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 			InputDecisions:    len(decisions),
 			OutputDecisions:   len(normalized),
 			DuplicatesRemoved: duplicates,
-			Output:            strings.TrimSpace(*output),
+			Output:            strings.TrimSpace(parsed.Output),
 			Errors:            validation.Summary.Errors,
 			Warnings:          validation.Summary.Warnings,
 			CompareJSONUsed:   validation.Summary.CompareJSONUsed,
@@ -420,7 +333,7 @@ func runCompareNormalizeDecisions(args []string, stdout io.Writer, stderr io.Wri
 		}
 	}
 
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -450,43 +363,26 @@ func runCompareMaterializeDecisions(args []string, stdout io.Writer, stderr io.W
 }
 
 func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
-	if isHelpArgs(args) {
-		PrintMaterializeDecisionsHelp(stdout)
-		return 0
+	parsed, code, done := parseNagiCompareDecisionArguments(
+		"materialize-decisions",
+		args,
+		stdout,
+		stderr,
+		PrintMaterializeDecisionsHelp,
+	)
+	if done {
+		return code
 	}
-	fs := flag.NewFlagSet("compare materialize-decisions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	return runCompareMaterializeDecisionsWithArguments(ctx, parsed, stdout, stderr, connectClient)
+}
 
-	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to materialize")
-	compareJSON := fs.String("compare-json", "", "compare report JSON used to resolve locators")
-	oldSession := fs.String("old-session", "", "old browser session used to resolve old_selector")
-	newSession := fs.String("new-session", "", "new browser session used to resolve new_selector")
-	output := fs.String("output", "", "write materialized decisions JSONL to file")
-	asJSON := fs.Bool("json", false, "print materialization report as json")
-
-	if err := parseCommandFlags(fs, args, stderr, "compare materialize-decisions"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare materialize-decisions accepts only flags")
-		PrintMaterializeDecisionsHelp(stderr)
-		return 1
-	}
-	if strings.TrimSpace(*decisionsFile) == "" {
-		fmt.Fprintln(stderr, "compare materialize-decisions requires --decisions-file")
-		return 1
-	}
-	if strings.TrimSpace(*compareJSON) == "" {
-		fmt.Fprintln(stderr, "compare materialize-decisions requires --compare-json")
-		return 1
-	}
-
-	decisions, err := loadCompareDecisions(*decisionsFile)
+func runCompareMaterializeDecisionsWithArguments(ctx context.Context, parsed nagiCompareDecisionArguments, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
+	decisions, err := loadCompareDecisions(parsed.DecisionsFile)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	compareReport, err := loadCompareReport(*compareJSON)
+	compareReport, err := loadCompareReport(parsed.CompareJSON)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -494,7 +390,7 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 	materialized := decisions
 	materializeIssues := []compareDecisionValidationIssue{}
 	materializedRefs := []compareDecisionMaterializedRef{}
-	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(parsed.OldSession), strings.TrimSpace(parsed.NewSession))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -517,7 +413,7 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 			InputDecisions:   len(decisions),
 			OutputDecisions:  len(materialized),
 			MaterializedRefs: len(materializedRefs),
-			Output:           strings.TrimSpace(*output),
+			Output:           strings.TrimSpace(parsed.Output),
 			CompareJSONUsed:  true,
 		},
 		Materialized: materializedRefs,
@@ -538,7 +434,7 @@ func runCompareMaterializeDecisionsWithClient(ctx context.Context, args []string
 		}
 	}
 
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -568,48 +464,31 @@ func runCompareRepairDecisions(args []string, stdout io.Writer, stderr io.Writer
 }
 
 func runCompareRepairDecisionsWithClient(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
-	if isHelpArgs(args) {
-		PrintRepairDecisionsHelp(stdout)
-		return 0
+	parsed, code, done := parseNagiCompareDecisionArguments(
+		"repair-decisions",
+		args,
+		stdout,
+		stderr,
+		PrintRepairDecisionsHelp,
+	)
+	if done {
+		return code
 	}
-	fs := flag.NewFlagSet("compare repair-decisions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	return runCompareRepairDecisionsWithArguments(ctx, parsed, stdout, stderr, connectClient)
+}
 
-	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to repair")
-	compareJSON := fs.String("compare-json", "", "compare report JSON used to repair stale refs")
-	oldSession := fs.String("old-session", "", "old browser session used to repair old_selector-backed stale refs")
-	newSession := fs.String("new-session", "", "new browser session used to repair new_selector-backed stale refs")
-	output := fs.String("output", "", "write repaired decisions JSONL to file")
-	asJSON := fs.Bool("json", false, "print repair report as json")
-
-	if err := parseCommandFlags(fs, args, stderr, "compare repair-decisions"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare repair-decisions accepts only flags")
-		PrintRepairDecisionsHelp(stderr)
-		return 1
-	}
-	if strings.TrimSpace(*decisionsFile) == "" {
-		fmt.Fprintln(stderr, "compare repair-decisions requires --decisions-file")
-		return 1
-	}
-	if strings.TrimSpace(*compareJSON) == "" {
-		fmt.Fprintln(stderr, "compare repair-decisions requires --compare-json")
-		return 1
-	}
-
-	decisions, err := loadCompareDecisions(*decisionsFile)
+func runCompareRepairDecisionsWithArguments(ctx context.Context, parsed nagiCompareDecisionArguments, stdout io.Writer, stderr io.Writer, connectClient func(context.Context) (*rpc.Client, error)) int {
+	decisions, err := loadCompareDecisions(parsed.DecisionsFile)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	compareReport, err := loadCompareReport(*compareJSON)
+	compareReport, err := loadCompareReport(parsed.CompareJSON)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(*oldSession), strings.TrimSpace(*newSession))
+	selectorResolver, closeSelectorResolver, err := compareDecisionSelectorResolverForSessions(ctx, connectClient, strings.TrimSpace(parsed.OldSession), strings.TrimSpace(parsed.NewSession))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -621,7 +500,7 @@ func runCompareRepairDecisionsWithClient(ctx context.Context, args []string, std
 			InputDecisions:  len(decisions),
 			OutputDecisions: len(repaired),
 			RepairedRefs:    len(repairedRefs),
-			Output:          strings.TrimSpace(*output),
+			Output:          strings.TrimSpace(parsed.Output),
 			CompareJSONUsed: true,
 		},
 		Repaired: repairedRefs,
@@ -645,7 +524,7 @@ func runCompareRepairDecisionsWithClient(ctx context.Context, args []string, std
 		}
 	}
 
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -811,46 +690,32 @@ func compareSelectorMaterializeLabelCompatible(selected compareSnapshotNode, nod
 }
 
 func runCompareAuditDecisions(args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		PrintAuditDecisionsHelp(stdout)
-		return 0
+	parsed, code, done := parseNagiCompareDecisionArguments(
+		"audit-decisions",
+		args,
+		stdout,
+		stderr,
+		PrintAuditDecisionsHelp,
+	)
+	if done {
+		return code
 	}
-	fs := flag.NewFlagSet("compare audit-decisions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	return runCompareAuditDecisionsWithArguments(parsed, stdout, stderr)
+}
 
-	decisionsFile := fs.String("decisions-file", "", "decisions JSONL file to audit")
-	compareJSON := fs.String("compare-json", "", "compare report JSON used to audit decision application")
-	asJSON := fs.Bool("json", false, "print audit report as json")
-
-	if err := parseCommandFlags(fs, args, stderr, "compare audit-decisions"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "compare audit-decisions accepts only flags")
-		PrintAuditDecisionsHelp(stderr)
-		return 1
-	}
-	if strings.TrimSpace(*decisionsFile) == "" {
-		fmt.Fprintln(stderr, "compare audit-decisions requires --decisions-file")
-		return 1
-	}
-	if strings.TrimSpace(*compareJSON) == "" {
-		fmt.Fprintln(stderr, "compare audit-decisions requires --compare-json")
-		return 1
-	}
-
-	decisions, err := loadCompareDecisions(*decisionsFile)
+func runCompareAuditDecisionsWithArguments(parsed nagiCompareDecisionArguments, stdout io.Writer, stderr io.Writer) int {
+	decisions, err := loadCompareDecisions(parsed.DecisionsFile)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	report, err := loadCompareReport(*compareJSON)
+	report, err := loadCompareReport(parsed.CompareJSON)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	audit := auditCompareDecisions(decisions, report)
-	if *asJSON {
+	if parsed.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(audit); err != nil {

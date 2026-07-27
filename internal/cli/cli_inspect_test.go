@@ -257,7 +257,7 @@ func TestGet(t *testing.T) {
 	if code := Run(context.Background(), []string{"get", "bbox", "@e3", "--selector", "#hero"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected get bbox selector with index validation to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "get bbox with --selector does not accept an index") {
+	if !strings.Contains(stdout.String(), "get bbox requires exactly one node, --selector, or --refs") {
 		t.Fatalf("unexpected get bbox selector validation output: %s", stdout.String())
 	}
 
@@ -389,7 +389,7 @@ func TestInspect(t *testing.T) {
 	if code := Run(context.Background(), []string{"inspect", "--selector", "aside.filters", "--old-session", "old", "--new-session", "new", "--nth", "2"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected inspect selector nth validation to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "inspect --selector does not support --nth") {
+	if !strings.Contains(stdout.String(), "inspect selector mode does not support --nth") {
 		t.Fatalf("unexpected inspect selector nth output: %s", stdout.String())
 	}
 
@@ -539,6 +539,14 @@ func TestFind(t *testing.T) {
 	}
 
 	stdout.Reset()
+	if code := Run(context.Background(), []string{"find", "role", "button", "--name", "Points explanation", "click"}, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected aria-label find exit code: %d\n%s", code, stdout.String())
+	}
+	if strings.TrimSpace(stdout.String()) != "clicked @e5" {
+		t.Fatalf("unexpected aria-label find output: %s", stdout.String())
+	}
+
+	stdout.Reset()
 	if code := Run(context.Background(), []string{"find", "text", "Sign In", "click", "--json"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected find text exit code: %d\n%s", code, stdout.String())
 	}
@@ -640,7 +648,7 @@ func TestFind(t *testing.T) {
 	if code := Run(context.Background(), []string{"find", "role", "button", "click", "--nth", "0"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected invalid find nth to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "find role --nth must be a positive integer") {
+	if !strings.Contains(stdout.String(), "find --nth must be a positive integer") {
 		t.Fatalf("unexpected invalid find nth output: %s", stdout.String())
 	}
 
@@ -648,7 +656,7 @@ func TestFind(t *testing.T) {
 	if code := Run(context.Background(), []string{"find", "role", "button", "--all", "--nth", "2"}, &stdout, &stdout); code == 0 {
 		t.Fatalf("expected find --all --nth to fail\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "find role --all does not accept --nth") {
+	if !strings.Contains(stdout.String(), "find --all does not accept --nth") {
 		t.Fatalf("unexpected find --all --nth output: %s", stdout.String())
 	}
 

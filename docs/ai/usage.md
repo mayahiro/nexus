@@ -44,6 +44,8 @@ nxctl help flow
 
 ## Core Rules
 
+- Treat `nxctl --help` and `nxctl help <command> [subcommand]` as the canonical command schema
+- Read the `error[code]: ...` diagnostic and its command-specific usage line before retrying invalid input
 - Reuse `@eN` refs from the latest `state` output when they are still fresh
 - Prefer semantic locators such as `role`, `label`, `text`, `testid`, or `href` when they are stable
 - Use `fill` when you want replacement semantics
@@ -54,6 +56,21 @@ nxctl help flow
 - Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional, because page changes can stale later refs
 - Add `wait` after actions that trigger async UI updates
 - Move to `inspect` when whole-page compare is too broad
+
+## Choosing `fill`, `input`, or `type`
+
+| Command | Target | Input behavior | Recommended use |
+| --- | --- | --- | --- |
+| `fill <NODE> <TEXT>` | Explicit observed node | Replaces the current value directly and dispatches `input` and `change` events | Use when the existing value must be replaced |
+| `input <NODE> <TEXT>` | Explicit observed node | Focuses the node and types at the current caret with key events when supported | Prefer for empty React-controlled fields or widgets that depend on keyboard events |
+| `type <TEXT>` | Currently focused editable element | Types at the current caret without selecting a node | Use only when a preceding action established focus unambiguously |
+
+For controlled forms:
+
+- Prefer `input` when the field is empty and the application needs real keyboard events
+- Prefer `fill` when replacing an existing value, then verify with `get value <NODE>` or `state`
+- If a controlled component restores the old value after `fill`, use a keyboard-oriented sequence that focuses and clears the field before `input`
+- Avoid `type` when focus may have moved after a modal, navigation, or rerender
 
 ## Targeted Screenshot
 

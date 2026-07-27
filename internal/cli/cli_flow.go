@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	nagicli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/nexus/internal/api"
 	comparecmd "github.com/mayahiro/nexus/internal/cli/compare"
@@ -171,55 +172,15 @@ type flowSelectorTerm struct {
 	Value string
 }
 
-func runFlow(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printFlowHelp(stdout)
-		return 0
-	}
-	if len(args) == 0 {
-		printFlowHelp(stderr)
-		return 1
-	}
+func runFlowRunInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	manifestPath := nagiStringValue(invocation, "manifest")
+	scenarioName := nagiStringValue(invocation, "scenario")
+	matrixName := nagiStringValue(invocation, "matrix")
+	continueOnError := nagiBoolValue(invocation, "continue-on-error")
+	asJSON := nagiBoolValue(invocation, "json")
+	outputJSON := nagiStringValue(invocation, "output-json")
 
-	switch args[0] {
-	case "run":
-		return runFlowRun(ctx, args[1:], stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "unknown flow subcommand: %s\n", args[0])
-		printFlowHelp(stderr)
-		return 1
-	}
-}
-
-func runFlowRun(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printFlowRunHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("flow run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	manifestPath := fs.String("manifest", "", "flow manifest json")
-	scenarioName := fs.String("scenario", "", "scenario name")
-	matrixName := fs.String("matrix", "", "matrix name")
-	continueOnError := fs.Bool("continue-on-error", false, "continue after scenario error")
-	asJSON := fs.Bool("json", false, "print as json")
-	outputJSON := fs.String("output-json", "", "write flow report json to file")
-
-	if err := parseCommandFlags(fs, args, stderr, "flow"); err != nil {
-		return 1
-	}
-	if strings.TrimSpace(*manifestPath) == "" {
-		fmt.Fprintln(stderr, "flow run requires --manifest")
-		fmt.Fprintln(stderr, "hint: nxctl flow run --manifest login-flow.json")
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "flow run does not accept positional arguments")
-		return 1
-	}
-
-	manifest, err := loadFlowManifest(*manifestPath)
+	manifest, err := loadFlowManifest(manifestPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -231,7 +192,7 @@ func runFlowRun(ctx context.Context, args []string, stdout io.Writer, stderr io.
 		return 1
 	}
 
-	expanded, err := expandFlowManifest(manifest, strings.TrimSpace(*scenarioName), strings.TrimSpace(*matrixName))
+	expanded, err := expandFlowManifest(manifest, strings.TrimSpace(scenarioName), strings.TrimSpace(matrixName))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -245,7 +206,7 @@ func runFlowRun(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	defer client.Close()
 
 	report := flowReport{
-		Manifest:  *manifestPath,
+		Manifest:  manifestPath,
 		Scenarios: make([]flowScenarioReport, 0, len(expanded)),
 	}
 
@@ -255,15 +216,15 @@ func runFlowRun(ctx context.Context, args []string, stdout io.Writer, stderr io.
 			scenarioReport.Status = "failed"
 			scenarioReport.Error = err.Error()
 			report.Scenarios = append(report.Scenarios, scenarioReport)
-			if !*continueOnError {
+			if !continueOnError {
 				report.Summary = summarizeFlowReport(report.Scenarios)
-				if strings.TrimSpace(*outputJSON) != "" {
-					if err := writeFlowJSONFile(*outputJSON, report); err != nil {
+				if strings.TrimSpace(outputJSON) != "" {
+					if err := writeFlowJSONFile(outputJSON, report); err != nil {
 						fmt.Fprintln(stderr, err)
 						return 1
 					}
 				}
-				if *asJSON {
+				if asJSON {
 					encoder := json.NewEncoder(stdout)
 					encoder.SetIndent("", "  ")
 					if err := encoder.Encode(report); err != nil {
@@ -281,13 +242,13 @@ func runFlowRun(ctx context.Context, args []string, stdout io.Writer, stderr io.
 	}
 
 	report.Summary = summarizeFlowReport(report.Scenarios)
-	if strings.TrimSpace(*outputJSON) != "" {
-		if err := writeFlowJSONFile(*outputJSON, report); err != nil {
+	if strings.TrimSpace(outputJSON) != "" {
+		if err := writeFlowJSONFile(outputJSON, report); err != nil {
 			fmt.Fprintln(stderr, err)
 			return 1
 		}
 	}
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(report); err != nil {
@@ -1246,20 +1207,4 @@ func writeFlowScreenshotFile(path string, data []byte) error {
 		}
 	}
 	return os.WriteFile(path, data, 0o644)
-}
-
-func printFlowHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl flow run --manifest <file> [--scenario <name>] [--matrix <name>] [--continue-on-error] [--output-json <file>] [--json]")
-	fmt.Fprintln(w, "")
-	printDocLink(w, "flow guide", aiFlowDocURL)
-	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
-	printDocLink(w, "ai guide", aiUsageDocURL)
-}
-
-func printFlowRunHelp(w io.Writer) {
-	fmt.Fprintln(w, "usage: nxctl flow run --manifest <file> [--scenario <name>] [--matrix <name>] [--continue-on-error] [--output-json <file>] [--json]")
-	fmt.Fprintln(w, "")
-	printDocLink(w, "flow guide", aiFlowDocURL)
-	printDocLink(w, "migration playbook", migrationPlaybookDocURL)
-	printDocLink(w, "ai guide", aiUsageDocURL)
 }

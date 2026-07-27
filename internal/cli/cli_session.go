@@ -3,28 +3,18 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
+
+	nagicli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
-func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printCloseHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("close", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	closeAll := fs.Bool("all", false, "close all sessions")
-
-	if err := parseCommandFlags(fs, args, stderr, "close"); err != nil {
-		return 1
-	}
+func runCloseInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	closeAll := nagiBoolValue(invocation, "all")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -33,7 +23,7 @@ func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 	defer client.Close()
 
-	if *closeAll {
+	if closeAll {
 		listed, err := client.ListSessions(ctx)
 		if err != nil {
 			fmt.Fprintln(stderr, err)
@@ -53,7 +43,7 @@ func runClose(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 0
 	}
 
-	res, err := client.DetachSession(ctx, api.DetachSessionRequest{SessionID: *sessionID})
+	res, err := client.DetachSession(ctx, api.DetachSessionRequest{SessionID: sessionID})
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -79,18 +69,8 @@ func stopDaemonIfNoSessions(ctx context.Context, client *rpc.Client) error {
 	return err
 }
 
-func runSessions(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printSessionsHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("sessions", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	asJSON := fs.Bool("json", false, "print as json")
-	if err := parseCommandFlags(fs, args, stderr, "sessions"); err != nil {
-		return 1
-	}
+func runSessionsInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	asJSON := nagiBoolValue(invocation, "json")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -105,7 +85,7 @@ func runSessions(ctx context.Context, args []string, stdout io.Writer, stderr io
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Sessions); err != nil {
@@ -127,23 +107,8 @@ func runSessions(ctx context.Context, args []string, stdout io.Writer, stderr io
 	return 0
 }
 
-func runDetach(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printDetachHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("detach", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "", "session id")
-	if err := parseCommandFlags(fs, args, stderr, "detach"); err != nil {
-		return 1
-	}
-
-	if *sessionID == "" {
-		fmt.Fprintln(stderr, "--session is required")
-		return 1
-	}
+func runDetachInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -153,7 +118,7 @@ func runDetach(ctx context.Context, args []string, stdout io.Writer, stderr io.W
 	defer client.Close()
 
 	res, err := client.DetachSession(ctx, api.DetachSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, err)

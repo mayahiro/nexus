@@ -314,6 +314,7 @@ func (findRPCHandler) ObserveSession(context.Context, api.ObserveSessionRequest)
 					{Kind: "label", Value: "Email", Command: `label "Email"`},
 				}},
 				{ID: 4, Ref: "@e4", Role: "button", Name: "Cancel", Visible: true, Enabled: true},
+				{ID: 5, Ref: "@e5", Role: "button", Visible: true, Enabled: true, Attrs: map[string]string{"aria-label": "Points explanation"}},
 			},
 		},
 	}, nil

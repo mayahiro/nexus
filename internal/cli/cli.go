@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
+
+	nagicli "github.com/mayahiro/nagicli-go"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/browsermgr"
@@ -35,88 +37,29 @@ type browserManager interface {
 }
 
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		printUsage(stderr)
+	currentDirectory, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	if isHelpArgs(args) {
-		printUsage(stdout)
-		return 0
-	}
-
-	switch args[0] {
-	case "attach":
-		return runAttach(ctx, args[1:], stdout, stderr)
-	case "back":
-		return runBack(ctx, args[1:], stdout, stderr)
-	case "batch":
-		return runBatch(ctx, args[1:], stdout, stderr)
-	case "browser":
-		return runBrowser(ctx, args[1:], stdout, stderr)
-	case "click":
-		return runClick(ctx, args[1:], stdout, stderr)
-	case "compare":
-		return runCompare(ctx, args[1:], stdout, stderr)
-	case "close":
-		return runClose(ctx, args[1:], stdout, stderr)
-	case "dblclick":
-		return runDblclick(ctx, args[1:], stdout, stderr)
-	case "eval":
-		return runEval(ctx, args[1:], stdout, stderr)
-	case "fill":
-		return runFill(ctx, args[1:], stdout, stderr)
-	case "find":
-		return runFind(ctx, args[1:], stdout, stderr)
-	case "flow":
-		return runFlow(ctx, args[1:], stdout, stderr)
-	case "get":
-		return runGet(ctx, args[1:], stdout, stderr)
-	case "help":
-		return runHelp(args[1:], stdout, stderr)
-	case "hover":
-		return runHover(ctx, args[1:], stdout, stderr)
-	case "inspect":
-		return runInspect(ctx, args[1:], stdout, stderr)
-	case "input":
-		return runInput(ctx, args[1:], stdout, stderr)
-	case "keys":
-		return runKeys(ctx, args[1:], stdout, stderr)
-	case "navigate":
-		return runNavigate(ctx, args[1:], stdout, stderr)
-	case "open":
-		return runOpen(ctx, args[1:], stdout, stderr)
-	case "observe":
-		return runObserve(ctx, args[1:], stdout, stderr)
-	case "scroll":
-		return runScroll(ctx, args[1:], stdout, stderr)
-	case "screenshot":
-		return runScreenshot(ctx, args[1:], stdout, stderr)
-	case "select":
-		return runSelect(ctx, args[1:], stdout, stderr)
-	case "sessions":
-		return runSessions(ctx, args[1:], stdout, stderr)
-	case "state":
-		return runState(ctx, args[1:], stdout, stderr)
-	case "type":
-		return runType(ctx, args[1:], stdout, stderr)
-	case "upload":
-		return runUpload(ctx, args[1:], stdout, stderr)
-	case "viewport":
-		return runViewport(ctx, args[1:], stdout, stderr)
-	case "wait":
-		return runWait(ctx, args[1:], stdout, stderr)
-	case "rightclick":
-		return runRightclick(ctx, args[1:], stdout, stderr)
-	case "detach":
-		return runDetach(ctx, args[1:], stdout, stderr)
-	case "daemon":
-		return runDaemon(ctx, stderr)
-	case "doctor":
-		return runDoctor(ctx, stdout)
-	default:
-		printUsage(stderr)
+	commandContext := nagicli.NewContextWithCancellation(
+		strings.NewReader(""),
+		stdout,
+		stderr,
+		nil,
+		currentDirectory,
+		ctx,
+	)
+	policy := nagicli.DefaultRuntimePolicy().WithExitCodePolicy(
+		nagicli.DefaultExitCodePolicy().
+			WithStatus(nagicli.CategoryUsage, nagicli.StatusFailure),
+	)
+	outcome, err := newNagiApplication().RunWithPolicy(commandContext, args, policy)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	return int(outcome.Status())
 }
 
 func runDaemon(ctx context.Context, stderr io.Writer) int {
@@ -128,25 +71,6 @@ func runDaemon(ctx context.Context, stderr io.Writer) int {
 
 	if err := daemon.Run(ctx, paths, daemon.RunOptions{}); err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
-	}
-
-	return 0
-}
-
-func runHelp(args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 0 {
-		printUsage(stdout)
-		return 0
-	}
-
-	if len(args) > 1 {
-		fmt.Fprintln(stderr, "help accepts at most one command")
-		return 1
-	}
-
-	if !printCommandHelp(stdout, args[0]) {
-		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
 		return 1
 	}
 
@@ -211,21 +135,6 @@ func runDoctor(ctx context.Context, stdout io.Writer) (exitCode int) {
 	return 0
 }
 
-type batchCommands []string
-
-func (b *batchCommands) String() string {
-	return strings.Join(*b, ", ")
-}
-
-func (b *batchCommands) Set(value string) error {
-	trimmed := strings.TrimSpace(value)
-	if trimmed == "" {
-		return errors.New("batch command must not be empty")
-	}
-	*b = append(*b, trimmed)
-	return nil
-}
-
 type batchStepResult struct {
 	Command  string   `json:"command"`
 	Args     []string `json:"args"`
@@ -234,31 +143,9 @@ type batchStepResult struct {
 	Stderr   string   `json:"stderr,omitempty"`
 }
 
-func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printBatchHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("batch", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	var commands batchCommands
-	asJSON := fs.Bool("json", false, "print as json")
-	fs.Var(&commands, "cmd", "subcommand to execute")
-
-	if err := parseCommandFlags(fs, args, stderr, "batch"); err != nil {
-		return 1
-	}
-	if len(commands) == 0 {
-		fmt.Fprintln(stderr, "batch requires at least one --cmd")
-		printCommandHint(stderr, "batch", `nxctl batch --cmd "state" --cmd "find role button --all"`)
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "batch does not accept positional arguments")
-		printCommandHint(stderr, "batch", `nxctl batch --cmd "state"`)
-		return 1
-	}
+func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	commands := nagiStringValues(invocation, "cmd")
+	asJSON := nagiBoolValue(invocation, "json")
 
 	results := make([]batchStepResult, 0, len(commands))
 	for _, raw := range commands {
@@ -283,7 +170,7 @@ func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			Stderr:   stepStderr.String(),
 		})
 
-		if *asJSON {
+		if asJSON {
 			if exitCode != 0 {
 				break
 			}
@@ -303,7 +190,7 @@ func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		}
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(results); err != nil {
@@ -317,6 +204,14 @@ func runBatch(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	}
 
 	return 0
+}
+
+func runDaemonInvocation(ctx context.Context, _ *nagicli.Invocation, _ io.Writer, stderr io.Writer) int {
+	return runDaemon(ctx, stderr)
+}
+
+func runDoctorInvocation(ctx context.Context, _ *nagicli.Invocation, stdout io.Writer, _ io.Writer) int {
+	return runDoctor(ctx, stdout)
 }
 
 func splitBatchCommand(value string) ([]string, error) {

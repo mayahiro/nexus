@@ -3,33 +3,19 @@ package cli
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 
+	nagicli "github.com/mayahiro/nagicli-go"
+
 	"github.com/mayahiro/nexus/internal/api"
 )
 
-func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printBackHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("back", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-
-	if err := parseCommandFlags(fs, args, stderr, "back"); err != nil {
-		return 1
-	}
-	if fs.NArg() != 0 {
-		fmt.Fprintln(stderr, "back does not accept positional arguments")
-		return 1
-	}
+func runBackInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -39,7 +25,7 @@ func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind: "back",
 		},
@@ -55,7 +41,7 @@ func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
@@ -74,52 +60,23 @@ func runBack(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	return 0
 }
 
-func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printClickHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("click", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	refs := fs.String("refs", "", "comma-separated node refs")
-	positionals := make([]string, 0, 2)
-	for len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		positionals = append(positionals, args[0])
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "click"); err != nil {
-		return 1
-	}
-
-	positionals = append(positionals, fs.Args()...)
-	refsValue := strings.TrimSpace(*refs)
+func runClickInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	arguments := nagiClickArgumentsFromInvocation(invocation)
+	refsValue := strings.TrimSpace(arguments.Refs)
 	if refsValue != "" {
-		if len(positionals) != 0 {
-			fmt.Fprintln(stderr, "click --refs does not accept positional arguments")
-			return 1
-		}
 		nodes, err := parseNodeSelectorList(refsValue)
 		if err != nil {
 			fmt.Fprintln(stderr, "click --refs requires comma-separated positive integer indexes or @eN refs")
 			return 1
 		}
-		return runClickRefs(ctx, *sessionID, nodes, *asJSON, stdout, stderr)
-	}
-	if len(positionals) != 1 && len(positionals) != 2 {
-		fmt.Fprintln(stderr, "click requires an index or x y coordinates")
-		printCommandHint(stderr, "click", "nxctl click @e3 --json")
-		return 1
+		return runClickRefs(ctx, arguments.SessionID, nodes, arguments.JSON, stdout, stderr)
 	}
 
 	action := api.Action{Kind: "invoke"}
 	fallbackMessage := ""
 	useNodeRefMessage := false
-	if len(positionals) == 1 {
-		nodeID, nodeRef, err := parseNodeSelector(positionals[0])
+	if len(arguments.Positionals) == 1 {
+		nodeID, nodeRef, err := parseNodeSelector(arguments.Positionals[0])
 		if err != nil {
 			fmt.Fprintln(stderr, "click requires a positive integer index or @eN ref")
 			return 1
@@ -132,12 +89,12 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 			fallbackMessage = fmt.Sprintf("clicked %d", nodeID)
 		}
 	} else {
-		x, err := strconv.Atoi(positionals[0])
+		x, err := strconv.Atoi(arguments.Positionals[0])
 		if err != nil || x < 0 {
 			fmt.Fprintln(stderr, "click requires non-negative integer x y coordinates")
 			return 1
 		}
-		y, err := strconv.Atoi(positionals[1])
+		y, err := strconv.Atoi(arguments.Positionals[1])
 		if err != nil || y < 0 {
 			fmt.Fprintln(stderr, "click requires non-negative integer x y coordinates")
 			return 1
@@ -157,7 +114,7 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: arguments.SessionID,
 		Action:    action,
 	})
 	if err != nil {
@@ -171,7 +128,7 @@ func runClick(ctx context.Context, args []string, stdout io.Writer, stderr io.Wr
 		return 1
 	}
 
-	if *asJSON {
+	if arguments.JSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
@@ -254,54 +211,24 @@ func runClickRefs(ctx context.Context, sessionID string, nodes []nodeSelector, a
 	return 0
 }
 
-func runHover(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	return runNodeActionCommand(ctx, "hover", "hovered %d", args, stdout, stderr)
+func runHoverInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	return runNodeActionInvocation(ctx, "hover", "hovered %d", invocation, stdout, stderr)
 }
 
-func runDblclick(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	return runNodeActionCommand(ctx, "dblclick", "double-clicked %d", args, stdout, stderr)
+func runDblclickInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	return runNodeActionInvocation(ctx, "dblclick", "double-clicked %d", invocation, stdout, stderr)
 }
 
-func runRightclick(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	return runNodeActionCommand(ctx, "rightclick", "right-clicked %d", args, stdout, stderr)
+func runRightclickInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	return runNodeActionInvocation(ctx, "rightclick", "right-clicked %d", invocation, stdout, stderr)
 }
 
-func runNodeActionCommand(ctx context.Context, command string, fallbackFormat string, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printNodeActionHelp(stdout, command)
-		return 0
-	}
-	fs := flag.NewFlagSet(command, flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	indexArg := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		indexArg = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, command); err != nil {
-		return 1
-	}
-
-	if indexArg == "" && fs.NArg() == 1 {
-		indexArg = fs.Arg(0)
-	}
-
-	if indexArg == "" || fs.NArg() > 1 {
-		fmt.Fprintf(stderr, "%s requires an index\n", command)
-		printCommandHint(stderr, command, fmt.Sprintf("nxctl %s @e3 --json", command))
-		return 1
-	}
-
-	nodeID, nodeRef, err := parseNodeSelector(indexArg)
-	if err != nil {
-		fmt.Fprintf(stderr, "%s requires a positive integer index or @eN ref\n", command)
-		return 1
-	}
+func runNodeActionInvocation(ctx context.Context, command string, fallbackFormat string, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	node := nagiNodeValue(invocation, "node")
+	nodeID := node.ID
+	nodeRef := node.Ref
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -311,7 +238,7 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind:   command,
 			NodeID: &nodeID,
@@ -328,7 +255,7 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
@@ -352,36 +279,10 @@ func runNodeActionCommand(ctx context.Context, command string, fallbackFormat st
 	return 0
 }
 
-func runKeys(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
-	if isHelpArgs(args) {
-		printKeysHelp(stdout)
-		return 0
-	}
-	fs := flag.NewFlagSet("keys", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-
-	sessionID := fs.String("session", "default", "session id")
-	asJSON := fs.Bool("json", false, "print as json")
-	keySpec := ""
-
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		keySpec = args[0]
-		args = args[1:]
-	}
-
-	if err := parseCommandFlags(fs, args, stderr, "keys"); err != nil {
-		return 1
-	}
-
-	if keySpec == "" && fs.NArg() == 1 {
-		keySpec = fs.Arg(0)
-	}
-
-	if keySpec == "" || fs.NArg() > 1 {
-		fmt.Fprintln(stderr, "keys requires a key spec")
-		printCommandHint(stderr, "keys", `nxctl keys "Enter" --json`)
-		return 1
-	}
+func runKeysInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
+	asJSON := nagiBoolValue(invocation, "json")
+	keySpec := nagiStringValue(invocation, "keys")
 
 	client, err := connectClient(ctx)
 	if err != nil {
@@ -391,7 +292,7 @@ func runKeys(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 	defer client.Close()
 
 	res, err := client.ActSession(ctx, api.ActSessionRequest{
-		SessionID: *sessionID,
+		SessionID: sessionID,
 		Action: api.Action{
 			Kind: "key",
 			Keys: []string{keySpec},
@@ -408,7 +309,7 @@ func runKeys(ctx context.Context, args []string, stdout io.Writer, stderr io.Wri
 		return 1
 	}
 
-	if *asJSON {
+	if asJSON {
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(res.Result); err != nil {
