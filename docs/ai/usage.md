@@ -127,6 +127,7 @@ Rules:
 - each `Page.captureScreenshot` attempt is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
 - after a capture failure, Nexus creates one fresh CDP connection to the same target and retries without losing page state; repeated failures do not accumulate more connections
 - add `--recover-target` to permit a final tab replacement and URL reload when same-target recovery fails; Nexus prints a warning because transient page state is lost
+- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
 - `--recover-target` is not supported together with `--locator`
 - full-page captures are rejected above 16384 px width, 50000 px height, or 120 million pixels
 - an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout
@@ -136,6 +137,8 @@ Rules:
 Mouse position is kept on the session target, so a viewport screenshot taken after `hover @eN` preserves the hover state unless another action moves the pointer or the page rerenders the target.
 
 Canvas content, including map renderers, is captured visually but usually has no semantic DOM nodes for `find`, `state`, or coordinate assertions. Verify canvas internals through screenshot review or an application-specific JavaScript/API assertion.
+
+Auto-started daemon processes hold an exclusive lock on `nxd.pid` and write to PID-specific `nxd.<pid>.log` files in the Nexus state directory. Use the PID in `nxd.pid` to select the current log. An interactive `nxctl daemon --verbose` or `nxd --verbose` also logs request summaries for every operation.
 
 ## File Uploads
 

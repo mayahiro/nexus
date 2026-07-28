@@ -235,6 +235,7 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 	withScreenshot := nagiBoolValue(invocation, "screenshot")
 	fullScreenshot := nagiBoolValue(invocation, "full")
 	recoverScreenshot := nagiBoolValue(invocation, "recover-target")
+	verbose := nagiBoolValue(invocation, "verbose")
 	timeoutMS := nagiIntValue(invocation, "timeout")
 
 	client, err := connectClient(ctx)
@@ -260,6 +261,7 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 			FullScreenshot:    fullScreenshot,
 			RecoverScreenshot: recoverScreenshot,
 			TimeoutMS:         timeoutMS,
+			Verbose:           verbose,
 		},
 	})
 	if err != nil {

@@ -28,6 +28,7 @@ type screenshotCaptureOptions struct {
 	Annotate bool
 	Full     bool
 	Recover  bool
+	Verbose  bool
 	Locator  string
 	Nth      int
 	Timeout  time.Duration
@@ -57,6 +58,7 @@ func runScreenshotInvocation(ctx context.Context, invocation *nagicli.Invocation
 		Annotate: arguments.Annotate,
 		Full:     arguments.Full,
 		Recover:  arguments.Recover,
+		Verbose:  arguments.Verbose,
 		Locator:  strings.TrimSpace(arguments.Locator),
 		Nth:      arguments.Nth,
 		Timeout:  time.Duration(arguments.Timeout) * time.Millisecond,
@@ -92,6 +94,7 @@ func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID s
 			FullScreenshot:    opts.Full,
 			RecoverScreenshot: opts.Recover,
 			TimeoutMS:         int(timeout / time.Millisecond),
+			Verbose:           opts.Verbose,
 		},
 	})
 	if err != nil {
@@ -154,6 +157,7 @@ func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sess
 			WithTree:          opts.Annotate,
 			RecoverScreenshot: opts.Recover,
 			TimeoutMS:         int(timeout / time.Millisecond),
+			Verbose:           opts.Verbose,
 		},
 	})
 	if err != nil {

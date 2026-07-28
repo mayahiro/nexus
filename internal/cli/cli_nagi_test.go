@@ -40,8 +40,8 @@ func TestNagiCoreSchemas(t *testing.T) {
 			variants: []nagiUsageVariantContract{
 				{
 					ID:     "capture",
-					Syntax: "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--locator <locator>] [--nth <n>] [--timeout <ms>]",
-					Args:   []string{"screenshot", "capture.png", "--recover-target", "--timeout", "45000"},
+					Syntax: "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--verbose] [--locator <locator>] [--nth <n>] [--timeout <ms>]",
+					Args:   []string{"screenshot", "capture.png", "--recover-target", "--verbose", "--timeout", "45000"},
 				},
 			},
 		},
@@ -143,13 +143,13 @@ func TestNagiClickInvocationValidation(t *testing.T) {
 
 func TestNagiScreenshotTypedInvocation(t *testing.T) {
 	result, err := newNagiScreenshotRoot(30000).Parse(
-		[]string{"screenshot", "capture.png", "--recover-target", "--timeout", "45000"},
+		[]string{"screenshot", "capture.png", "--recover-target", "--verbose", "--timeout", "45000"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	arguments := nagiScreenshotArgumentsFromInvocation(result.Invocation())
-	if arguments.Paths[0] != "capture.png" || !arguments.Recover {
+	if arguments.Paths[0] != "capture.png" || !arguments.Recover || !arguments.Verbose {
 		t.Fatalf("unexpected screenshot arguments: %#v", arguments)
 	}
 	if arguments.Timeout != 45000 {

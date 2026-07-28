@@ -19,6 +19,7 @@ type nagiScreenshotArguments struct {
 	Full      bool
 	Annotate  bool
 	Recover   bool
+	Verbose   bool
 	Locator   string
 	Nth       int
 	Timeout   int
@@ -82,7 +83,7 @@ func newNagiScreenshotRoot(timeout int) *nagicli.Command {
 func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 	return nagicli.NewCommand("screenshot").
 		About("Capture a page or element screenshot").
-		UsageVariant("capture", "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--locator <locator>] [--nth <n>] [--timeout <ms>]").
+		UsageVariant("capture", "[path] [--session <id>] [--full] [--annotate] [--recover-target] [--verbose] [--locator <locator>] [--nth <n>] [--timeout <ms>]").
 		Option(
 			nagicli.ValueOption("session").
 				Long("session").
@@ -93,6 +94,7 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		Option(nagicli.Flag("full").Long("full").Help("capture full page")).
 		Option(nagicli.Flag("annotate").Long("annotate").Help("draw node refs on the screenshot")).
 		Option(nagicli.Flag("recover-target").Long("recover-target").Help("replace an unresponsive tab and retry, losing transient page state")).
+		Option(nagicli.Flag("verbose").Long("verbose").Help("write detailed capture and recovery diagnostics to the daemon output")).
 		Option(
 			nagicli.ValueOption("locator").
 				Long("locator").
@@ -118,7 +120,8 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		Note("Locator forms include @eN, role, name, text, label, testid, and href").
 		Note("Viewport capture is the default; --full captures the full page within safety limits").
 		Note("Each capture attempt is capped at 10000 ms within the overall timeout").
-		Note("A failed capture automatically reattaches to the same target once; --recover-target additionally permits tab replacement")
+		Note("A failed capture automatically reattaches to the same target once; --recover-target additionally permits tab replacement").
+		Note("--verbose writes capture boundary events to the current daemon output")
 }
 
 func newNagiCommandRoot(command *nagicli.Command) *nagicli.Command {
@@ -184,6 +187,7 @@ func nagiScreenshotArgumentsFromInvocation(invocation *nagicli.Invocation) nagiS
 	full, _ := invocation.Flag("full")
 	annotate, _ := invocation.Flag("annotate")
 	recoverTarget, _ := invocation.Flag("recover-target")
+	verbose, _ := invocation.Flag("verbose")
 	locator, _ := invocation.RawValue("locator")
 	nth, _ := nagicli.ValueAs[int](invocation, "nth")
 	timeout, _ := nagicli.ValueAs[int](invocation, "timeout")
@@ -192,6 +196,7 @@ func nagiScreenshotArgumentsFromInvocation(invocation *nagicli.Invocation) nagiS
 		Full:      full,
 		Annotate:  annotate,
 		Recover:   recoverTarget,
+		Verbose:   verbose,
 		Locator:   locator,
 		Nth:       nth,
 		Timeout:   timeout,

@@ -51,7 +51,10 @@ type clickRPCHandler struct{ noopRPCHandler }
 type mouseRPCHandler struct{ noopRPCHandler }
 type typeRPCHandler struct{ noopRPCHandler }
 type keysRPCHandler struct{ noopRPCHandler }
-type screenshotRPCHandler struct{ noopRPCHandler }
+type screenshotRPCHandler struct {
+	noopRPCHandler
+	requests chan<- api.ObserveSessionRequest
+}
 type hangingScreenshotRPCHandler struct{ noopRPCHandler }
 type annotateScreenshotRPCHandler struct{ noopRPCHandler }
 type elementScreenshotRPCHandler struct{ noopRPCHandler }
@@ -178,7 +181,10 @@ func (keysRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (
 	return api.ActSessionResponse{Result: api.ActionResult{OK: true, Changed: true, Message: "sent keys " + req.Action.Keys[0]}}, nil
 }
 
-func (screenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+func (h screenshotRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	if h.requests != nil {
+		h.requests <- req
+	}
 	if !req.Options.WithScreenshot {
 		return api.ObserveSessionResponse{}, nil
 	}

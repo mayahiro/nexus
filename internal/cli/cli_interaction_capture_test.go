@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/config"
 	"github.com/mayahiro/nexus/internal/rpc"
 )
@@ -37,8 +38,9 @@ func TestScreenshot(t *testing.T) {
 	defer listener.Close()
 
 	done := make(chan error, 1)
+	requests := make(chan api.ObserveSessionRequest, 2)
 	go func() {
-		done <- rpc.Serve(ctx, listener, screenshotRPCHandler{}, rpc.ServeOptions{})
+		done <- rpc.Serve(ctx, listener, screenshotRPCHandler{requests: requests}, rpc.ServeOptions{})
 	}()
 
 	tempDir := t.TempDir()
@@ -62,11 +64,19 @@ func TestScreenshot(t *testing.T) {
 
 	stdout.Reset()
 	customPath := filepath.Join(tempDir, "full.png")
-	if code := Run(context.Background(), []string{"screenshot", customPath, "--full"}, &stdout, &stdout); code != 0 {
+	if code := Run(context.Background(), []string{"screenshot", customPath, "--full", "--verbose"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected full screenshot exit code: %d\n%s", code, stdout.String())
 	}
 	if strings.TrimSpace(stdout.String()) != "saved screenshot "+customPath {
 		t.Fatalf("unexpected full screenshot output: %s", stdout.String())
+	}
+	firstRequest := <-requests
+	secondRequest := <-requests
+	if firstRequest.Options.Verbose {
+		t.Fatal("default screenshot unexpectedly enabled verbose diagnostics")
+	}
+	if !secondRequest.Options.FullScreenshot || !secondRequest.Options.Verbose {
+		t.Fatalf("verbose full screenshot options were not propagated: %+v", secondRequest.Options)
 	}
 
 	cancel()

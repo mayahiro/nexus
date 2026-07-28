@@ -64,14 +64,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return int(outcome.Status())
 }
 
-func runDaemon(ctx context.Context, stderr io.Writer) int {
+func runDaemon(ctx context.Context, verbose bool, stderr io.Writer) int {
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
-	if err := daemon.Run(ctx, paths, daemon.RunOptions{}); err != nil {
+	if err := daemon.Run(ctx, paths, daemon.RunOptions{Verbose: verbose}); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
@@ -220,8 +220,8 @@ func runBatchInvocation(ctx context.Context, invocation *nagicli.Invocation, std
 	return firstFailure
 }
 
-func runDaemonInvocation(ctx context.Context, _ *nagicli.Invocation, _ io.Writer, stderr io.Writer) int {
-	return runDaemon(ctx, stderr)
+func runDaemonInvocation(ctx context.Context, invocation *nagicli.Invocation, _ io.Writer, stderr io.Writer) int {
+	return runDaemon(ctx, nagiBoolValue(invocation, "verbose"), stderr)
 }
 
 func runDoctorInvocation(ctx context.Context, _ *nagicli.Invocation, stdout io.Writer, _ io.Writer) int {

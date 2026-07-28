@@ -334,7 +334,7 @@ func newNagiNodeActionCommand(name string, about string, run nagiCommandRunner) 
 func newNagiObserveCommand() *nagicli.Command {
 	return nagicli.NewCommand("observe").
 		About("Observe one attached session").
-		UsageVariant("default", "--session <ID> [--json] [--text] [--tree] [--screenshot] [--full] [--recover-target] [--timeout <MS>]").
+		UsageVariant("default", "--session <ID> [--json] [--text] [--tree] [--screenshot] [--full] [--recover-target] [--verbose] [--timeout <MS>]").
 		Option(nagiRequiredValueOption("session", "ID", "Session identifier")).
 		Option(nagiJSONFlag()).
 		Option(nagicli.Flag("text").Long("text").Help("Include page text")).
@@ -342,6 +342,7 @@ func newNagiObserveCommand() *nagicli.Command {
 		Option(nagicli.Flag("screenshot").Long("screenshot").Help("Include a screenshot")).
 		Option(nagicli.Flag("full").Long("full").Help("Capture a full-page screenshot")).
 		Option(nagicli.Flag("recover-target").Long("recover-target").Help("Replace an unresponsive tab and retry, losing transient page state")).
+		Option(nagicli.Flag("verbose").Long("verbose").Help("Write detailed request and capture diagnostics to the daemon output")).
 		Option(nagiIntOption("timeout", "MS", "Overall screenshot recovery timeout in milliseconds").Default("30000")).
 		Validator(validateNagiObserveInvocation).
 		Handle(nagiRunHandler(runObserveInvocation)).
@@ -464,7 +465,10 @@ func newNagiDetachCommand() *nagicli.Command {
 func newNagiDaemonCommand() *nagicli.Command {
 	return nagicli.NewCommand("daemon").
 		About("Run the Nexus daemon").
-		Handle(nagiRunHandler(runDaemonInvocation))
+		UsageVariant("default", "[--verbose]").
+		Option(nagicli.Flag("verbose").Long("verbose").Help("Write detailed daemon request diagnostics")).
+		Handle(nagiRunHandler(runDaemonInvocation)).
+		Note("Auto-started daemon processes write to a PID-specific nxd.<pid>.log")
 }
 
 func newNagiDoctorCommand() *nagicli.Command {

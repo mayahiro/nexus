@@ -725,10 +725,35 @@ func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
 func TestReattachPageTargetIsBounded(t *testing.T) {
 	backend := New()
 	backend.runCtx = context.Background()
-	backend.staleContexts = []remoteContext{{}}
-	_, _, _, err := backend.reattachPageTarget(context.Background(), pageTargetInfo{ID: "page1"})
-	if err == nil || !strings.Contains(err.Error(), "already reattached once") {
+	backend.reattachAttempted = true
+	_, _, _, err := backend.reattachPageTarget(context.Background(), pageTargetInfo{ID: "page1"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "reattach was already attempted") {
 		t.Fatalf("unexpected bounded reattach error: %v", err)
+	}
+}
+
+func TestScreenshotTraceIncludesCorrelationFields(t *testing.T) {
+	backend := New()
+	trace := backend.newScreenshotTrace(true, "capture-1", "page-1", 2)
+	trace("stage=capture_action event=start")
+
+	logs, err := backend.Logs(context.Background(), api.LogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("unexpected trace count: %d", len(logs))
+	}
+	for _, expected := range []string{
+		"capture_id=capture-1",
+		"target=page-1",
+		"attempt=2",
+		"stage=capture_action",
+		"event=start",
+	} {
+		if !strings.Contains(logs[0].Message, expected) {
+			t.Fatalf("trace does not contain %q: %s", expected, logs[0].Message)
+		}
 	}
 }
 

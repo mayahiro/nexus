@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +35,68 @@ func TestRunStopsAfterIdleTimeout(t *testing.T) {
 
 	if _, err := os.Stat(paths.Socket); !os.IsNotExist(err) {
 		t.Fatalf("socket still exists: %s", paths.Socket)
+	}
+}
+
+func TestRunRejectsSecondDaemonAfterSocketPathIsRemoved(t *testing.T) {
+	paths := configureDaemonTestEnv(t)
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(runCtx, paths, RunOptions{})
+	}()
+	waitForSocket(t, paths.Socket, done)
+
+	pidData, err := os.ReadFile(paths.PID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(pidData)) != strconv.Itoa(os.Getpid()) {
+		t.Fatalf("unexpected daemon pid: %q", pidData)
+	}
+	if err := os.Remove(paths.Socket); err != nil {
+		t.Fatal(err)
+	}
+
+	err = Run(context.Background(), paths, RunOptions{})
+	if err == nil || !strings.Contains(err.Error(), "daemon already running with pid") {
+		t.Fatalf("unexpected second daemon error: %v", err)
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("first daemon did not stop")
+	}
+}
+
+func TestProcessLogPathIncludesPID(t *testing.T) {
+	path := ProcessLogPath("/tmp/nexus/nxd.log", 1234)
+	if path != "/tmp/nexus/nxd.1234.log" {
+		t.Fatalf("unexpected process log path: %s", path)
+	}
+}
+
+func TestProcessLockRejectsConcurrentOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nxd.pid")
+	first, err := acquireProcessLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseProcessLock(first)
+
+	second, err := acquireProcessLock(path)
+	if second != nil {
+		releaseProcessLock(second)
+	}
+	if err == nil || !strings.Contains(err.Error(), "daemon already running with pid") {
+		t.Fatalf("unexpected concurrent lock result: lock=%v err=%v", second, err)
 	}
 }
 
@@ -99,6 +163,28 @@ func TestServerObserveSessionTimesOutScreenshots(t *testing.T) {
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected screenshot observe deadline, got: %v", err)
+	}
+}
+
+func TestServerVerbosePropagatesToObserveOptions(t *testing.T) {
+	var observedOptions api.ObserveOptions
+	server := Server{
+		sessions: fakeSessionManager{
+			observe: func(_ context.Context, _ string, opts api.ObserveOptions) (api.Observation, error) {
+				observedOptions = opts
+				return api.Observation{}, nil
+			},
+		},
+		verbose: true,
+	}
+
+	if _, err := server.ObserveSession(context.Background(), api.ObserveSessionRequest{
+		SessionID: "web1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !observedOptions.Verbose {
+		t.Fatal("daemon verbose mode was not propagated to observe options")
 	}
 }
 

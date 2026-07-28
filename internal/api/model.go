@@ -87,6 +87,7 @@ type ObserveOptions struct {
 	ExcludeScopeRoot  bool     `json:"exclude_scope_root,omitempty"`
 	NodeScope         string   `json:"node_scope,omitempty"`
 	TimeoutMS         int      `json:"timeout_ms,omitempty"`
+	Verbose           bool     `json:"verbose,omitempty"`
 }
 
 type LogOptions struct {

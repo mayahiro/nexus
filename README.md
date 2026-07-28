@@ -55,6 +55,8 @@ Nexus is built around sessions.
 
 Before using an existing daemon, `nxctl` checks both the RPC protocol and daemon build identifier. The identifier includes the VCS revision and dirty state when Go build information provides them. An incompatible daemon is stopped and replaced, and the `nxd` beside the running `nxctl` is preferred over an older `PATH` entry. Each request also carries the protocol version, and `nxd` rejects a missing or mismatched version before decoding the operation.
 
+An auto-started daemon holds an exclusive lock on `nxd.pid`, so another current `nxd` refuses to start even if the Unix socket path was removed while the first listener is still alive. Auto-started daemon output is written beside the state log base as `nxd.<pid>.log`; the active PID is stored in `nxd.pid`. A daemon started interactively with `nxctl daemon` or `nxd` keeps writing to its terminal.
+
 The primary interaction loop is:
 
 ```text
@@ -178,6 +180,7 @@ nxctl screenshot email.png --locator label=Email
 nxctl screenshot submit.png --locator @e1
 nxctl screenshot page.png --full --timeout 60000
 nxctl screenshot page.png --recover-target
+nxctl screenshot page.png --verbose
 nxctl upload --selector 'input[type="file"]' ./artifact.png
 nxctl viewport 1280x720
 nxctl close
@@ -258,6 +261,7 @@ Screenshot steps can also target one element with `locator` and optional `nth`, 
 Viewport capture is the default and `--full` opts into full-page capture.
 Screenshot capture times out after 30000 ms by default. `screenshot` and screenshot-enabled `observe` apply the same overall timeout on both the client request and daemon capture. Each `Page.captureScreenshot` attempt is capped at 10000 ms so a stuck target cannot monopolize the session. A failed capture automatically reconnects to the same tab once and preserves page state. Use `--recover-target` to permit a final tab replacement when that reconnect also fails; replacement reloads the current URL and loses transient page state. `--recover-target` is not supported with `--locator`.
 Full-page capture rejects pages above Nexus's safety limits instead of attempting an unbounded PNG transfer. Use `nxctl screenshot --timeout <ms>` or a flow screenshot step `timeout` value to budget enough time for same-target reconnect; increasing it does not extend one capture attempt beyond 10000 ms. For direct screenshots, `--recover-target` uses the remaining budget for optional tab replacement.
+Use `nxctl screenshot --verbose` or `nxctl observe --screenshot --verbose` to write correlated capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`. Run an interactive daemon with `nxctl daemon --verbose` or `nxd --verbose` to log request summaries for every operation as well.
 
 Canvas-rendered content such as map tiles is visible in screenshots, but it usually does not expose semantic nodes or DOM coordinates that Nexus can validate. Treat screenshot review or an application-specific API assertion as the source of truth for canvas internals.
 

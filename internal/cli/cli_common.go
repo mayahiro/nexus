@@ -16,6 +16,7 @@ import (
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/config"
+	"github.com/mayahiro/nexus/internal/daemon"
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
@@ -146,11 +147,21 @@ func startDaemon(paths config.Paths) error {
 		return err
 	}
 
-	logFile, err := os.OpenFile(paths.Log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logFile, err := os.CreateTemp(filepath.Dir(paths.Log), ".nxd-starting-*.log")
 	if err != nil {
 		return err
 	}
 	defer logFile.Close()
+	logPath := logFile.Name()
+	removeLog := true
+	defer func() {
+		if removeLog {
+			os.Remove(logPath)
+		}
+	}()
+	if err := logFile.Chmod(0o644); err != nil {
+		return err
+	}
 
 	executable, err := findDaemonExecutable()
 	if err != nil {
@@ -161,13 +172,34 @@ func startDaemon(paths config.Paths) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Stdin = nil
+	cmd.Env = daemonProcessEnvironment(paths.Log)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
+	processLog := daemon.ProcessLogPath(paths.Log, cmd.Process.Pid)
+	if err := os.Rename(logPath, processLog); err != nil {
+		cmd.Process.Kill()
+		cmd.Wait()
+		return fmt.Errorf("name daemon log for pid %d: %w", cmd.Process.Pid, err)
+	}
+	removeLog = false
+
 	return cmd.Process.Release()
+}
+
+func daemonProcessEnvironment(logBase string) []string {
+	prefix := daemon.ProcessLogBaseEnv + "="
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, value := range os.Environ() {
+		if strings.HasPrefix(value, prefix) {
+			continue
+		}
+		environment = append(environment, value)
+	}
+	return append(environment, prefix+logBase)
 }
 
 func findDaemonExecutable() (string, error) {

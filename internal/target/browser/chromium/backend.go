@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -1139,6 +1140,7 @@ type Backend struct {
 	targetCancel        context.CancelFunc
 	targetInfo          pageTargetInfo
 	staleContexts       []remoteContext
+	reattachAttempted   bool
 	allocatorOptions    []chromedp.RemoteAllocatorOption
 	refLoaderID         string
 	refURL              string
@@ -1306,6 +1308,7 @@ func (b *Backend) Detach(_ context.Context) error {
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
 	b.staleContexts = nil
+	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
@@ -1520,6 +1523,7 @@ func (b *Backend) cleanupAfterExit() {
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
 	b.staleContexts = nil
+	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
@@ -1651,6 +1655,7 @@ func (b *Backend) pageTargetContextWithDependencies(
 		b.targetCtx = targetCtx
 		b.targetCancel = targetCancel
 		b.targetInfo = targetInfo
+		b.reattachAttempted = false
 		b.mu.Unlock()
 	}
 
@@ -1751,6 +1756,7 @@ func (b *Backend) closeRemoteContexts() {
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
 	b.staleContexts = nil
+	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
@@ -2116,7 +2122,7 @@ func nodeIdentityExpression(selector string) string {
 })()`
 }
 
-func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx context.Context, targetInfo pageTargetInfo, observation *api.Observation, opts api.ObserveOptions) ([]byte, map[string]string, error) {
+func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx context.Context, targetInfo pageTargetInfo, observation *api.Observation, opts api.ObserveOptions) (result []byte, resultMeta map[string]string, resultErr error) {
 	meta := map[string]string{
 		"screenshot_full": "false",
 	}
@@ -2128,10 +2134,40 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	totalStartedAt := time.Now()
+	captureID := strconv.FormatInt(totalStartedAt.UnixNano(), 10)
+	requestTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	requestTrace(fmt.Sprintf(
+		"stage=request event=start full=%t recover=%t remaining_ms=%d",
+		opts.FullScreenshot,
+		opts.RecoverScreenshot,
+		contextRemainingMilliseconds(requestCtx),
+	))
+	defer func() {
+		requestTrace(fmt.Sprintf(
+			"stage=request event=finish duration_ms=%d error=%q",
+			time.Since(totalStartedAt).Milliseconds(),
+			errorMessage(resultErr),
+		))
+	}()
+
 	attemptCtx, cancel := screenshotAttemptContext(targetCtx)
 	attemptStartedAt := time.Now()
-	data, width, height, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+	attemptTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 1)
+	attemptTrace(fmt.Sprintf(
+		"stage=capture event=start full=%t remaining_ms=%d",
+		opts.FullScreenshot,
+		contextRemainingMilliseconds(attemptCtx),
+	))
+	data, width, height, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	attemptContextErr := attemptCtx.Err()
 	cancel()
+	attemptTrace(fmt.Sprintf(
+		"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
+		time.Since(attemptStartedAt).Milliseconds(),
+		len(data),
+		errorMessage(attemptContextErr),
+		errorMessage(lastErr),
+	))
 	b.logScreenshotAttempt(targetInfo.ID, "capture", 1, attemptStartedAt, data, lastErr)
 	if lastErr == nil {
 		return screenshotResult(data, width, height, 1, totalStartedAt, meta)
@@ -2147,7 +2183,17 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	reattachStartedAt := time.Now()
-	reattachedCtx, reattachedTarget, releaseReattached, reattachErr := b.reattachPageTarget(requestCtx, targetInfo)
+	reattachTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	reattachTrace(fmt.Sprintf(
+		"stage=reattach event=start remaining_ms=%d",
+		contextRemainingMilliseconds(requestCtx),
+	))
+	reattachedCtx, reattachedTarget, releaseReattached, reattachErr := b.reattachPageTarget(requestCtx, targetInfo, reattachTrace)
+	reattachTrace(fmt.Sprintf(
+		"stage=reattach event=finish duration_ms=%d error=%q",
+		time.Since(reattachStartedAt).Milliseconds(),
+		errorMessage(reattachErr),
+	))
 	b.appendLog(fmt.Sprintf(
 		"nexus screenshot target=%s phase=reattach duration_ms=%d error=%q",
 		targetInfo.ID,
@@ -2162,8 +2208,22 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 
 		attemptCtx, cancel = screenshotAttemptContext(targetCtx)
 		attemptStartedAt = time.Now()
-		data, width, height, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+		attemptTrace = b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 2)
+		attemptTrace(fmt.Sprintf(
+			"stage=capture event=start full=%t remaining_ms=%d",
+			opts.FullScreenshot,
+			contextRemainingMilliseconds(attemptCtx),
+		))
+		data, width, height, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+		attemptContextErr = attemptCtx.Err()
 		cancel()
+		attemptTrace(fmt.Sprintf(
+			"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
+			time.Since(attemptStartedAt).Milliseconds(),
+			len(data),
+			errorMessage(attemptContextErr),
+			errorMessage(lastErr),
+		))
 		b.logScreenshotAttempt(targetInfo.ID, "capture", 2, attemptStartedAt, data, lastErr)
 		if lastErr == nil {
 			return screenshotResult(data, width, height, 2, totalStartedAt, meta)
@@ -2186,6 +2246,11 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	recoveryStartedAt := time.Now()
+	recoveryTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	recoveryTrace(fmt.Sprintf(
+		"stage=replace_target event=start remaining_ms=%d",
+		contextRemainingMilliseconds(requestCtx),
+	))
 	recoveryCtx, recoveredTarget, release, err := b.replacePageTarget(
 		requestCtx,
 		targetCtx,
@@ -2194,15 +2259,42 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		parseMetaInt(observation.Meta, "viewport_height"),
 		parseMetaInt(observation.Meta, "scroll_x"),
 		parseMetaInt(observation.Meta, "scroll_y"),
+		recoveryTrace,
 	)
 	if err != nil {
+		recoveryTrace(fmt.Sprintf(
+			"stage=replace_target event=finish duration_ms=%d error=%q",
+			time.Since(recoveryStartedAt).Milliseconds(),
+			errorMessage(err),
+		))
 		return nil, nil, fmt.Errorf("capture screenshot failed and target recovery failed: %w", err)
 	}
 	defer release()
+	recoveryTrace(fmt.Sprintf(
+		"stage=replace_target event=finish duration_ms=%d replacement_target=%s error=%q",
+		time.Since(recoveryStartedAt).Milliseconds(),
+		recoveredTarget.ID,
+		"",
+	))
 
 	attemptCtx, cancel = screenshotAttemptContext(recoveryCtx)
-	data, width, height, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot)
+	attemptStartedAt = time.Now()
+	attemptTrace = b.newScreenshotTrace(opts.Verbose, captureID, recoveredTarget.ID, 3)
+	attemptTrace(fmt.Sprintf(
+		"stage=capture event=start full=%t remaining_ms=%d",
+		opts.FullScreenshot,
+		contextRemainingMilliseconds(attemptCtx),
+	))
+	data, width, height, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	attemptContextErr = attemptCtx.Err()
 	cancel()
+	attemptTrace(fmt.Sprintf(
+		"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
+		time.Since(attemptStartedAt).Milliseconds(),
+		len(data),
+		errorMessage(attemptContextErr),
+		errorMessage(err),
+	))
 	b.appendLog(fmt.Sprintf(
 		"nexus screenshot target=%s phase=recovery duration_ms=%d bytes=%d error=%q",
 		recoveredTarget.ID,
@@ -2218,6 +2310,27 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	meta["screenshot_recovery"] = "target_replaced"
 	meta["screenshot_recovery_warning"] = "the unresponsive tab was replaced and transient page state was lost"
 	return screenshotResult(data, width, height, 3, totalStartedAt, meta)
+}
+
+type screenshotTrace func(string)
+
+func (b *Backend) newScreenshotTrace(verbose bool, captureID string, targetID string, attempt int) screenshotTrace {
+	if !verbose {
+		return func(string) {}
+	}
+	prefix := fmt.Sprintf(
+		"nexus screenshot capture_id=%s target=%s",
+		captureID,
+		targetID,
+	)
+	if attempt > 0 {
+		prefix += fmt.Sprintf(" attempt=%d", attempt)
+	}
+	return func(message string) {
+		entry := strings.TrimSpace(prefix + " " + message)
+		b.appendLog(entry)
+		log.Print(entry)
+	}
 }
 
 func (b *Backend) logScreenshotAttempt(targetID string, phase string, attempt int, startedAt time.Time, data []byte, err error) {
@@ -2244,14 +2357,17 @@ func screenshotResult(data []byte, width int64, height int64, attempts int, star
 	return data, meta, nil
 }
 
-func captureScreenshotOnce(ctx context.Context, full bool) ([]byte, int64, int64, error) {
+func captureScreenshotOnce(ctx context.Context, full bool, trace screenshotTrace) ([]byte, int64, int64, error) {
 	var data []byte
 	var width int64
 	var height int64
 	actions := []chromedp.Action{
+		screenshotTraceAction(trace, "stage=paint_barrier event=start"),
 		chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise),
+		screenshotTraceAction(trace, "stage=paint_barrier event=finish"),
 	}
 	if full {
+		actions = append(actions, screenshotTraceAction(trace, "stage=layout_metrics event=start"))
 		actions = append(actions, chromedp.ActionFunc(func(runCtx context.Context) error {
 			_, _, _, _, _, contentSize, err := page.GetLayoutMetrics().Do(runCtx)
 			if err != nil {
@@ -2265,16 +2381,52 @@ func captureScreenshotOnce(ctx context.Context, full bool) ([]byte, int64, int64
 			if err := validateFullScreenshotSize(width, height); err != nil {
 				return err
 			}
+			traceScreenshot(trace, fmt.Sprintf(
+				"stage=layout_metrics event=finish width=%d height=%d",
+				width,
+				height,
+			))
 			return nil
 		}))
+		actions = append(actions, screenshotTraceAction(trace, "stage=capture_action event=start mode=full"))
 		actions = append(actions, chromedp.FullScreenshot(&data, 100))
 	} else {
+		actions = append(actions, screenshotTraceAction(trace, "stage=capture_action event=start mode=viewport"))
 		actions = append(actions, chromedp.CaptureScreenshot(&data))
 	}
+	actions = append(actions, chromedp.ActionFunc(func(context.Context) error {
+		traceScreenshot(trace, fmt.Sprintf("stage=capture_action event=finish bytes=%d", len(data)))
+		return nil
+	}))
 	if err := chromedp.Run(ctx, actions...); err != nil {
 		return nil, width, height, err
 	}
 	return data, width, height, nil
+}
+
+func screenshotTraceAction(trace screenshotTrace, message string) chromedp.Action {
+	return chromedp.ActionFunc(func(context.Context) error {
+		traceScreenshot(trace, message)
+		return nil
+	})
+}
+
+func traceScreenshot(trace screenshotTrace, message string) {
+	if trace != nil {
+		trace(message)
+	}
+}
+
+func contextRemainingMilliseconds(ctx context.Context) int64 {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return -1
+	}
+	remaining := time.Until(deadline).Milliseconds()
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
 }
 
 func validateFullScreenshotSize(width int64, height int64) error {
@@ -2319,34 +2471,46 @@ func screenshotAttemptContext(parent context.Context) (context.Context, context.
 	return context.WithTimeout(parent, timeout)
 }
 
-func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo pageTargetInfo) (context.Context, pageTargetInfo, func(), error) {
+func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo pageTargetInfo, trace screenshotTrace) (context.Context, pageTargetInfo, func(), error) {
 	b.mu.Lock()
 	runCtx := b.runCtx
 	devtoolsURL := b.devtoolsURL
-	alreadyReattached := len(b.staleContexts) > 0
+	alreadyAttempted := b.reattachAttempted
+	if runCtx != nil && !alreadyAttempted {
+		b.reattachAttempted = true
+	}
 	b.mu.Unlock()
 	if runCtx == nil {
 		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
 	}
-	if alreadyReattached {
-		return nil, pageTargetInfo{}, nil, errors.New("target was already reattached once; use recover-target to replace it")
+	if alreadyAttempted {
+		return nil, pageTargetInfo{}, nil, errors.New("target reattach was already attempted; use recover-target to replace it")
 	}
+	traceScreenshot(trace, "stage=reattach_activate_http event=start")
 	if err := b.activatePageTargetBeforeAttach(requestCtx, devtoolsURL, targetInfo.ID); err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=reattach_activate_http event=finish error=%q", errorMessage(err)))
 		return nil, pageTargetInfo{}, nil, err
 	}
+	traceScreenshot(trace, "stage=reattach_activate_http event=finish error=\"\"")
 
+	traceScreenshot(trace, "stage=reattach_context event=start")
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
 	persistentTargetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
 	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
 		b.trackDialogEvent(targetInfo.ID, event)
 	})
+	traceScreenshot(trace, "stage=reattach_initialize event=start")
 	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=reattach_initialize event=finish error=%q", errorMessage(err)))
 		targetCancel()
 		allocCancel()
 		return nil, pageTargetInfo{}, nil, err
 	}
+	traceScreenshot(trace, "stage=reattach_initialize event=finish error=\"\"")
 	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
+	traceScreenshot(trace, "stage=reattach_activate_cdp event=start")
 	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=reattach_activate_cdp event=finish error=%q", errorMessage(err)))
 		release()
 		b.mu.Lock()
 		b.staleContexts = append(b.staleContexts, remoteContext{
@@ -2356,6 +2520,7 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 		b.mu.Unlock()
 		return nil, pageTargetInfo{}, nil, err
 	}
+	traceScreenshot(trace, "stage=reattach_activate_cdp event=finish error=\"\"")
 
 	b.mu.Lock()
 	if b.targetInfo.ID != targetInfo.ID {
@@ -2380,12 +2545,14 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
 	b.mu.Unlock()
+	traceScreenshot(trace, "stage=reattach_context event=finish error=\"\"")
 
 	return operationCtx, targetInfo, release, nil
 }
 
-func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx context.Context, currentURL string, viewportWidth int, viewportHeight int, scrollX int, scrollY int) (context.Context, pageTargetInfo, func(), error) {
+func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx context.Context, currentURL string, viewportWidth int, viewportHeight int, scrollX int, scrollY int, trace screenshotTrace) (context.Context, pageTargetInfo, func(), error) {
 	var newTargetID target.ID
+	traceScreenshot(trace, "stage=create_target event=start")
 	createCtx, createCancel := screenshotAttemptContext(currentTargetCtx)
 	err := chromedp.Run(createCtx, chromedp.ActionFunc(func(runCtx context.Context) error {
 		chromedpContext := chromedp.FromContext(runCtx)
@@ -2398,8 +2565,10 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	}))
 	createCancel()
 	if err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=create_target event=finish error=%q", errorMessage(err)))
 		return nil, pageTargetInfo{}, nil, err
 	}
+	traceScreenshot(trace, fmt.Sprintf("stage=create_target event=finish replacement_target=%s error=%q", newTargetID, ""))
 
 	b.mu.Lock()
 	runCtx := b.runCtx
@@ -2412,19 +2581,28 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
 	}
 
+	traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=start replacement_target=%s", newTargetID))
 	allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
 	persistentTargetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(newTargetID))
 	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
 		b.trackDialogEvent(string(newTargetID), event)
 	})
+	traceScreenshot(trace, fmt.Sprintf("stage=initialize_replacement event=start replacement_target=%s", newTargetID))
 	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
+		traceScreenshot(trace, fmt.Sprintf(
+			"stage=initialize_replacement event=finish replacement_target=%s error=%q",
+			newTargetID,
+			errorMessage(err),
+		))
 		targetCancel()
 		allocCancel()
 		return nil, pageTargetInfo{}, nil, err
 	}
+	traceScreenshot(trace, fmt.Sprintf("stage=initialize_replacement event=finish replacement_target=%s error=%q", newTargetID, ""))
 	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
 
 	actions := []chromedp.Action{
+		screenshotTraceAction(trace, fmt.Sprintf("stage=activate_replacement event=start replacement_target=%s", newTargetID)),
 		chromedp.ActionFunc(func(runCtx context.Context) error {
 			chromedpContext := chromedp.FromContext(runCtx)
 			if chromedpContext == nil || chromedpContext.Browser == nil {
@@ -2435,18 +2613,50 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 			}
 			return target.ActivateTarget(newTargetID).Do(cdp.WithExecutor(runCtx, chromedpContext.Browser))
 		}),
+		screenshotTraceAction(trace, fmt.Sprintf("stage=activate_replacement event=finish replacement_target=%s", newTargetID)),
 	}
 	if viewportWidth > 0 && viewportHeight > 0 {
-		actions = append(actions, chromedp.EmulateViewport(int64(viewportWidth), int64(viewportHeight)))
+		actions = append(
+			actions,
+			screenshotTraceAction(trace, fmt.Sprintf(
+				"stage=restore_viewport event=start replacement_target=%s width=%d height=%d",
+				newTargetID,
+				viewportWidth,
+				viewportHeight,
+			)),
+			chromedp.EmulateViewport(int64(viewportWidth), int64(viewportHeight)),
+			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_viewport event=finish replacement_target=%s", newTargetID)),
+		)
 	}
 	if strings.TrimSpace(currentURL) != "" {
-		actions = append(actions, chromedp.Navigate(currentURL))
+		actions = append(
+			actions,
+			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_navigation event=start replacement_target=%s", newTargetID)),
+			chromedp.Navigate(currentURL),
+			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_navigation event=finish replacement_target=%s", newTargetID)),
+		)
 	}
-	actions = append(actions, chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise))
+	actions = append(
+		actions,
+		screenshotTraceAction(trace, fmt.Sprintf("stage=restore_paint_barrier event=start replacement_target=%s", newTargetID)),
+		chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise),
+		screenshotTraceAction(trace, fmt.Sprintf("stage=restore_paint_barrier event=finish replacement_target=%s", newTargetID)),
+	)
 	if scrollX != 0 || scrollY != 0 {
-		actions = append(actions, chromedp.Evaluate(fmt.Sprintf("window.scrollTo(%d, %d)", scrollX, scrollY), nil))
+		actions = append(
+			actions,
+			screenshotTraceAction(trace, fmt.Sprintf(
+				"stage=restore_scroll event=start replacement_target=%s x=%d y=%d",
+				newTargetID,
+				scrollX,
+				scrollY,
+			)),
+			chromedp.Evaluate(fmt.Sprintf("window.scrollTo(%d, %d)", scrollX, scrollY), nil),
+			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_scroll event=finish replacement_target=%s", newTargetID)),
+		)
 	}
 	if err := chromedp.Run(operationCtx, actions...); err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, errorMessage(err)))
 		release()
 		targetCancel()
 		allocCancel()
@@ -2465,11 +2675,13 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	b.targetCancel = targetCancel
 	b.targetInfo = targetInfo
 	b.staleContexts = nil
+	b.reattachAttempted = false
 	b.clearObservationReferences()
 	b.dialogOpen = false
 	b.dialogType = ""
 	b.dialogMessage = ""
 	b.mu.Unlock()
+	traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, ""))
 
 	if oldTargetCancel != nil {
 		oldTargetCancel()
