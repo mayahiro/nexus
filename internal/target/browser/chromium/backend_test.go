@@ -13,7 +13,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -32,7 +34,7 @@ func TestAttachAndDetach(t *testing.T) {
 		t.Skip("posix shell script required")
 	}
 
-	executable, argsPath := writeFakeChromium(t)
+	executable, argsPath, childPIDPath := writeFakeChromium(t)
 	backend := New()
 
 	err := backend.Attach(context.Background(), spec.SessionConfig{
@@ -71,6 +73,8 @@ func TestAttachAndDetach(t *testing.T) {
 	if err := backend.Detach(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	childPID := readProcessID(t, childPIDPath)
+	waitForProcessExit(t, childPID)
 }
 
 func TestCapabilities(t *testing.T) {
@@ -85,7 +89,7 @@ func TestAttachRespectsViewportOption(t *testing.T) {
 		t.Skip("posix shell script required")
 	}
 
-	executable, argsPath := writeFakeChromium(t)
+	executable, argsPath, _ := writeFakeChromium(t)
 	backend := New()
 
 	err := backend.Attach(context.Background(), spec.SessionConfig{
@@ -163,6 +167,49 @@ func TestCurrentPageTargetTimesOutWhenDevToolsDoesNotRespond(t *testing.T) {
 	_, err := currentPageTarget(context.Background(), wsURL)
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected page target deadline, got: %v", err)
+	}
+}
+
+func TestPageTargetContextInitializesPersistentContext(t *testing.T) {
+	runCtx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	backend := &Backend{runCtx: runCtx}
+	t.Cleanup(backend.closeRemoteContexts)
+
+	resolveCalls := 0
+	operationCtx, targetInfo, release, err := backend.pageTargetContextWithResolver(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/test",
+		func(context.Context, string) (pageTargetInfo, error) {
+			resolveCalls++
+			return pageTargetInfo{
+				ID:   "page1",
+				Type: "page",
+				URL:  "https://example.com",
+			}, nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	if operationCtx == nil {
+		t.Fatal("expected operation context")
+	}
+	if targetInfo.ID != "page1" {
+		t.Fatalf("unexpected target: %+v", targetInfo)
+	}
+	if resolveCalls != 1 {
+		t.Fatalf("unexpected target resolve count: %d", resolveCalls)
+	}
+
+	backend.mu.Lock()
+	persistentTargetCtx := backend.targetCtx
+	backend.mu.Unlock()
+	if persistentTargetCtx == nil {
+		t.Fatal("expected persistent target context")
 	}
 }
 
@@ -811,14 +858,17 @@ func TestSelectAndUploadExpressions(t *testing.T) {
 	}
 }
 
-func writeFakeChromium(t *testing.T) (string, string) {
+func writeFakeChromium(t *testing.T) (string, string, string) {
 	t.Helper()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "fake-chromium.sh")
 	argsPath := filepath.Join(dir, "args.txt")
+	childPIDPath := filepath.Join(dir, "child.pid")
 	script := `#!/bin/sh
 printf '%s\n' "$@" > "` + argsPath + `"
+sleep 300 &
+printf '%s\n' "$!" > "` + childPIDPath + `"
 for arg in "$@"; do
   case "$arg" in
     --user-data-dir=*)
@@ -834,7 +884,40 @@ done
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return path, argsPath
+	return path, argsPath, childPIDPath
+}
+
+func readProcessID(t *testing.T, path string) int {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+func waitForProcessExit(t *testing.T, pid int) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d did not exit", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func TestChromiumE2E(t *testing.T) {

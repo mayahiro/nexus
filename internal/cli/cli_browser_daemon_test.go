@@ -3,7 +3,13 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -241,5 +247,106 @@ func TestCloseAllStopsDaemon(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("daemon did not stop")
+	}
+}
+
+func TestCloseAllTerminatesChromiumProcessGroup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("posix shell script required")
+	}
+
+	configureXDGTestEnv(t)
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- daemon.Run(ctx, paths, daemon.RunOptions{})
+	}()
+	waitForSocket(t, paths.Socket)
+
+	executable, childPIDPath := writeChromiumProcessTree(t)
+	var out bytes.Buffer
+	if code := Run(context.Background(), []string{
+		"open",
+		"https://example.com",
+		"--target-ref", executable,
+		"--session", "web1",
+	}, &out, &out); code != 0 {
+		t.Fatalf("unexpected open exit code: %d\n%s", code, out.String())
+	}
+
+	childPID := readTestProcessID(t, childPIDPath)
+	out.Reset()
+	if code := Run(context.Background(), []string{"close", "--all"}, &out, &out); code != 0 {
+		t.Fatalf("unexpected close --all exit code: %d\n%s", code, out.String())
+	}
+	waitForTestProcessExit(t, childPID)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
+
+func writeChromiumProcessTree(t *testing.T) (string, string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	executable := filepath.Join(dir, "fake-chromium.sh")
+	childPIDPath := filepath.Join(dir, "child.pid")
+	script := `#!/bin/sh
+sleep 300 &
+printf '%s\n' "$!" > "` + childPIDPath + `"
+echo "DevTools listening on ws://127.0.0.1:9222/devtools/browser/test"
+while true; do
+  sleep 1
+done
+`
+	if err := os.WriteFile(executable, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return executable, childPIDPath
+}
+
+func readTestProcessID(t *testing.T, path string) int {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pid
+}
+
+func waitForTestProcessExit(t *testing.T, pid int) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		err := syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d did not exit", pid)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

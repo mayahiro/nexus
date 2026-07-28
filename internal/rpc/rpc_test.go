@@ -33,6 +33,10 @@ type errorTestHandler struct {
 	testHandler
 }
 
+type panicTestHandler struct {
+	testHandler
+}
+
 type pipeListener struct {
 	connections chan net.Conn
 	closed      chan struct{}
@@ -98,6 +102,10 @@ func (h cancelTestHandler) ObserveSession(ctx context.Context, _ api.ObserveSess
 
 func (errorTestHandler) Ping(context.Context, api.PingRequest) (api.PingResponse, error) {
 	return api.PingResponse{}, errors.New("expected server error")
+}
+
+func (panicTestHandler) ActSession(context.Context, api.ActSessionRequest) (api.ActSessionResponse, error) {
+	panic("expected handler panic")
 }
 
 func (testHandler) Ping(_ context.Context, _ api.PingRequest) (api.PingResponse, error) {
@@ -397,6 +405,62 @@ func TestBinaryObservationOverPipe(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("pipe RPC server did not stop")
+	}
+}
+
+func TestServeRecoversHandlerPanic(t *testing.T) {
+	firstServerConn, firstClientConn := net.Pipe()
+	secondServerConn, secondClientConn := net.Pipe()
+	listener := &pipeListener{
+		connections: make(chan net.Conn, 2),
+		closed:      make(chan struct{}),
+	}
+	listener.connections <- firstServerConn
+	listener.connections <- secondServerConn
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- Serve(ctx, listener, panicTestHandler{}, ServeOptions{})
+	}()
+
+	firstClient := &Client{
+		conn:   firstClientConn,
+		reader: bufio.NewReader(firstClientConn),
+		writer: bufio.NewWriter(firstClientConn),
+	}
+	_, err := firstClient.ActSession(context.Background(), api.ActSessionRequest{
+		SessionID: "web1",
+		Action:    api.Action{Kind: "eval", Text: "1+1"},
+	})
+	if err == nil || err.Error() != "internal daemon error" {
+		t.Fatalf("unexpected panic response: %v", err)
+	}
+	firstClient.Close()
+
+	secondClient := &Client{
+		conn:   secondClientConn,
+		reader: bufio.NewReader(secondClientConn),
+		writer: bufio.NewWriter(secondClientConn),
+	}
+	response, err := secondClient.Ping(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ProtocolVersion != api.ProtocolVersion {
+		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
+	}
+	secondClient.Close()
+
+	cancel()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RPC server did not stop after recovered handler panic")
 	}
 }
 

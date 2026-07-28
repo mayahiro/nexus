@@ -1216,6 +1216,10 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 	}
 
 	cmd := exec.CommandContext(runCtx, cfg.TargetRef, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return killProcessGroup(cmd.Process)
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		cancel()
@@ -1332,13 +1336,22 @@ func (b *Backend) Detach(_ context.Context) error {
 	select {
 	case <-waitCh:
 	case <-timer.C:
-		if cmd.Process != nil {
-			cmd.Process.Signal(syscall.SIGKILL)
-		}
+		killProcessGroup(cmd.Process)
 		<-waitCh
 	}
 
 	return os.RemoveAll(userDataDir)
+}
+
+func killProcessGroup(process *os.Process) error {
+	if process == nil {
+		return nil
+	}
+	err := syscall.Kill(-process.Pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
 }
 
 func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
@@ -1592,6 +1605,14 @@ func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoo
 }
 
 func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (context.Context, pageTargetInfo, func(), error) {
+	return b.pageTargetContextWithResolver(ctx, devtoolsURL, currentPageTarget)
+}
+
+func (b *Backend) pageTargetContextWithResolver(
+	ctx context.Context,
+	devtoolsURL string,
+	resolveTarget func(context.Context, string) (pageTargetInfo, error),
+) (context.Context, pageTargetInfo, func(), error) {
 	b.mu.Lock()
 	targetCtx := b.targetCtx
 	targetInfo := b.targetInfo
@@ -1603,7 +1624,7 @@ func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (co
 			return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
 		}
 		var err error
-		targetInfo, err = currentPageTarget(ctx, devtoolsURL)
+		targetInfo, err = resolveTarget(ctx, devtoolsURL)
 		if err != nil {
 			return nil, pageTargetInfo{}, nil, err
 		}
@@ -1612,7 +1633,8 @@ func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (co
 		}
 
 		allocCtx, allocCancel := chromedp.NewRemoteAllocator(runCtx, devtoolsURL, b.allocatorOptions...)
-		targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
+		var targetCancel context.CancelFunc
+		targetCtx, targetCancel = chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID(targetInfo.ID)))
 		chromedp.ListenTarget(targetCtx, func(event any) {
 			b.trackDialogEvent(targetInfo.ID, event)
 		})
@@ -1626,6 +1648,9 @@ func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (co
 		b.mu.Unlock()
 	}
 
+	if targetCtx == nil {
+		return nil, pageTargetInfo{}, nil, errors.New("chromium target context is unavailable")
+	}
 	operationCtx, release := operationContext(targetCtx, ctx)
 	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
 		release()

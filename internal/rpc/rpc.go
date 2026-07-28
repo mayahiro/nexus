@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -317,6 +319,7 @@ func serveConn(ctx context.Context, conn net.Conn, handler Handler, opts ServeOp
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
+	defer recoverHandlerPanic(writer)
 
 	for {
 		if err := setDeadline(ctx, conn); err != nil {
@@ -471,6 +474,15 @@ func serveConn(ctx context.Context, conn net.Conn, handler Handler, opts ServeOp
 			return
 		}
 	}
+}
+
+func recoverHandlerPanic(writer *bufio.Writer) {
+	recovered := recover()
+	if recovered == nil {
+		return
+	}
+	log.Printf("RPC handler panic: %v\n%s", recovered, debug.Stack())
+	writeError(writer, errors.New("internal daemon error"))
 }
 
 func writeError(writer *bufio.Writer, err error) {
