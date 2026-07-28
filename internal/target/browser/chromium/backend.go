@@ -36,6 +36,8 @@ const maxLogEntries = 200
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 const screenshotAttemptTimeout = 10 * time.Second
+const screenshotReadinessTimeout = time.Second
+const screenshotReadinessBarrierTimeout = 750 * time.Millisecond
 const maxFullScreenshotWidth = 16384
 const maxFullScreenshotHeight = 50000
 const maxFullScreenshotPixels = 120_000_000
@@ -1156,6 +1158,7 @@ type Backend struct {
 
 var errPageTargetNotFound = errors.New("page target not found")
 var errFullScreenshotTooLarge = errors.New("full screenshot exceeds capture limits")
+var errScreenshotReadinessTimedOut = errors.New("screenshot paint readiness timed out")
 
 type nodeReference struct {
 	Selector string
@@ -2158,7 +2161,10 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		opts.FullScreenshot,
 		contextRemainingMilliseconds(attemptCtx),
 	))
-	data, width, height, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	attemptResult, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	data := attemptResult.data
+	width := attemptResult.width
+	height := attemptResult.height
 	attemptContextErr := attemptCtx.Err()
 	cancel()
 	attemptTrace(fmt.Sprintf(
@@ -2170,6 +2176,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	))
 	b.logScreenshotAttempt(targetInfo.ID, "capture", 1, attemptStartedAt, data, lastErr)
 	if lastErr == nil {
+		applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 		return screenshotResult(data, width, height, 1, totalStartedAt, meta)
 	}
 	if errors.Is(lastErr, errFullScreenshotTooLarge) {
@@ -2214,7 +2221,10 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 			opts.FullScreenshot,
 			contextRemainingMilliseconds(attemptCtx),
 		))
-		data, width, height, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+		attemptResult, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+		data = attemptResult.data
+		width = attemptResult.width
+		height = attemptResult.height
 		attemptContextErr = attemptCtx.Err()
 		cancel()
 		attemptTrace(fmt.Sprintf(
@@ -2226,6 +2236,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		))
 		b.logScreenshotAttempt(targetInfo.ID, "capture", 2, attemptStartedAt, data, lastErr)
 		if lastErr == nil {
+			applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 			return screenshotResult(data, width, height, 2, totalStartedAt, meta)
 		}
 		if errors.Is(lastErr, errFullScreenshotTooLarge) {
@@ -2285,7 +2296,10 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		opts.FullScreenshot,
 		contextRemainingMilliseconds(attemptCtx),
 	))
-	data, width, height, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	attemptResult, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
+	data = attemptResult.data
+	width = attemptResult.width
+	height = attemptResult.height
 	attemptContextErr = attemptCtx.Err()
 	cancel()
 	attemptTrace(fmt.Sprintf(
@@ -2309,6 +2323,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	meta["page_target_id"] = recoveredTarget.ID
 	meta["screenshot_recovery"] = "target_replaced"
 	meta["screenshot_recovery_warning"] = "the unresponsive tab was replaced and transient page state was lost"
+	applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 	return screenshotResult(data, width, height, 3, totalStartedAt, meta)
 }
 
@@ -2357,15 +2372,194 @@ func screenshotResult(data []byte, width int64, height int64, attempts int, star
 	return data, meta, nil
 }
 
-func captureScreenshotOnce(ctx context.Context, full bool, trace screenshotTrace) ([]byte, int64, int64, error) {
+type screenshotReadiness struct {
+	ReadyState       string        `json:"readyState"`
+	VisibilityState  string        `json:"visibilityState"`
+	WasDiscarded     bool          `json:"wasDiscarded"`
+	SnapshotCaptured bool          `json:"-"`
+	Fallback         bool          `json:"-"`
+	TimedOut         bool          `json:"-"`
+	Duration         time.Duration `json:"-"`
+	Err              error         `json:"-"`
+}
+
+type screenshotAttemptResult struct {
+	data      []byte
+	width     int64
+	height    int64
+	readiness screenshotReadiness
+}
+
+type screenshotAttemptDependencies struct {
+	waitForReadiness func(context.Context, screenshotTrace, string) (screenshotReadiness, error)
+	capture          func(context.Context, bool, screenshotTrace) ([]byte, int64, int64, error)
+}
+
+func captureScreenshotOnce(ctx context.Context, full bool, trace screenshotTrace) (screenshotAttemptResult, error) {
+	return captureScreenshotOnceWithDependencies(ctx, full, trace, screenshotAttemptDependencies{
+		waitForReadiness: waitForScreenshotReadiness,
+		capture:          captureScreenshotData,
+	})
+}
+
+func captureScreenshotOnceWithDependencies(ctx context.Context, full bool, trace screenshotTrace, dependencies screenshotAttemptDependencies) (screenshotAttemptResult, error) {
+	result := screenshotAttemptResult{}
+	readinessStartedAt := time.Now()
+	readinessCtx, readinessCancel := screenshotReadinessContext(ctx)
+	readiness, readinessErr := dependencies.waitForReadiness(readinessCtx, trace, "")
+	readinessContextErr := readinessCtx.Err()
+	readinessCancel()
+	readiness.Duration = time.Since(readinessStartedAt)
+	readiness.Err = readinessErr
+	if readinessErr != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		markScreenshotReadinessFallback(&readiness, readinessErr, readinessContextErr, trace, "paint_barrier")
+	}
+	result.readiness = readiness
+
+	captureCtx, captureCancel := context.WithCancel(ctx)
+	data, width, height, err := dependencies.capture(captureCtx, full, trace)
+	captureCancel()
+	result.data = data
+	result.width = width
+	result.height = height
+	return result, err
+}
+
+func waitForScreenshotReadiness(ctx context.Context, trace screenshotTrace, stagePrefix string) (screenshotReadiness, error) {
+	readiness := screenshotReadiness{}
+	snapshotStage := stagePrefix + "readiness_snapshot"
+	barrierStage := stagePrefix + "paint_barrier"
+
+	traceScreenshot(trace, "stage="+snapshotStage+" event=start")
+	snapshotStartedAt := time.Now()
+	err := chromedp.Run(ctx, chromedp.Evaluate(screenshotReadinessExpression, &readiness))
+	traceScreenshot(trace, fmt.Sprintf(
+		"stage=%s event=finish duration_ms=%d ready_state=%q visibility_state=%q was_discarded=%t context_error=%q error=%q",
+		snapshotStage,
+		time.Since(snapshotStartedAt).Milliseconds(),
+		readiness.ReadyState,
+		readiness.VisibilityState,
+		readiness.WasDiscarded,
+		errorMessage(ctx.Err()),
+		errorMessage(err),
+	))
+	if err != nil {
+		return readiness, err
+	}
+	readiness.SnapshotCaptured = true
+
+	traceScreenshot(trace, "stage="+barrierStage+" event=start")
+	barrierStartedAt := time.Now()
+	var barrierStatus string
+	err = chromedp.Run(
+		ctx,
+		chromedp.Evaluate(
+			screenshotPaintBarrierExpression(),
+			&barrierStatus,
+			awaitPromise,
+		),
+	)
+	if err == nil && barrierStatus != "confirmed" {
+		err = fmt.Errorf("%w: %s", errScreenshotReadinessTimedOut, screenshotReadinessValue(barrierStatus))
+	}
+	traceScreenshot(trace, fmt.Sprintf(
+		"stage=%s event=finish duration_ms=%d barrier_status=%q context_error=%q error=%q",
+		barrierStage,
+		time.Since(barrierStartedAt).Milliseconds(),
+		barrierStatus,
+		errorMessage(ctx.Err()),
+		errorMessage(err),
+	))
+	return readiness, err
+}
+
+func screenshotReadinessContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := screenshotReadinessTimeout
+	if deadline, ok := parent.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
+func screenshotReadinessTimedOut(err error, contextErr error) bool {
+	if errors.Is(err, errScreenshotReadinessTimedOut) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(contextErr, context.DeadlineExceeded) {
+		return true
+	}
+	message := strings.ToLower(errorMessage(err))
+	return strings.Contains(message, "timed out") ||
+		strings.Contains(message, "timeout") ||
+		strings.Contains(message, "execution was terminated")
+}
+
+func markScreenshotReadinessFallback(readiness *screenshotReadiness, err error, contextErr error, trace screenshotTrace, stage string) {
+	readiness.Fallback = true
+	readiness.TimedOut = screenshotReadinessTimedOut(err, contextErr)
+	readiness.Err = err
+	traceScreenshot(trace, fmt.Sprintf(
+		"stage=%s event=fallback duration_ms=%d context_error=%q error=%q",
+		stage,
+		readiness.Duration.Milliseconds(),
+		errorMessage(contextErr),
+		errorMessage(err),
+	))
+}
+
+func applyScreenshotReadinessMeta(meta map[string]string, readiness screenshotReadiness) {
+	status := "confirmed"
+	if readiness.Fallback {
+		status = "failed"
+		if readiness.TimedOut {
+			status = "timed_out"
+		}
+	}
+	meta["screenshot_readiness"] = status
+	meta["screenshot_readiness_duration_ms"] = strconv.FormatInt(readiness.Duration.Milliseconds(), 10)
+	meta["screenshot_ready_state"] = screenshotReadinessValue(readiness.ReadyState)
+	meta["screenshot_visibility_state"] = screenshotReadinessValue(readiness.VisibilityState)
+	meta["screenshot_was_discarded"] = screenshotWasDiscardedValue(readiness)
+	if readiness.Err == nil {
+		return
+	}
+	meta["screenshot_readiness_error"] = readiness.Err.Error()
+	meta["screenshot_readiness_warning"] = fmt.Sprintf(
+		"paint readiness barrier did not complete; screenshot captured without readiness confirmation (ready_state=%s visibility_state=%s was_discarded=%s)",
+		screenshotReadinessValue(readiness.ReadyState),
+		screenshotReadinessValue(readiness.VisibilityState),
+		screenshotWasDiscardedValue(readiness),
+	)
+}
+
+func screenshotReadinessValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func screenshotWasDiscardedValue(readiness screenshotReadiness) string {
+	if !readiness.SnapshotCaptured {
+		return "unknown"
+	}
+	return strconv.FormatBool(readiness.WasDiscarded)
+}
+
+func captureScreenshotData(ctx context.Context, full bool, trace screenshotTrace) ([]byte, int64, int64, error) {
 	var data []byte
 	var width int64
 	var height int64
-	actions := []chromedp.Action{
-		screenshotTraceAction(trace, "stage=paint_barrier event=start"),
-		chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise),
-		screenshotTraceAction(trace, "stage=paint_barrier event=finish"),
-	}
+	actions := []chromedp.Action{}
 	if full {
 		actions = append(actions, screenshotTraceAction(trace, "stage=layout_metrics event=start"))
 		actions = append(actions, chromedp.ActionFunc(func(runCtx context.Context) error {
@@ -2636,15 +2830,43 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_navigation event=finish replacement_target=%s", newTargetID)),
 		)
 	}
-	actions = append(
-		actions,
-		screenshotTraceAction(trace, fmt.Sprintf("stage=restore_paint_barrier event=start replacement_target=%s", newTargetID)),
-		chromedp.Evaluate(paintBarrierExpression, nil, awaitPromise),
-		screenshotTraceAction(trace, fmt.Sprintf("stage=restore_paint_barrier event=finish replacement_target=%s", newTargetID)),
-	)
+	if err := chromedp.Run(operationCtx, actions...); err != nil {
+		traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, errorMessage(err)))
+		release()
+		targetCancel()
+		allocCancel()
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	replacementTrace := screenshotTrace(func(message string) {
+		traceScreenshot(trace, fmt.Sprintf("%s replacement_target=%s", message, newTargetID))
+	})
+	readinessStartedAt := time.Now()
+	readinessCtx, readinessCancel := screenshotReadinessContext(operationCtx)
+	readiness, readinessErr := waitForScreenshotReadiness(readinessCtx, replacementTrace, "restore_")
+	readinessContextErr := readinessCtx.Err()
+	readinessCancel()
+	readiness.Duration = time.Since(readinessStartedAt)
+	if operationCtx.Err() != nil {
+		release()
+		targetCancel()
+		allocCancel()
+		return nil, pageTargetInfo{}, nil, operationCtx.Err()
+	}
+	if readinessErr != nil {
+		markScreenshotReadinessFallback(
+			&readiness,
+			readinessErr,
+			readinessContextErr,
+			replacementTrace,
+			"restore_paint_barrier",
+		)
+	}
+
 	if scrollX != 0 || scrollY != 0 {
-		actions = append(
-			actions,
+		scrollCtx, scrollCancel := context.WithCancel(operationCtx)
+		err := chromedp.Run(
+			scrollCtx,
 			screenshotTraceAction(trace, fmt.Sprintf(
 				"stage=restore_scroll event=start replacement_target=%s x=%d y=%d",
 				newTargetID,
@@ -2654,13 +2876,14 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 			chromedp.Evaluate(fmt.Sprintf("window.scrollTo(%d, %d)", scrollX, scrollY), nil),
 			screenshotTraceAction(trace, fmt.Sprintf("stage=restore_scroll event=finish replacement_target=%s", newTargetID)),
 		)
-	}
-	if err := chromedp.Run(operationCtx, actions...); err != nil {
-		traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, errorMessage(err)))
-		release()
-		targetCancel()
-		allocCancel()
-		return nil, pageTargetInfo{}, nil, err
+		scrollCancel()
+		if err != nil {
+			traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, errorMessage(err)))
+			release()
+			targetCancel()
+			allocCancel()
+			return nil, pageTargetInfo{}, nil, err
+		}
 	}
 
 	targetInfo := pageTargetInfo{
@@ -2706,13 +2929,67 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-const paintBarrierExpression = `(async () => {
+const screenshotReadinessExpression = `(() => ({
+  readyState: document.readyState || '',
+  visibilityState: document.visibilityState || '',
+  wasDiscarded: document.wasDiscarded === true
+}))()`
+
+func screenshotPaintBarrierExpression() string {
+	return fmt.Sprintf(`(() => new Promise((resolve) => {
+  let settled = false;
+  let domContentLoaded = null;
+  let firstFrame = null;
+  let secondFrame = null;
+  let timer = null;
+
+  const cleanup = () => {
+    if (domContentLoaded !== null) {
+      document.removeEventListener('DOMContentLoaded', domContentLoaded);
+    }
+    if (firstFrame !== null) {
+      cancelAnimationFrame(firstFrame);
+    }
+    if (secondFrame !== null) {
+      cancelAnimationFrame(secondFrame);
+    }
+    if (timer !== null) {
+      clearTimeout(timer);
+    }
+  };
+  const finish = (status) => {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolve(status);
+  };
+  const waitForFrames = () => {
+    firstFrame = requestAnimationFrame(() => {
+      firstFrame = null;
+      secondFrame = requestAnimationFrame(() => {
+        secondFrame = null;
+        finish('confirmed');
+      });
+    });
+  };
+
+  timer = setTimeout(() => finish('timed_out'), %d);
   if (document.readyState === 'loading') {
-    await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
+    domContentLoaded = () => {
+      domContentLoaded = null;
+      waitForFrames();
+    };
+    document.addEventListener('DOMContentLoaded', domContentLoaded, {once: true});
+    if (document.readyState !== 'loading') {
+      document.removeEventListener('DOMContentLoaded', domContentLoaded);
+      domContentLoaded = null;
+      waitForFrames();
+    }
+  } else {
+    waitForFrames();
   }
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  return document.readyState;
-})()`
+}))()`, screenshotReadinessBarrierTimeout.Milliseconds())
+}
 
 const hydrationBarrierExpression = `(async () => {
   if (document.readyState === 'loading') {

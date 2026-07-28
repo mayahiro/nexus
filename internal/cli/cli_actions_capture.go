@@ -25,14 +25,15 @@ import (
 )
 
 type screenshotCaptureOptions struct {
-	Annotate bool
-	Full     bool
-	Recover  bool
-	Verbose  bool
-	Locator  string
-	Nth      int
-	Timeout  time.Duration
-	Warnings io.Writer
+	Annotate  bool
+	Full      bool
+	Recover   bool
+	Verbose   bool
+	Locator   string
+	Nth       int
+	Timeout   time.Duration
+	Warnings  io.Writer
+	OnWarning func(string)
 }
 
 var screenshotCaptureTimeout = 30 * time.Second
@@ -107,9 +108,7 @@ func captureScreenshotBytes(ctx context.Context, client *rpc.Client, sessionID s
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty screenshot")
 	}
-	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" && opts.Warnings != nil {
-		fmt.Fprintf(opts.Warnings, "warning: %s\n", warning)
-	}
+	reportScreenshotWarnings(opts, res.Observation.Meta)
 	if !opts.Annotate {
 		return data, nil
 	}
@@ -170,9 +169,7 @@ func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sess
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty screenshot")
 	}
-	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" && opts.Warnings != nil {
-		fmt.Fprintf(opts.Warnings, "warning: %s\n", warning)
-	}
+	reportScreenshotWarnings(opts, res.Observation.Meta)
 	if opts.Annotate {
 		data, err = annotateScreenshot(data, res.Observation.Tree)
 		if err != nil {
@@ -181,6 +178,40 @@ func captureElementScreenshotBytes(ctx context.Context, client *rpc.Client, sess
 	}
 
 	return cropScreenshot(data, rect)
+}
+
+func writeScreenshotWarnings(writer io.Writer, meta map[string]string) {
+	if writer == nil {
+		return
+	}
+	for _, warning := range screenshotWarningMessages(meta) {
+		fmt.Fprintf(writer, "warning: %s\n", warning)
+	}
+}
+
+func reportScreenshotWarnings(opts screenshotCaptureOptions, meta map[string]string) {
+	warnings := screenshotWarningMessages(meta)
+	for _, warning := range warnings {
+		if opts.Warnings != nil {
+			fmt.Fprintf(opts.Warnings, "warning: %s\n", warning)
+		}
+		if opts.OnWarning != nil {
+			opts.OnWarning(warning)
+		}
+	}
+}
+
+func screenshotWarningMessages(meta map[string]string) []string {
+	var warnings []string
+	for _, key := range []string{
+		"screenshot_recovery_warning",
+		"screenshot_readiness_warning",
+	} {
+		if warning := strings.TrimSpace(meta[key]); warning != "" {
+			warnings = append(warnings, warning)
+		}
+	}
+	return warnings
 }
 
 func resolveScreenshotNode(nodes []api.Node, locator string, selection nodeSelectionOptions) (api.Node, error) {

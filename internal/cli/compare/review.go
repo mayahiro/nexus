@@ -404,22 +404,28 @@ func compareReviewSafeFileToken(value string) string {
 
 func captureCompareReviewScreenshots(ctx context.Context, client *rpc.Client, oldSessionID string, newSessionID string) compareReviewScreenshots {
 	screenshots := compareReviewScreenshots{}
-	oldScreenshot, err := captureCompareReviewScreenshot(ctx, client, oldSessionID)
+	oldScreenshot, oldWarning, err := captureCompareReviewScreenshot(ctx, client, oldSessionID)
 	if err != nil {
 		screenshots.Warnings = append(screenshots.Warnings, "old screenshot: "+err.Error())
 	} else {
 		screenshots.Old = oldScreenshot
+		if oldWarning != "" {
+			screenshots.Warnings = append(screenshots.Warnings, "old screenshot: "+oldWarning)
+		}
 	}
-	newScreenshot, err := captureCompareReviewScreenshot(ctx, client, newSessionID)
+	newScreenshot, newWarning, err := captureCompareReviewScreenshot(ctx, client, newSessionID)
 	if err != nil {
 		screenshots.Warnings = append(screenshots.Warnings, "new screenshot: "+err.Error())
 	} else {
 		screenshots.New = newScreenshot
+		if newWarning != "" {
+			screenshots.Warnings = append(screenshots.Warnings, "new screenshot: "+newWarning)
+		}
 	}
 	return screenshots
 }
 
-func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, sessionID string) ([]byte, error) {
+func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, sessionID string) ([]byte, string, error) {
 	captureCtx, cancel := context.WithTimeout(ctx, compareReviewScreenshotTimeout)
 	defer cancel()
 
@@ -432,16 +438,16 @@ func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, ses
 		},
 	})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	screenshot, err := res.Observation.ScreenshotBytes()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if len(screenshot) == 0 {
-		return nil, fmt.Errorf("empty screenshot")
+		return nil, "", fmt.Errorf("empty screenshot")
 	}
-	return screenshot, nil
+	return screenshot, strings.TrimSpace(res.Observation.Meta["screenshot_readiness_warning"]), nil
 }
 
 func writeCompareManifestReviewPacket(dir string, report compareManifestReport, pageDirectories []compareManifestReviewPageDirectory) error {

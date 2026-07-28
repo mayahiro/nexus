@@ -278,9 +278,7 @@ func runObserveInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 		}
 		return 0
 	}
-	if warning := strings.TrimSpace(res.Observation.Meta["screenshot_recovery_warning"]); warning != "" {
-		fmt.Fprintf(stderr, "warning: %s\n", warning)
-	}
+	writeScreenshotWarnings(stderr, res.Observation.Meta)
 
 	fmt.Fprintf(stdout, "session: %s\n", res.Observation.SessionID)
 	fmt.Fprintf(stdout, "target: %s\n", res.Observation.TargetType)

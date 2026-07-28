@@ -124,10 +124,13 @@ Rules:
 - `--full` is not supported together with `--locator`
 - viewport capture is the default; `--full` opts into a full-page capture
 - screenshot capture times out after 30000 ms by default; `screenshot --timeout <MS>` and `observe --screenshot --timeout <MS>` apply the overall deadline on both the client and daemon
-- each `Page.captureScreenshot` attempt is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
+- each capture attempt, including its readiness check, is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
+- the paint-readiness barrier is best-effort and gets at most 1000 ms; when it does not complete, Nexus discards that operation context and calls `Page.captureScreenshot` through a fresh context
+- a successful fallback capture reports a warning because the frame may precede final rendering; direct text output prints it, flow reports keep side-specific messages in step `warnings`, and JSON observations expose `screenshot_readiness`, `screenshot_ready_state`, `screenshot_visibility_state`, `screenshot_was_discarded`, and the warning in `meta`
+- use `wait hydrated` or a page-specific `wait function` before capture when visual readiness is part of the assertion
 - after a capture failure, Nexus creates one fresh CDP connection to the same target and retries without losing page state; repeated failures do not accumulate more connections
 - add `--recover-target` to permit a final tab replacement and URL reload when same-target recovery fails; Nexus prints a warning because transient page state is lost
-- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
+- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated readiness snapshot, paint barrier, capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
 - `--recover-target` is not supported together with `--locator`
 - full-page captures are rejected above 16384 px width, 50000 px height, or 120 million pixels
 - an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout

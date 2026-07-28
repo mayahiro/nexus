@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -719,6 +720,134 @@ func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
 	}
 	if difference > 10*time.Millisecond {
 		t.Fatalf("short request deadline was divided or shortened: %s", difference)
+	}
+}
+
+func TestCaptureScreenshotOnceFallsBackAfterReadinessTimeout(t *testing.T) {
+	var readinessCtx context.Context
+	captureCalled := false
+	var traceMessages []string
+	trace := screenshotTrace(func(message string) {
+		traceMessages = append(traceMessages, message)
+	})
+
+	result, err := captureScreenshotOnceWithDependencies(
+		context.Background(),
+		false,
+		trace,
+		screenshotAttemptDependencies{
+			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
+				readinessCtx = ctx
+				return screenshotReadiness{
+					ReadyState:       "loading",
+					VisibilityState:  "hidden",
+					WasDiscarded:     true,
+					SnapshotCaptured: true,
+				}, context.DeadlineExceeded
+			},
+			capture: func(ctx context.Context, full bool, _ screenshotTrace) ([]byte, int64, int64, error) {
+				captureCalled = true
+				if readinessCtx.Err() == nil {
+					return nil, 0, 0, errors.New("readiness context remained active")
+				}
+				if ctx.Err() != nil {
+					return nil, 0, 0, fmt.Errorf("fresh capture context is canceled: %w", ctx.Err())
+				}
+				if full {
+					return nil, 0, 0, errors.New("unexpected full screenshot")
+				}
+				return []byte("png"), 800, 600, nil
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !captureCalled || string(result.data) != "png" {
+		t.Fatalf("capture did not run after readiness timeout: %+v", result)
+	}
+	if !result.readiness.Fallback || !result.readiness.TimedOut {
+		t.Fatalf("unexpected readiness fallback: %+v", result.readiness)
+	}
+
+	meta := map[string]string{}
+	applyScreenshotReadinessMeta(meta, result.readiness)
+	if meta["screenshot_readiness"] != "timed_out" ||
+		meta["screenshot_ready_state"] != "loading" ||
+		meta["screenshot_visibility_state"] != "hidden" ||
+		meta["screenshot_was_discarded"] != "true" ||
+		meta["screenshot_readiness_warning"] == "" {
+		t.Fatalf("unexpected readiness metadata: %+v", meta)
+	}
+	if !slices.ContainsFunc(traceMessages, func(message string) bool {
+		return strings.Contains(message, "stage=paint_barrier event=fallback")
+	}) {
+		t.Fatalf("fallback trace was not emitted: %+v", traceMessages)
+	}
+}
+
+func TestCaptureScreenshotOnceStopsWhenAttemptIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	captureCalled := false
+
+	_, err := captureScreenshotOnceWithDependencies(
+		ctx,
+		false,
+		nil,
+		screenshotAttemptDependencies{
+			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
+				return screenshotReadiness{}, ctx.Err()
+			},
+			capture: func(context.Context, bool, screenshotTrace) ([]byte, int64, int64, error) {
+				captureCalled = true
+				return nil, 0, 0, nil
+			},
+		},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected canceled attempt error: %v", err)
+	}
+	if captureCalled {
+		t.Fatal("capture ran after the attempt was canceled")
+	}
+}
+
+func TestScreenshotPaintBarrierExpressionContract(t *testing.T) {
+	expression := screenshotPaintBarrierExpression()
+	for _, expected := range []string{
+		"setTimeout(() => finish('timed_out'), 750)",
+		"requestAnimationFrame",
+		"cancelAnimationFrame",
+		"removeEventListener",
+		"finish('confirmed')",
+	} {
+		if !strings.Contains(expression, expected) {
+			t.Fatalf("paint barrier expression does not contain %q", expected)
+		}
+	}
+}
+
+func TestScreenshotReadinessExpressionContract(t *testing.T) {
+	for _, expected := range []string{"document.readyState", "document.visibilityState", "document.wasDiscarded"} {
+		if !strings.Contains(screenshotReadinessExpression, expected) {
+			t.Fatalf("readiness expression does not contain %q", expected)
+		}
+	}
+}
+
+func TestScreenshotReadinessMetaKeepsUnavailableSnapshotUnknown(t *testing.T) {
+	meta := map[string]string{}
+	applyScreenshotReadinessMeta(meta, screenshotReadiness{
+		Fallback: true,
+		Err:      errors.New("snapshot unavailable"),
+	})
+
+	if meta["screenshot_ready_state"] != "unknown" ||
+		meta["screenshot_visibility_state"] != "unknown" ||
+		meta["screenshot_was_discarded"] != "unknown" ||
+		!strings.Contains(meta["screenshot_readiness_warning"], "was_discarded=unknown") {
+		t.Fatalf("unexpected unavailable snapshot metadata: %+v", meta)
 	}
 }
 
