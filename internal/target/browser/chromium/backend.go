@@ -1605,13 +1605,14 @@ func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoo
 }
 
 func (b *Backend) pageTargetContext(ctx context.Context, devtoolsURL string) (context.Context, pageTargetInfo, func(), error) {
-	return b.pageTargetContextWithResolver(ctx, devtoolsURL, currentPageTarget)
+	return b.pageTargetContextWithDependencies(ctx, devtoolsURL, currentPageTarget, initializePageTargetContext)
 }
 
-func (b *Backend) pageTargetContextWithResolver(
+func (b *Backend) pageTargetContextWithDependencies(
 	ctx context.Context,
 	devtoolsURL string,
 	resolveTarget func(context.Context, string) (pageTargetInfo, error),
+	initializeTarget func(context.Context, context.Context) error,
 ) (context.Context, pageTargetInfo, func(), error) {
 	b.mu.Lock()
 	targetCtx := b.targetCtx
@@ -1638,6 +1639,11 @@ func (b *Backend) pageTargetContextWithResolver(
 		chromedp.ListenTarget(targetCtx, func(event any) {
 			b.trackDialogEvent(targetInfo.ID, event)
 		})
+		if err := initializeTarget(ctx, targetCtx); err != nil {
+			targetCancel()
+			allocCancel()
+			return nil, pageTargetInfo{}, nil, err
+		}
 
 		b.mu.Lock()
 		b.allocCtx = allocCtx
@@ -1658,6 +1664,20 @@ func (b *Backend) pageTargetContextWithResolver(
 	}
 
 	return operationCtx, targetInfo, release, nil
+}
+
+func initializePageTargetContext(requestCtx context.Context, targetCtx context.Context) error {
+	result := make(chan error, 1)
+	go func() {
+		result <- chromedp.Run(targetCtx)
+	}()
+
+	select {
+	case err := <-result:
+		return err
+	case <-requestCtx.Done():
+		return requestCtx.Err()
+	}
 }
 
 func activateTarget(ctx context.Context, targetID string) error {
@@ -2320,6 +2340,11 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
 		b.trackDialogEvent(targetInfo.ID, event)
 	})
+	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
+		targetCancel()
+		allocCancel()
+		return nil, pageTargetInfo{}, nil, err
+	}
 	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
 	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
 		release()
@@ -2392,6 +2417,11 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	chromedp.ListenTarget(persistentTargetCtx, func(event any) {
 		b.trackDialogEvent(string(newTargetID), event)
 	})
+	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
+		targetCancel()
+		allocCancel()
+		return nil, pageTargetInfo{}, nil, err
+	}
 	operationCtx, release := operationContext(persistentTargetCtx, requestCtx)
 
 	actions := []chromedp.Action{

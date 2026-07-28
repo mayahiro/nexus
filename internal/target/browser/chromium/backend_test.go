@@ -170,7 +170,7 @@ func TestCurrentPageTargetTimesOutWhenDevToolsDoesNotRespond(t *testing.T) {
 	}
 }
 
-func TestPageTargetContextInitializesPersistentContext(t *testing.T) {
+func TestPageTargetContextKeepsPersistentContextAcrossOperations(t *testing.T) {
 	runCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -178,7 +178,9 @@ func TestPageTargetContextInitializesPersistentContext(t *testing.T) {
 	t.Cleanup(backend.closeRemoteContexts)
 
 	resolveCalls := 0
-	operationCtx, targetInfo, release, err := backend.pageTargetContextWithResolver(
+	initializeCalls := 0
+	var initializedTargetCtx context.Context
+	operationCtx, targetInfo, release, err := backend.pageTargetContextWithDependencies(
 		context.Background(),
 		"ws://127.0.0.1:9222/devtools/browser/test",
 		func(context.Context, string) (pageTargetInfo, error) {
@@ -189,11 +191,15 @@ func TestPageTargetContextInitializesPersistentContext(t *testing.T) {
 				URL:  "https://example.com",
 			}, nil
 		},
+		func(_ context.Context, targetCtx context.Context) error {
+			initializeCalls++
+			initializedTargetCtx = targetCtx
+			return nil
+		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
 
 	if operationCtx == nil {
 		t.Fatal("expected operation context")
@@ -204,12 +210,46 @@ func TestPageTargetContextInitializesPersistentContext(t *testing.T) {
 	if resolveCalls != 1 {
 		t.Fatalf("unexpected target resolve count: %d", resolveCalls)
 	}
+	if initializeCalls != 1 {
+		t.Fatalf("unexpected target initialize count: %d", initializeCalls)
+	}
 
 	backend.mu.Lock()
 	persistentTargetCtx := backend.targetCtx
 	backend.mu.Unlock()
 	if persistentTargetCtx == nil {
 		t.Fatal("expected persistent target context")
+	}
+	if initializedTargetCtx != persistentTargetCtx {
+		t.Fatal("target was not initialized with the persistent context")
+	}
+
+	release()
+	if err := persistentTargetCtx.Err(); err != nil {
+		t.Fatalf("persistent target context was canceled after first operation: %v", err)
+	}
+
+	secondOperationCtx, _, secondRelease, err := backend.pageTargetContextWithDependencies(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/test",
+		func(context.Context, string) (pageTargetInfo, error) {
+			t.Fatal("target was resolved again")
+			return pageTargetInfo{}, nil
+		},
+		func(context.Context, context.Context) error {
+			t.Fatal("target was initialized again")
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := secondOperationCtx.Err(); err != nil {
+		t.Fatalf("second operation context is unavailable: %v", err)
+	}
+	secondRelease()
+	if err := persistentTargetCtx.Err(); err != nil {
+		t.Fatalf("persistent target context was canceled after second operation: %v", err)
 	}
 }
 
