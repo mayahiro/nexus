@@ -29,7 +29,6 @@ func TestSetupAndStatus(t *testing.T) {
 	manager := New(paths)
 	manager.client = server.Client()
 	manager.chromeVersionsURL = server.URL + "/chrome.json"
-	manager.lightpandaLatestURL = server.URL + "/lightpanda.json"
 	manager.now = func() time.Time { return time.Unix(100, 0).UTC() }
 
 	result, err := manager.Setup(context.Background())
@@ -37,7 +36,7 @@ func TestSetupAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(result.Browsers) != 2 {
+	if len(result.Browsers) != 1 {
 		t.Fatalf("unexpected browser count: %d", len(result.Browsers))
 	}
 
@@ -46,7 +45,7 @@ func TestSetupAndStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(status.Browsers) != 2 {
+	if len(status.Browsers) != 1 {
 		t.Fatalf("unexpected status count: %d", len(status.Browsers))
 	}
 
@@ -82,8 +81,7 @@ func TestUpdateReplacesVersions(t *testing.T) {
 	}
 
 	state := &testServerState{
-		chromiumVersion:   "1.0.0",
-		lightpandaVersion: "v0.1.0",
+		chromiumVersion: "1.0.0",
 	}
 	server := newBrowserUpdateServer(t, state)
 	defer server.Close()
@@ -92,25 +90,20 @@ func TestUpdateReplacesVersions(t *testing.T) {
 	manager := New(paths)
 	manager.client = server.Client()
 	manager.chromeVersionsURL = server.URL + "/chrome.json"
-	manager.lightpandaLatestURL = server.URL + "/lightpanda.json"
 
 	if _, err := manager.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
 	state.chromiumVersion = "2.0.0"
-	state.lightpandaVersion = "v0.2.0"
 
 	result, err := manager.Update(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if result.Browsers[0].Version != "2.0.0" {
-		t.Fatalf("unexpected chromium version: %+v", result.Browsers[0])
-	}
-	if result.Browsers[1].Version != "v0.2.0" {
-		t.Fatalf("unexpected lightpanda version: %+v", result.Browsers[1])
+	if len(result.Browsers) != 1 || result.Browsers[0].Version != "2.0.0" {
+		t.Fatalf("unexpected chromium result: %+v", result.Browsers)
 	}
 }
 
@@ -127,6 +120,16 @@ func TestResolveMissingBrowser(t *testing.T) {
 	}
 }
 
+func TestResolveRemovedLightpandaBrowser(t *testing.T) {
+	paths := testPaths(t)
+	manager := New(paths)
+
+	_, err := manager.Resolve("lightpanda")
+	if !errors.Is(err, ErrUnknownBrowser) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestUninstall(t *testing.T) {
 	if runtime.GOOS != "darwin" {
 		t.Skip("browser setup is macOS only")
@@ -139,7 +142,6 @@ func TestUninstall(t *testing.T) {
 	manager := New(paths)
 	manager.client = server.Client()
 	manager.chromeVersionsURL = server.URL + "/chrome.json"
-	manager.lightpandaLatestURL = server.URL + "/lightpanda.json"
 
 	if _, err := manager.Setup(context.Background()); err != nil {
 		t.Fatal(err)
@@ -158,25 +160,18 @@ func TestUninstall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, browser := range status.Browsers {
-		if browser.Name == BrowserChromium && browser.Installed {
-			t.Fatalf("chromium should be uninstalled: %+v", browser)
-		}
-		if browser.Name == BrowserLightpanda && !browser.Installed {
-			t.Fatalf("lightpanda should remain installed: %+v", browser)
-		}
+	if len(status.Browsers) != 1 || status.Browsers[0].Name != BrowserChromium || status.Browsers[0].Installed {
+		t.Fatalf("chromium should be uninstalled: %+v", status.Browsers)
 	}
 }
 
 type testServerState struct {
-	chromiumVersion   string
-	lightpandaVersion string
+	chromiumVersion string
 }
 
 func newBrowserTestServer(t *testing.T) *httptest.Server {
 	return newBrowserUpdateServer(t, &testServerState{
-		chromiumVersion:   "1.0.0",
-		lightpandaVersion: "v0.1.0",
+		chromiumVersion: "1.0.0",
 	})
 }
 
@@ -202,23 +197,8 @@ func newBrowserUpdateServer(t *testing.T, state *testServerState) *httptest.Serv
 		}
 		json.NewEncoder(w).Encode(payload)
 	})
-	handler.HandleFunc("/lightpanda.json", func(w http.ResponseWriter, r *http.Request) {
-		payload := map[string]any{
-			"tag_name": state.lightpandaVersion,
-			"assets": []map[string]string{
-				{
-					"name":                 lightpandaAssetName(),
-					"browser_download_url": serverURL(r) + "/lightpanda",
-				},
-			},
-		}
-		json.NewEncoder(w).Encode(payload)
-	})
 	handler.HandleFunc("/chromium.zip", func(w http.ResponseWriter, r *http.Request) {
 		writeZip(t, w, state.chromiumVersion)
-	})
-	handler.HandleFunc("/lightpanda", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("#!/bin/sh\necho " + state.lightpandaVersion + "\n"))
 	})
 
 	return httptest.NewServer(handler)

@@ -15,7 +15,7 @@ import (
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
-const expectedCompareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
+const expectedCompareExecutionUsage = "[--backend chromium] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
 const expectedCompareDirectOutputUsage = "[--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>]"
 const expectedCompareReportOutputUsage = "[--output-json <file>] [--output-md <file>] [--json]"
 const expectedCompareURLUsage = "<old-url> <new-url> " + expectedCompareExecutionUsage + " " + expectedCompareDirectOutputUsage + " " + expectedCompareReportOutputUsage
@@ -217,6 +217,7 @@ func TestNagiCompareValidatorsRejectUnrepresentedForms(t *testing.T) {
 		{"compare", "https://old.example.com", "https://new.example.com", "--continue-on-error"},
 		{"compare", "https://old.example.com", "https://new.example.com", "--limit", "1"},
 		{"compare", "https://old.example.com", "https://new.example.com", "--wait-timeout", "-1"},
+		{"compare", "https://old.example.com", "https://new.example.com", "--backend", "lightpanda"},
 		{"compare", "https://old.example.com", "https://new.example.com", "--match-mode", "unknown"},
 		{"compare", "https://old.example.com", "https://new.example.com", "--node-scope", "unknown"},
 		{"compare", "https://old.example.com", "https://new.example.com", "--node-scope", "all"},

@@ -216,8 +216,10 @@ func TestNagiApplicationRejectsInvalidForms(t *testing.T) {
 		args []string
 	}{
 		{name: "empty attach session", args: []string{"attach", "browser", "--session", " "}},
+		{name: "removed attach backend", args: []string{"attach", "browser", "--session", "work", "--backend", "lightpanda"}},
 		{name: "unknown attach backend", args: []string{"attach", "browser", "--session", "work", "--backend", "webkit"}},
 		{name: "empty batch command", args: []string{"batch", "--cmd", " "}},
+		{name: "removed browser name", args: []string{"browser", "uninstall", "--name", "lightpanda"}},
 		{name: "unknown browser name", args: []string{"browser", "uninstall", "--name", "webkit"}},
 		{name: "empty eval source", args: []string{"eval", ""}},
 		{name: "empty find query", args: []string{"find", "role", "", "click"}},
@@ -232,6 +234,7 @@ func TestNagiApplicationRejectsInvalidForms(t *testing.T) {
 		{name: "observe invalid timeout", args: []string{"observe", "--session", "work", "--screenshot", "--timeout", "0"}},
 		{name: "upload selector without path", args: []string{"upload", "--selector", "input[type=file]"}},
 		{name: "upload without selector or node", args: []string{"upload", "artifact.txt"}},
+		{name: "removed open backend", args: []string{"open", "https://example.com", "--backend", "lightpanda"}},
 		{name: "unknown open backend", args: []string{"open", "https://example.com", "--backend", "webkit"}},
 		{name: "wait value missing", args: []string{"wait", "text"}},
 		{name: "wait state on text", args: []string{"wait", "text", "Ready", "--state", "visible"}},

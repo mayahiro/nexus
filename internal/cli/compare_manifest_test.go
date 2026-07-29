@@ -412,7 +412,7 @@ func TestCompareManifestAppliesBackendAndViewportOverrides(t *testing.T) {
 				"name":     "override",
 				"old_url":  "https://old.example.test/override",
 				"new_url":  "https://new.example.test/override",
-				"backend":  "lightpanda",
+				"backend":  "chromium",
 				"viewport": "1280x720",
 			},
 		},
@@ -462,11 +462,11 @@ func TestCompareManifestAppliesBackendAndViewportOverrides(t *testing.T) {
 	if countAttaches("https://new.example.test/defaults", "chromium", "1440", "900") != 1 {
 		t.Fatalf("expected defaults new url attach request to use chromium 1440x900, got %#v", handler.attachRequests)
 	}
-	if countAttaches("https://old.example.test/override", "lightpanda", "1280", "720") != 1 {
-		t.Fatalf("expected override old url attach request to use lightpanda 1280x720, got %#v", handler.attachRequests)
+	if countAttaches("https://old.example.test/override", "chromium", "1280", "720") != 1 {
+		t.Fatalf("expected override old url attach request to use chromium 1280x720, got %#v", handler.attachRequests)
 	}
-	if countAttaches("https://new.example.test/override", "lightpanda", "1280", "720") != 1 {
-		t.Fatalf("expected override new url attach request to use lightpanda 1280x720, got %#v", handler.attachRequests)
+	if countAttaches("https://new.example.test/override", "chromium", "1280", "720") != 1 {
+		t.Fatalf("expected override new url attach request to use chromium 1280x720, got %#v", handler.attachRequests)
 	}
 
 	cancel()

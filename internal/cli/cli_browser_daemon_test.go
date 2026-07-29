@@ -72,8 +72,8 @@ func TestDoctorStartsDaemon(t *testing.T) {
 func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 	configureXDGTestEnv(t)
 
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return autoStartLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return autoStartChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -104,10 +104,10 @@ func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 	}
 
 	var openOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda", "--session", "auto"}, &openOut, &openOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "chromium", "--session", "auto"}, &openOut, &openOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, openOut.String())
 	}
-	if !strings.Contains(openOut.String(), "attached browser auto (lightpanda) /tmp/lightpanda") {
+	if !strings.Contains(openOut.String(), "attached browser auto (chromium) /tmp/chromium") {
 		t.Fatalf("unexpected open output: %s", openOut.String())
 	}
 
@@ -141,8 +141,8 @@ func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 
 func TestCloseStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -170,7 +170,7 @@ func TestCloseStopsDaemon(t *testing.T) {
 	}
 
 	var attachOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda"}, &attachOut, &attachOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "chromium"}, &attachOut, &attachOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, attachOut.String())
 	}
 
@@ -194,8 +194,8 @@ func TestCloseStopsDaemon(t *testing.T) {
 
 func TestCloseAllStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -223,12 +223,12 @@ func TestCloseAllStopsDaemon(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda"}, &out, &out); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "chromium"}, &out, &out); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, out.String())
 	}
 
 	out.Reset()
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web2", "--backend", "lightpanda"}, &out, &out); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web2", "--backend", "chromium"}, &out, &out); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, out.String())
 	}
 

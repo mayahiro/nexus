@@ -15,6 +15,8 @@ type testBackend struct {
 	observe      *api.Observation
 }
 
+const adapterTestBackendName spec.BackendName = "test"
+
 func (b testBackend) Name() spec.BackendName {
 	return b.name
 }
@@ -49,7 +51,7 @@ func (b testBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, erro
 
 func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -65,7 +67,7 @@ func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 		t.Fatalf("unexpected target type: %s", obs.TargetType)
 	}
 
-	if obs.Meta["browser_backend"] != "lightpanda" {
+	if obs.Meta["browser_backend"] != "test" {
 		t.Fatalf("unexpected backend meta: %v", obs.Meta)
 	}
 
@@ -76,7 +78,7 @@ func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 
 func TestActReturnsUnsupportedForObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -90,7 +92,7 @@ func TestActReturnsUnsupportedForObserveOnlyBackend(t *testing.T) {
 
 func TestObserveReturnsUnsupportedForScreenshotOnObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -104,7 +106,7 @@ func TestObserveReturnsUnsupportedForScreenshotOnObserveOnlyBackend(t *testing.T
 
 func TestObserveReturnsUnsupportedForLayoutContextOnObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},

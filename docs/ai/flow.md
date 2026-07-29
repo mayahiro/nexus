@@ -41,7 +41,7 @@ Each scenario usually includes:
 Each `old` and `new` endpoint supports:
 
 - `url` or `session`
-- `backend`
+- `backend` (`chromium`)
 - `target_ref`
 - `viewport`
 

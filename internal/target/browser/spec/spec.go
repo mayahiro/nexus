@@ -9,10 +9,7 @@ import (
 
 type BackendName string
 
-const (
-	BackendChromium   BackendName = "chromium"
-	BackendLightpanda BackendName = "lightpanda"
-)
+const BackendChromium BackendName = "chromium"
 
 var ErrUnsupported = errors.New("unsupported operation")
 

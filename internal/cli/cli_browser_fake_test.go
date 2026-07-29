@@ -9,27 +9,27 @@ import (
 )
 
 type fakeBrowserManager struct{}
-type fakeLightpandaBackend struct{}
-type autoStartLightpandaBackend struct{}
+type fakeChromiumBackend struct{}
+type autoStartChromiumBackend struct{}
 type missingBrowserManager struct{}
 
-func (fakeLightpandaBackend) Name() spec.BackendName {
-	return spec.BackendLightpanda
+func (fakeChromiumBackend) Name() spec.BackendName {
+	return spec.BackendChromium
 }
 
-func (fakeLightpandaBackend) Capabilities() spec.Capabilities {
+func (fakeChromiumBackend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{Observe: true}
 }
 
-func (fakeLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+func (fakeChromiumBackend) Attach(context.Context, spec.SessionConfig) error {
 	return nil
 }
 
-func (fakeLightpandaBackend) Detach(context.Context) error {
+func (fakeChromiumBackend) Detach(context.Context) error {
 	return nil
 }
 
-func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+func (fakeChromiumBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
 	return &api.Observation{
 		URLOrScreen: "https://example.com",
 		Title:       "Example",
@@ -52,35 +52,35 @@ func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.
 	}, nil
 }
 
-func (fakeLightpandaBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
+func (fakeChromiumBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
 	return nil, nil
 }
 
-func (fakeLightpandaBackend) Screenshot(context.Context, string) error {
+func (fakeChromiumBackend) Screenshot(context.Context, string) error {
 	return nil
 }
 
-func (fakeLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
+func (fakeChromiumBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
 	return nil, nil
 }
 
-func (autoStartLightpandaBackend) Name() spec.BackendName {
-	return spec.BackendLightpanda
+func (autoStartChromiumBackend) Name() spec.BackendName {
+	return spec.BackendChromium
 }
 
-func (autoStartLightpandaBackend) Capabilities() spec.Capabilities {
+func (autoStartChromiumBackend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{Observe: true, Act: true}
 }
 
-func (autoStartLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+func (autoStartChromiumBackend) Attach(context.Context, spec.SessionConfig) error {
 	return nil
 }
 
-func (autoStartLightpandaBackend) Detach(context.Context) error {
+func (autoStartChromiumBackend) Detach(context.Context) error {
 	return nil
 }
 
-func (autoStartLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+func (autoStartChromiumBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
 	return &api.Observation{
 		URLOrScreen: "https://example.com",
 		Title:       "Example Title",
@@ -88,7 +88,7 @@ func (autoStartLightpandaBackend) Observe(context.Context, api.ObserveOptions) (
 	}, nil
 }
 
-func (autoStartLightpandaBackend) Act(_ context.Context, action api.Action) (*api.ActionResult, error) {
+func (autoStartChromiumBackend) Act(_ context.Context, action api.Action) (*api.ActionResult, error) {
 	switch action.Kind {
 	case "eval":
 		if action.Text == "document.title" {
@@ -102,11 +102,11 @@ func (autoStartLightpandaBackend) Act(_ context.Context, action api.Action) (*ap
 	return &api.ActionResult{OK: true}, nil
 }
 
-func (autoStartLightpandaBackend) Screenshot(context.Context, string) error {
+func (autoStartChromiumBackend) Screenshot(context.Context, string) error {
 	return nil
 }
 
-func (autoStartLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
+func (autoStartChromiumBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
 	return nil, nil
 }
 
@@ -114,7 +114,6 @@ func (fakeBrowserManager) Setup(context.Context) (browsermgr.SetupResult, error)
 	return browsermgr.SetupResult{
 		Browsers: []browsermgr.InstallResult{
 			{Name: "chromium", Version: "1.0.0", Changed: true, ExecutablePath: "/tmp/chromium"},
-			{Name: "lightpanda", Version: "v0.1.0", Changed: false, ExecutablePath: "/tmp/lightpanda"},
 		},
 	}, nil
 }
@@ -135,7 +134,6 @@ func (fakeBrowserManager) Status() (browsermgr.Status, error) {
 	return browsermgr.Status{
 		Browsers: []browsermgr.Installation{
 			{Name: "chromium", Version: "1.0.0", Installed: true, ExecutablePath: "/tmp/chromium"},
-			{Name: "lightpanda", Version: "v0.1.0", Installed: true, ExecutablePath: "/tmp/lightpanda"},
 		},
 	}, nil
 }
@@ -144,8 +142,6 @@ func (fakeBrowserManager) Resolve(name string) (browsermgr.Installation, error) 
 	switch name {
 	case "chromium":
 		return browsermgr.Installation{Name: name, Version: "1.0.0", Installed: true, ExecutablePath: "/tmp/chromium"}, nil
-	case "lightpanda":
-		return browsermgr.Installation{Name: name, Version: "v0.1.0", Installed: true, ExecutablePath: "/tmp/lightpanda"}, nil
 	default:
 		return browsermgr.Installation{}, browsermgr.ErrUnknownBrowser
 	}

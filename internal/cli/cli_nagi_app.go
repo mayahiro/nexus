@@ -67,9 +67,9 @@ func newNagiAttachCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("browser").
 				About("Attach a browser session").
-				UsageVariant("default", "--session <ID> [--backend chromium|lightpanda] [--url <URL>] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
+				UsageVariant("default", "--session <ID> [--backend chromium] [--url <URL>] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
 				Option(nagiRequiredValueOption("session", "ID", "Session identifier")).
-				Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium", "lightpanda").Default("chromium")).
+				Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium").Default("chromium")).
 				Option(nagiValueOption("url", "URL", "Initial URL")).
 				Option(nagiViewportOption("viewport", "Browser viewport")).
 				Option(nagiValueOption("target-ref", "PATH", "Browser executable or target reference")).
@@ -124,8 +124,8 @@ func newNagiBrowserCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("uninstall").
 				About("Uninstall managed browsers").
-				UsageVariant("default", "[--name chromium|lightpanda]").
-				Option(nagiChoiceOption("name", "NAME", "Browser name", "chromium", "lightpanda")).
+				UsageVariant("default", "[--name chromium]").
+				Option(nagiChoiceOption("name", "NAME", "Browser name", "chromium")).
 				Handle(nagiRunHandler(runBrowserUninstallInvocation)),
 		)
 }
@@ -352,9 +352,9 @@ func newNagiObserveCommand() *nagicli.Command {
 func newNagiOpenCommand() *nagicli.Command {
 	return nagicli.NewCommand("open").
 		About("Open a URL in a managed browser session").
-		UsageVariant("default", "<URL> [--session <ID>] [--backend chromium|lightpanda] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
+		UsageVariant("default", "<URL> [--session <ID>] [--backend chromium] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
 		Option(nagiSessionOption()).
-		Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium", "lightpanda").Default("chromium")).
+		Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium").Default("chromium")).
 		Option(nagiViewportOption("viewport", "Browser viewport")).
 		Option(nagiValueOption("target-ref", "PATH", "Browser executable or target reference")).
 		Argument(nagiRequiredArgument("url", "URL", "Initial URL")).

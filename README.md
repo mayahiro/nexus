@@ -9,8 +9,7 @@ It is inspired by Browser Use CLI, but it is not a compatibility project. Nexus 
 Nexus is currently in an early usable stage.
 
 - macOS only
-- Chromium is the primary backend
-- Lightpanda is supported as an experimental backend for observation-oriented workflows
+- Chromium is the supported browser backend
 - The current install path is `go install`
 
 ## Install
@@ -98,8 +97,8 @@ nxctl browser uninstall
 
 Current behavior:
 
-- `browser setup` installs stable Chromium and stable Lightpanda
-- `browser update` refreshes both
+- `browser setup` installs stable Chromium
+- `browser update` refreshes Chromium
 - `browser uninstall` removes managed browser installs
 - download archives are not kept after successful install or update
 
@@ -186,7 +185,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page. `all_css_properties: true` and `css_property` cannot coexist in the same object; a page-level property list may override exhaustive mode inherited from defaults.
+In compare manifests, `backend` (currently `chromium`), `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page. `all_css_properties: true` and `css_property` cannot coexist in the same object; a page-level property list may override exhaustive mode inherited from defaults.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -247,7 +246,7 @@ Use `inspect --selector` when you need the computed styles for one CSS-selected 
 When an inspect selector or inspect scope selector matches multiple elements, Nexus reports up to five matched candidates as hints.
 Use `inspect --scope-selector` to resolve a semantic locator inside one CSS-selected subtree, or `--old-scope-selector` and `--new-scope-selector` when the old and new subtree selectors differ.
 When `inspect` has no semantic locator, side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior for different DOM structures.
-Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.
+Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 Use `get bbox --selector <css>` when you need the viewport-relative bounds for any CSS-selected element without running ad hoc JavaScript.
 Use `get text|value|attributes|bbox --refs <@eN,@eN,...>` when you need read-only values for several recent refs in one command.

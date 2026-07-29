@@ -305,4 +305,4 @@ If the new page looks incomplete:
 - do not combine `--selector` with `--nth`
 - if an inspect selector or inspect scope selector matches multiple elements, the error includes up to five candidate hints
 - use `inspect --layout-context` when ancestor layout CSS may explain the target element's size, position, wrapping, or overflow
-- `--layout-context` is capability-based; Chromium returns DOM ancestor layout CSS, and unsupported backends fail explicitly
+- `--layout-context` returns DOM ancestor layout CSS from Chromium

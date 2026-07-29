@@ -7,20 +7,17 @@ import (
 )
 
 func TestNewBackend(t *testing.T) {
-	backends := []struct {
-		name spec.BackendName
-	}{
-		{name: spec.BackendChromium},
-		{name: spec.BackendLightpanda},
+	backend, err := NewBackend(spec.BackendChromium)
+	if err != nil {
+		t.Fatal(err)
 	}
+	if backend.Name() != spec.BackendChromium {
+		t.Fatalf("unexpected backend name: %s", backend.Name())
+	}
+}
 
-	for _, tt := range backends {
-		backend, err := NewBackend(tt.name)
-		if err != nil {
-			t.Fatalf("unexpected error for %s: %v", tt.name, err)
-		}
-		if backend.Name() != tt.name {
-			t.Fatalf("unexpected backend name: %s", backend.Name())
-		}
+func TestNewBackendRejectsRemovedLightpandaBackend(t *testing.T) {
+	if _, err := NewBackend(spec.BackendName("lightpanda")); err == nil {
+		t.Fatal("expected removed backend to be rejected")
 	}
 }
