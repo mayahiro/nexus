@@ -11,6 +11,4 @@ type Adapter interface {
 	Detach(ctx context.Context) error
 	Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error)
 	Act(ctx context.Context, action api.Action) (*api.ActionResult, error)
-	Screenshot(ctx context.Context, path string) error
-	Logs(ctx context.Context, opts api.LogOptions) ([]api.LogEntry, error)
 }

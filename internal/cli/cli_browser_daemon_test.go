@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -18,6 +19,101 @@ import (
 	"github.com/mayahiro/nexus/internal/target/browser"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
+
+func TestEnsureDaemonConcurrentStartRunsOnce(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := startDaemonProcess
+	defer func() {
+		startDaemonProcess = original
+	}()
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	var starts atomic.Int32
+	done := make(chan error, 1)
+	startDaemonProcess = func(daemonPaths config.Paths) error {
+		if count := starts.Add(1); count != 1 {
+			return errors.New("daemon start invoked more than once")
+		}
+		go func() {
+			done <- daemon.Run(runCtx, daemonPaths, daemon.RunOptions{})
+		}()
+		return nil
+	}
+
+	type result struct {
+		started bool
+		err     error
+	}
+	const callers = 12
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			client, started, err := ensureDaemon(ctx, paths)
+			if client != nil {
+				client.Close()
+			}
+			results <- result{started: started, err: err}
+		}()
+	}
+	close(start)
+
+	startedCount := 0
+	var firstErr error
+	for range callers {
+		result := <-results
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+		if result.started {
+			startedCount++
+		}
+	}
+	if firstErr != nil {
+		t.Fatal(firstErr)
+	}
+	if starts.Load() != 1 {
+		t.Fatalf("unexpected daemon start count: %d", starts.Load())
+	}
+	if startedCount != 1 {
+		t.Fatalf("unexpected started result count: %d", startedCount)
+	}
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelStop()
+	client, _, err := ensureDaemon(stopCtx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.StopDaemon(stopCtx); err != nil {
+		client.Close()
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
 
 func TestDoctorStartsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)

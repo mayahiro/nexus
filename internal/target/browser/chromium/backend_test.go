@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -49,17 +48,6 @@ func TestAttachAndDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logs, err := backend.Logs(context.Background(), api.LogOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) == 0 {
-		t.Fatal("expected logs")
-	}
-	if !strings.Contains(logs[0].Message, "DevTools listening on ws://127.0.0.1:9222/") {
-		t.Fatalf("unexpected logs: %+v", logs)
-	}
-
 	argsData, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +68,7 @@ func TestAttachAndDetach(t *testing.T) {
 
 func TestCapabilities(t *testing.T) {
 	capabilities := New().Capabilities()
-	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.Logs || !capabilities.LayoutContext {
+	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.LayoutContext {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
 	}
 }
@@ -614,18 +602,6 @@ func TestClearMarkedTypeTargetExpression(t *testing.T) {
 	}
 }
 
-func TestKeyProbeExpressions(t *testing.T) {
-	install := installKeyProbeExpression("token-1")
-	finish := finishKeyProbeExpression("token-1")
-
-	if !strings.Contains(install, "addEventListener('keydown'") || !strings.Contains(install, "token-1") {
-		t.Fatalf("unexpected key probe install script: %s", install)
-	}
-	if !strings.Contains(finish, "removeEventListener('keydown'") || !strings.Contains(finish, "return state.count") {
-		t.Fatalf("unexpected key probe finish script: %s", finish)
-	}
-}
-
 func TestStructurePathToSelector(t *testing.T) {
 	selector := structurePathToSelector("html:1>body:1>main:2>button:3")
 	if selector != "html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(2) > button:nth-of-type(3)" {
@@ -723,156 +699,8 @@ func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
 	}
 }
 
-func TestCaptureScreenshotOnceFallsBackAfterReadinessTimeout(t *testing.T) {
-	var readinessCtx context.Context
-	captureCalled := false
-	var traceMessages []string
-	trace := screenshotTrace(func(message string) {
-		traceMessages = append(traceMessages, message)
-	})
-
-	result, err := captureScreenshotOnceWithDependencies(
-		context.Background(),
-		false,
-		trace,
-		screenshotAttemptDependencies{
-			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
-				readinessCtx = ctx
-				return screenshotReadiness{
-					ReadyState:       "loading",
-					VisibilityState:  "hidden",
-					WasDiscarded:     true,
-					SnapshotCaptured: true,
-				}, context.DeadlineExceeded
-			},
-			capture: func(ctx context.Context, full bool, _ screenshotTrace) ([]byte, int64, int64, error) {
-				captureCalled = true
-				if readinessCtx.Err() == nil {
-					return nil, 0, 0, errors.New("readiness context remained active")
-				}
-				if ctx.Err() != nil {
-					return nil, 0, 0, fmt.Errorf("fresh capture context is canceled: %w", ctx.Err())
-				}
-				if full {
-					return nil, 0, 0, errors.New("unexpected full screenshot")
-				}
-				return []byte("png"), 800, 600, nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !captureCalled || string(result.data) != "png" {
-		t.Fatalf("capture did not run after readiness timeout: %+v", result)
-	}
-	if !result.readiness.Fallback || !result.readiness.TimedOut {
-		t.Fatalf("unexpected readiness fallback: %+v", result.readiness)
-	}
-
-	meta := map[string]string{}
-	applyScreenshotReadinessMeta(meta, result.readiness)
-	if meta["screenshot_readiness"] != "timed_out" ||
-		meta["screenshot_ready_state"] != "loading" ||
-		meta["screenshot_visibility_state"] != "hidden" ||
-		meta["screenshot_was_discarded"] != "true" ||
-		meta["screenshot_readiness_warning"] == "" {
-		t.Fatalf("unexpected readiness metadata: %+v", meta)
-	}
-	if !slices.ContainsFunc(traceMessages, func(message string) bool {
-		return strings.Contains(message, "stage=paint_barrier event=fallback")
-	}) {
-		t.Fatalf("fallback trace was not emitted: %+v", traceMessages)
-	}
-}
-
-func TestCaptureScreenshotOnceStopsWhenAttemptIsCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	captureCalled := false
-
-	_, err := captureScreenshotOnceWithDependencies(
-		ctx,
-		false,
-		nil,
-		screenshotAttemptDependencies{
-			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
-				return screenshotReadiness{}, ctx.Err()
-			},
-			capture: func(context.Context, bool, screenshotTrace) ([]byte, int64, int64, error) {
-				captureCalled = true
-				return nil, 0, 0, nil
-			},
-		},
-	)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("unexpected canceled attempt error: %v", err)
-	}
-	if captureCalled {
-		t.Fatal("capture ran after the attempt was canceled")
-	}
-}
-
-func TestScreenshotPaintBarrierExpressionContract(t *testing.T) {
-	expression := screenshotPaintBarrierExpression()
-	for _, expected := range []string{
-		"setTimeout(() => finish('timed_out'), 750)",
-		"requestAnimationFrame",
-		"cancelAnimationFrame",
-		"removeEventListener",
-		"finish('confirmed')",
-	} {
-		if !strings.Contains(expression, expected) {
-			t.Fatalf("paint barrier expression does not contain %q", expected)
-		}
-	}
-}
-
-func TestScreenshotReadinessExpressionContract(t *testing.T) {
-	for _, expected := range []string{"document.readyState", "document.visibilityState", "document.wasDiscarded"} {
-		if !strings.Contains(screenshotReadinessExpression, expected) {
-			t.Fatalf("readiness expression does not contain %q", expected)
-		}
-	}
-}
-
-func TestScreenshotReadinessMetaKeepsUnavailableSnapshotUnknown(t *testing.T) {
-	meta := map[string]string{}
-	applyScreenshotReadinessMeta(meta, screenshotReadiness{
-		Fallback: true,
-		Err:      errors.New("snapshot unavailable"),
-	})
-
-	if meta["screenshot_ready_state"] != "unknown" ||
-		meta["screenshot_visibility_state"] != "unknown" ||
-		meta["screenshot_was_discarded"] != "unknown" ||
-		!strings.Contains(meta["screenshot_readiness_warning"], "was_discarded=unknown") {
-		t.Fatalf("unexpected unavailable snapshot metadata: %+v", meta)
-	}
-}
-
-func TestReattachPageTargetIsBounded(t *testing.T) {
-	backend := New()
-	backend.runCtx = context.Background()
-	backend.reattachAttempted = true
-	_, _, _, err := backend.reattachPageTarget(context.Background(), pageTargetInfo{ID: "page1"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "reattach was already attempted") {
-		t.Fatalf("unexpected bounded reattach error: %v", err)
-	}
-}
-
 func TestScreenshotTraceIncludesCorrelationFields(t *testing.T) {
-	backend := New()
-	trace := backend.newScreenshotTrace(true, "capture-1", "page-1", 2)
-	trace("stage=capture_action event=start")
-
-	logs, err := backend.Logs(context.Background(), api.LogOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("unexpected trace count: %d", len(logs))
-	}
+	trace := screenshotTracePrefix("capture-1", "page-1", 2) + " stage=capture_action event=start"
 	for _, expected := range []string{
 		"capture_id=capture-1",
 		"target=page-1",
@@ -880,14 +708,14 @@ func TestScreenshotTraceIncludesCorrelationFields(t *testing.T) {
 		"stage=capture_action",
 		"event=start",
 	} {
-		if !strings.Contains(logs[0].Message, expected) {
-			t.Fatalf("trace does not contain %q: %s", expected, logs[0].Message)
+		if !strings.Contains(trace, expected) {
+			t.Fatalf("trace does not contain %q: %s", expected, trace)
 		}
 	}
 }
 
 func TestHydrationBarrierWaitsForDOMQuiet(t *testing.T) {
-	for _, expected := range []string{"DOMContentLoaded", "MutationObserver", "setTimeout", "requestAnimationFrame"} {
+	for _, expected := range []string{"DOMContentLoaded", "MutationObserver", "setTimeout(finish, 250)", "requestAnimationFrame", "cancelAnimationFrame"} {
 		if !strings.Contains(hydrationBarrierExpression, expected) {
 			t.Fatalf("expected hydration barrier contract %q", expected)
 		}
@@ -1147,9 +975,9 @@ func TestChromiumE2E(t *testing.T) {
   <div id="message"></div>
   <div id="hover-target" tabindex="0" onmouseenter="document.getElementById('hover-status').textContent='hovered'">Hover</div>
   <div id="hover-status"></div>
-  <div id="dbl-target" ondblclick="document.getElementById('dbl-status').textContent='double clicked'">Double</div>
+  <div id="dbl-target" tabindex="0" ondblclick="document.getElementById('dbl-status').textContent='double clicked'">Double</div>
   <div id="dbl-status"></div>
-  <div id="ctx-target" oncontextmenu="event.preventDefault(); document.getElementById('ctx-status').textContent='context menu'">Context</div>
+  <div id="ctx-target" tabindex="0" oncontextmenu="event.preventDefault(); document.getElementById('ctx-status').textContent='context menu'">Context</div>
   <div id="ctx-status"></div>
   <div id="key-status"></div>
   <div id="fill-status"></div>
@@ -1280,8 +1108,8 @@ func TestChromiumE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, ok := typeResult.Value.(map[string]interface{}); !ok || value["delivery_verified"] != true {
-		t.Fatalf("type delivery was not verified: %#v", typeResult.Value)
+	if value, ok := typeResult.Value.(map[string]interface{}); !ok || value["method"] != "key_events" {
+		t.Fatalf("unexpected type result: %#v", typeResult.Value)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &emailID, Text: "user@example.com"}); err != nil {
 		t.Fatal(err)
@@ -1307,7 +1135,7 @@ func TestChromiumE2E(t *testing.T) {
 		t.Fatalf("unexpected message value: %#v", res.Value)
 	}
 
-	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Args: map[string]string{"target": "value", "selector": "#email"}})
+	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Selector: "#email", Args: map[string]string{"target": "value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1315,7 +1143,7 @@ func TestChromiumE2E(t *testing.T) {
 		t.Fatalf("unexpected email value: %#v", res.Value)
 	}
 
-	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Args: map[string]string{"target": "value", "selector": "#replace"}})
+	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Selector: "#replace", Args: map[string]string{"target": "value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1351,17 +1179,24 @@ func TestChromiumE2E(t *testing.T) {
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "text", "value": "hovered", "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
 	}
+	hoverObservation, err := backend.Observe(context.Background(), api.ObserveOptions{WithTree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hoverNode = requireNodeByAttrNode(t, hoverObservation.Tree, "id", "hover-target")
+	hoverID = hoverNode.ID
+
 	hoverScreenshot, err := backend.Observe(context.Background(), api.ObserveOptions{WithScreenshot: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := png.Decode(bytes.NewReader(hoverScreenshot.ScreenshotData))
+	screenshotImage, err := png.Decode(bytes.NewReader(hoverScreenshot.ScreenshotData))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sample := color.RGBAModel.Convert(image.At(int(hoverNode.Bounds.X)+5, int(hoverNode.Bounds.Y)+5)).(color.RGBA)
+	sample := color.RGBAModel.Convert(screenshotImage.At(int(hoverNode.Bounds.X)+5, int(hoverNode.Bounds.Y)+5)).(color.RGBA)
 	if sample.R < 200 || sample.G > 80 || sample.B > 80 {
-		t.Fatalf("hover style was not preserved in screenshot: %+v", sample)
+		t.Fatalf("hover style was not preserved in screenshot: sample=%+v node=%+v image=%v", sample, hoverNode.Bounds, screenshotImage.Bounds())
 	}
 	if _, err := backend.Act(context.Background(), api.Action{
 		Kind:    "get",

@@ -64,19 +64,3 @@ func (a *Adapter) Act(ctx context.Context, action api.Action) (*api.ActionResult
 
 	return a.backend.Act(ctx, action)
 }
-
-func (a *Adapter) Screenshot(ctx context.Context, path string) error {
-	if !a.backend.Capabilities().Screenshot {
-		return fmt.Errorf("%w: screenshot", spec.ErrUnsupported)
-	}
-
-	return a.backend.Screenshot(ctx, path)
-}
-
-func (a *Adapter) Logs(ctx context.Context, opts api.LogOptions) ([]api.LogEntry, error) {
-	if !a.backend.Capabilities().Logs {
-		return nil, fmt.Errorf("%w: logs", spec.ErrUnsupported)
-	}
-
-	return a.backend.Logs(ctx, opts)
-}

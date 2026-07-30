@@ -293,14 +293,6 @@ func (fakeSessionBackend) Act(context.Context, api.Action) (*api.ActionResult, e
 	return nil, errors.New("unsupported operation")
 }
 
-func (fakeSessionBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (fakeSessionBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
-}
-
 type serialSessionBackend struct {
 	active  atomic.Int32
 	maximum atomic.Int32
@@ -334,14 +326,6 @@ func (b *serialSessionBackend) Act(context.Context, api.Action) (*api.ActionResu
 	b.begin("act")
 	defer b.end()
 	return &api.ActionResult{OK: true}, nil
-}
-
-func (*serialSessionBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (*serialSessionBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
 }
 
 func (b *serialSessionBackend) begin(operation string) {

@@ -202,16 +202,11 @@ func reportScreenshotWarnings(opts screenshotCaptureOptions, meta map[string]str
 }
 
 func screenshotWarningMessages(meta map[string]string) []string {
-	var warnings []string
-	for _, key := range []string{
-		"screenshot_recovery_warning",
-		"screenshot_readiness_warning",
-	} {
-		if warning := strings.TrimSpace(meta[key]); warning != "" {
-			warnings = append(warnings, warning)
-		}
+	warning := strings.TrimSpace(meta["screenshot_recovery_warning"])
+	if warning == "" {
+		return nil
 	}
-	return warnings
+	return []string{warning}
 }
 
 func resolveScreenshotNode(nodes []api.Node, locator string, selection nodeSelectionOptions) (api.Node, error) {

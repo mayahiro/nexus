@@ -120,7 +120,6 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		Note("Locator forms include @eN, role, name, text, label, testid, and href").
 		Note("Viewport capture is the default; --full captures the full page within safety limits").
 		Note("Each capture attempt is capped at 10000 ms within the overall timeout").
-		Note("Paint readiness is best-effort for 1000 ms; capture continues with a warning on fallback").
 		Note("A failed capture automatically reattaches to the same target once; --recover-target additionally permits tab replacement").
 		Note("--verbose writes capture boundary events to the current daemon output")
 }

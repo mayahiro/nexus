@@ -35,13 +35,10 @@ const maxBinaryResponseSize int64 = 512 << 20
 const connectionShutdownGrace = 100 * time.Millisecond
 
 type Client struct {
-	conn    net.Conn
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	dial    func(context.Context) (net.Conn, error)
-	closed  bool
-	callMu  sync.Mutex
-	stateMu sync.Mutex
+	mu     sync.Mutex
+	dial   func(context.Context) (net.Conn, error)
+	active map[net.Conn]struct{}
+	closed bool
 }
 
 type request struct {
@@ -65,27 +62,34 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
 
-	return &Client{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-		dial:   dial,
-	}, nil
+	return newClient(dial), nil
 }
 
 func (c *Client) Close() error {
-	c.stateMu.Lock()
-
-	c.closed = true
-	if c.conn == nil {
-		c.stateMu.Unlock()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
-	conn := c.conn
-	c.clearConnectionLocked(conn)
-	c.stateMu.Unlock()
-	return conn.Close()
+	c.closed = true
+	connections := make([]net.Conn, 0, len(c.active))
+	for conn := range c.active {
+		connections = append(connections, conn)
+	}
+	c.active = nil
+	c.mu.Unlock()
+
+	var closeErr error
+	for _, conn := range connections {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	return closeErr
 }
 
 func (c *Client) Ping(ctx context.Context) (api.PingResponse, error) {
@@ -131,22 +135,15 @@ func (c *Client) ActSession(ctx context.Context, req api.ActSessionRequest) (api
 }
 
 func (c *Client) call(ctx context.Context, method string, params interface{}, result interface{}) error {
-	c.callMu.Lock()
-	defer c.callMu.Unlock()
-
-	conn, reader, writer, err := c.connection(ctx)
+	conn, err := c.openConnection(ctx)
 	if err != nil {
 		return err
 	}
-	healthy := true
-	defer func() {
-		if !healthy {
-			c.discardConnection(conn)
-		}
-	}()
+	defer c.releaseConnection(conn)
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
 
 	if err := setDeadline(ctx, conn); err != nil {
-		healthy = false
 		return err
 	}
 	cancelFinished := make(chan struct{})
@@ -157,7 +154,6 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 	defer func() {
 		if !stopCancel() {
 			<-cancelFinished
-			healthy = false
 		}
 		clearDeadline(conn)
 	}()
@@ -167,93 +163,92 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 		Method:          method,
 		Params:          params,
 	}); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 
 	var res response
 	if err := readJSONLine(reader, &res); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 	if res.Error != "" {
-		healthy = false
 		return errors.New(res.Error)
 	}
 	if result != nil {
 		if err := json.Unmarshal(res.Result, result); err != nil {
-			healthy = false
 			return err
 		}
 	}
 	if res.BinarySize < 0 {
-		healthy = false
 		return fmt.Errorf("invalid RPC binary response size: %d", res.BinarySize)
 	}
 	if res.BinarySize == 0 {
 		return nil
 	}
 	if res.BinarySize > maxBinaryResponseSize {
-		healthy = false
 		return fmt.Errorf("RPC binary response is too large: %d bytes", res.BinarySize)
 	}
 	if result == nil {
-		healthy = false
 		return errors.New("unexpected binary RPC response")
 	}
 
 	data := make([]byte, res.BinarySize)
 	if _, err := io.ReadFull(reader, data); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 	switch value := result.(type) {
 	case *api.ObserveSessionResponse:
 		value.Observation.ScreenshotData = data
 	default:
-		healthy = false
 		return fmt.Errorf("binary RPC response is unsupported for %T", result)
 	}
 	return nil
 }
 
-func (c *Client) connection(ctx context.Context) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+func newClient(dial func(context.Context) (net.Conn, error)) *Client {
+	return &Client{
+		dial:   dial,
+		active: map[net.Conn]struct{}{},
+	}
+}
 
+func (c *Client) openConnection(ctx context.Context) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
 	if c.closed {
-		return nil, nil, nil, net.ErrClosed
+		c.mu.Unlock()
+		return nil, net.ErrClosed
 	}
-	if c.conn != nil {
-		return c.conn, c.reader, c.writer, nil
+	dial := c.dial
+	c.mu.Unlock()
+	if dial == nil {
+		return nil, net.ErrClosed
 	}
-	if c.dial == nil {
-		return nil, nil, nil, net.ErrClosed
-	}
-	conn, err := c.dial(ctx)
+
+	conn, err := dial(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	c.conn = conn
-	c.reader = bufio.NewReader(conn)
-	c.writer = bufio.NewWriter(conn)
-	return c.conn, c.reader, c.writer, nil
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		conn.Close()
+		return nil, net.ErrClosed
+	}
+	if c.active == nil {
+		c.active = map[net.Conn]struct{}{}
+	}
+	c.active[conn] = struct{}{}
+	c.mu.Unlock()
+	return conn, nil
 }
 
-func (c *Client) discardConnection(conn net.Conn) {
-	c.stateMu.Lock()
-	c.clearConnectionLocked(conn)
-	c.stateMu.Unlock()
+func (c *Client) releaseConnection(conn net.Conn) {
+	c.mu.Lock()
+	delete(c.active, conn)
+	c.mu.Unlock()
 	conn.Close()
-}
-
-func (c *Client) clearConnectionLocked(conn net.Conn) {
-	if c.conn != conn {
-		return
-	}
-	c.conn = nil
-	c.reader = nil
-	c.writer = nil
 }
 
 func requestError(ctx context.Context, err error) error {

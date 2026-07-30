@@ -74,7 +74,7 @@ For controlled forms:
 
 - Prefer `input` when the field is empty and the application needs real keyboard events
 - Prefer `fill` when replacing an existing value, then verify with `get value <NODE>` or `state`
-- `input`, `type`, and `keys` verify that a page-level `keydown` listener received an event when the probe can stay attached; a verified zero-delivery result is an error instead of a false success
+- `input`, `type`, and `keys` report CDP command success; verify with `get value`, `state`, or an application-specific assertion when the resulting page state matters
 - If a custom controlled component still restores the old value after `fill`, use a keyboard-oriented sequence that focuses and clears the field before `input`
 - Avoid `type` when focus may have moved after a modal, navigation, or rerender
 
@@ -93,7 +93,7 @@ Refs are generation checked. A ref is rejected when the main document loader or 
 
 ## Readiness and Eval Worlds
 
-Use `wait hydrated` when a page needs a generic post-load stabilization barrier before interaction. It waits for `DOMContentLoaded`, two animation frames, 100 ms without DOM mutations, and two more animation frames. It is a browser rendering heuristic and cannot prove that a framework attached every event handler.
+Use `wait hydrated` when a page needs a generic post-load stabilization barrier before interaction. It waits for `DOMContentLoaded`, two animation frames, 100 ms without DOM mutations, and two more animation frames. Each animation-frame pair falls back after 250 ms so a background or headless target cannot stall the entire wait. It is a browser rendering heuristic and cannot prove that a framework attached every event handler.
 
 Use `wait function <EXPRESSION>` when the application exposes a stronger readiness condition.
 
@@ -124,13 +124,12 @@ Rules:
 - `--full` is not supported together with `--locator`
 - viewport capture is the default; `--full` opts into a full-page capture
 - screenshot capture times out after 30000 ms by default; `screenshot --timeout <MS>` and `observe --screenshot --timeout <MS>` apply the overall deadline on both the client and daemon
-- each capture attempt, including its readiness check, is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
-- the paint-readiness barrier is best-effort and gets at most 1000 ms; when it does not complete, Nexus discards that operation context and calls `Page.captureScreenshot` through a fresh context
-- a successful fallback capture reports a warning because the frame may precede final rendering; direct text output prints it, flow reports keep side-specific messages in step `warnings`, and JSON observations expose `screenshot_readiness`, `screenshot_ready_state`, `screenshot_visibility_state`, `screenshot_was_discarded`, and the warning in `meta`
+- each capture attempt is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
+- capture does not add an implicit rendering delay
 - use `wait hydrated` or a page-specific `wait function` before capture when visual readiness is part of the assertion
 - after a capture failure, Nexus creates one fresh CDP connection to the same target and retries without losing page state; repeated failures do not accumulate more connections
 - add `--recover-target` to permit a final tab replacement and URL reload when same-target recovery fails; Nexus prints a warning because transient page state is lost
-- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated readiness snapshot, paint barrier, capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
+- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
 - `--recover-target` is not supported together with `--locator`
 - full-page captures are rejected above 16384 px width, 50000 px height, or 120 million pixels
 - an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout
@@ -141,7 +140,7 @@ Mouse position is kept on the session target, so a viewport screenshot taken aft
 
 Canvas content, including map renderers, is captured visually but usually has no semantic DOM nodes for `find`, `state`, or coordinate assertions. Verify canvas internals through screenshot review or an application-specific JavaScript/API assertion.
 
-Auto-started daemon processes hold an exclusive lock on `nxd.pid` and write to PID-specific `nxd.<pid>.log` files in the Nexus state directory. Use the PID in `nxd.pid` to select the current log. An interactive `nxctl daemon --verbose` or `nxd --verbose` also logs request summaries for every operation.
+Concurrent `nxctl` processes coordinate a missing-daemon cold start through `nxd.start.lock`, then recheck the socket so only one process spawns `nxd`. The running daemon holds a separate exclusive lock on `nxd.pid` and writes to a PID-specific `nxd.<pid>.log` file in the Nexus state directory. Use the PID in `nxd.pid` to select the current log. An interactive `nxctl daemon --verbose` or `nxd --verbose` also logs request summaries for every operation.
 
 ## File Uploads
 

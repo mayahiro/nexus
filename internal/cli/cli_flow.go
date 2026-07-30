@@ -156,7 +156,6 @@ type flowStepReport struct {
 	Side        string            `json:"side,omitempty"`
 	Status      string            `json:"status"`
 	Error       string            `json:"error,omitempty"`
-	Warnings    []string          `json:"warnings,omitempty"`
 	Compare     json.RawMessage   `json:"compare,omitempty"`
 	Screenshots map[string]string `json:"screenshots,omitempty"`
 }
@@ -692,9 +691,8 @@ func executeFlowStep(ctx context.Context, client *rpc.Client, state flowExecutio
 			return report, err
 		}
 	case "screenshot":
-		paths, warnings, err := executeFlowScreenshotStep(ctx, client, state, step)
+		paths, err := executeFlowScreenshotStep(ctx, client, state, step)
 		report.Screenshots = paths
-		report.Warnings = warnings
 		if err != nil {
 			report.Status = "failed"
 			report.Error = err.Error()
@@ -969,54 +967,49 @@ func resolveFlowCSSMode(defaults flowDefaults, step flowStep) (bool, bool, []str
 	return compareCSS, allCSSProperties, cssProperties
 }
 
-func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep) (map[string]string, []string, error) {
+func executeFlowScreenshotStep(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep) (map[string]string, error) {
 	basePath := strings.TrimSpace(step.Path)
 	if basePath == "" {
-		return nil, nil, errors.New("screenshot step requires path")
+		return nil, errors.New("screenshot step requires path")
 	}
 	if step.Nth < 0 {
-		return nil, nil, errors.New("nth must be a positive integer")
+		return nil, errors.New("nth must be a positive integer")
 	}
 	if strings.TrimSpace(step.Locator) != "" && step.Full {
-		return nil, nil, errors.New("full is not supported with screenshot locator")
+		return nil, errors.New("full is not supported with screenshot locator")
 	}
 	timeout := time.Duration(0)
 	if step.Timeout != nil {
 		if *step.Timeout <= 0 {
-			return nil, nil, errors.New("timeout must be a positive integer")
+			return nil, errors.New("timeout must be a positive integer")
 		}
 		timeout = time.Duration(*step.Timeout) * time.Millisecond
 	}
 
 	targets := flowStepTargets(state, step)
 	paths := make(map[string]string, len(targets))
-	var warnings []string
 	multi := len(targets) > 1
 
 	for _, target := range targets {
-		side := target.Side
 		data, err := captureScreenshotBytes(ctx, client, target.SessionID, screenshotCaptureOptions{
 			Annotate: step.Annotate,
 			Full:     step.Full,
 			Locator:  strings.TrimSpace(step.Locator),
 			Nth:      step.Nth,
 			Timeout:  timeout,
-			OnWarning: func(message string) {
-				warnings = append(warnings, side+": "+message)
-			},
 		})
 		if err != nil {
-			return paths, warnings, err
+			return paths, err
 		}
 
 		path := flowScreenshotPath(basePath, target.Side, multi)
 		if err := writeFlowScreenshotFile(path, data); err != nil {
-			return paths, warnings, err
+			return paths, err
 		}
 		paths[target.Side] = path
 	}
 
-	return paths, warnings, nil
+	return paths, nil
 }
 
 func executeFlowActionOnSides(ctx context.Context, client *rpc.Client, state flowExecutionState, step flowStep, action api.Action) error {
@@ -1220,9 +1213,6 @@ func printFlowReport(w io.Writer, report flowReport) {
 			fmt.Fprintf(w, "- %s %s (%s)\n", step.Action, step.Name, step.Status)
 			if step.Error != "" {
 				fmt.Fprintf(w, "  error: %s\n", step.Error)
-			}
-			for _, warning := range step.Warnings {
-				fmt.Fprintf(w, "  warning: %s\n", warning)
 			}
 			if len(step.Screenshots) > 0 {
 				sides := make([]string, 0, len(step.Screenshots))

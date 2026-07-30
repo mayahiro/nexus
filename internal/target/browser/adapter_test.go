@@ -41,14 +41,6 @@ func (b testBackend) Act(context.Context, api.Action) (*api.ActionResult, error)
 	return &api.ActionResult{OK: true}, nil
 }
 
-func (b testBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (b testBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
-}
-
 func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 	adapter := NewAdapter(testBackend{
 		name: adapterTestBackendName,

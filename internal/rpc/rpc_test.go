@@ -54,6 +54,21 @@ func newPipeListener(conn net.Conn) *pipeListener {
 	}
 }
 
+func newPipeClient(connections ...net.Conn) *Client {
+	var mu sync.Mutex
+	next := 0
+	return newClient(func(context.Context) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if next >= len(connections) {
+			return nil, errors.New("unexpected extra dial")
+		}
+		conn := connections[next]
+		next++
+		return conn, nil
+	})
+}
+
 func (l *pipeListener) Accept() (net.Conn, error) {
 	select {
 	case conn := <-l.connections:
@@ -224,6 +239,71 @@ func TestPing(t *testing.T) {
 	}
 }
 
+func TestClientSupportsConcurrentCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	socketDir, err := os.MkdirTemp("/tmp", "nxrpc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(socketDir)
+	})
+	socket := filepath.Join(socketDir, "nxd.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, listener, testHandler{}, ServeOptions{})
+	}()
+
+	client, err := Dial(context.Background(), socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	const callers = 16
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			response, err := client.Ping(context.Background())
+			if err == nil && response.ProtocolVersion != api.ProtocolVersion {
+				err = errors.New("unexpected protocol version")
+			}
+			results <- err
+		}()
+	}
+	close(start)
+
+	for range callers {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestSessionRPC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -378,11 +458,7 @@ func TestBinaryObservationOverPipe(t *testing.T) {
 		close(done)
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	res, err := client.ObserveSession(context.Background(), api.ObserveSessionRequest{
 		SessionID: "web1",
 		Options:   api.ObserveOptions{WithScreenshot: true},
@@ -425,11 +501,7 @@ func TestServeRecoversHandlerPanic(t *testing.T) {
 		serverDone <- Serve(ctx, listener, panicTestHandler{}, ServeOptions{})
 	}()
 
-	firstClient := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-	}
+	firstClient := newPipeClient(firstClientConn)
 	_, err := firstClient.ActSession(context.Background(), api.ActSessionRequest{
 		SessionID: "web1",
 		Action:    api.Action{Kind: "eval", Text: "1+1"},
@@ -439,11 +511,7 @@ func TestServeRecoversHandlerPanic(t *testing.T) {
 	}
 	firstClient.Close()
 
-	secondClient := &Client{
-		conn:   secondClientConn,
-		reader: bufio.NewReader(secondClientConn),
-		writer: bufio.NewWriter(secondClientConn),
-	}
+	secondClient := newPipeClient(secondClientConn)
 	response, err := secondClient.Ping(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -509,11 +577,7 @@ func TestClientCallStopsWhenContextWithoutDeadlineIsCanceled(t *testing.T) {
 		}
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	defer client.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -540,7 +604,7 @@ func TestClientCallStopsWhenContextWithoutDeadlineIsCanceled(t *testing.T) {
 	}
 }
 
-func TestClientReconnectsAfterCanceledCall(t *testing.T) {
+func TestClientUsesFreshConnectionAfterCanceledCall(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	defer firstServerConn.Close()
 	secondServerConn, secondClientConn := net.Pipe()
@@ -554,19 +618,7 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 		}
 	}()
 
-	dialed := false
-	client := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-		dial: func(context.Context) (net.Conn, error) {
-			if dialed {
-				return nil, errors.New("unexpected extra dial")
-			}
-			dialed = true
-			return secondClientConn, nil
-		},
-	}
+	client := newPipeClient(firstClientConn, secondClientConn)
 	ctx, cancel := context.WithCancel(context.Background())
 	firstCall := make(chan error, 1)
 	go func() {
@@ -595,10 +647,6 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 	if response.ProtocolVersion != api.ProtocolVersion {
 		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
 	}
-	if !dialed {
-		t.Fatal("client did not reconnect")
-	}
-
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +657,7 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 	}
 }
 
-func TestClientReconnectsAfterServerError(t *testing.T) {
+func TestClientUsesFreshConnectionAfterServerError(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	secondServerConn, secondClientConn := net.Pipe()
 
@@ -619,19 +667,7 @@ func TestClientReconnectsAfterServerError(t *testing.T) {
 		close(firstServerDone)
 	}()
 
-	dialed := false
-	client := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-		dial: func(context.Context) (net.Conn, error) {
-			if dialed {
-				return nil, errors.New("unexpected extra dial")
-			}
-			dialed = true
-			return secondClientConn, nil
-		},
-	}
+	client := newPipeClient(firstClientConn, secondClientConn)
 	if _, err := client.Ping(context.Background()); err == nil || err.Error() != "expected server error" {
 		t.Fatalf("unexpected first call error: %v", err)
 	}
@@ -652,9 +688,6 @@ func TestClientReconnectsAfterServerError(t *testing.T) {
 	}
 	if response.ProtocolVersion != api.ProtocolVersion {
 		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
-	}
-	if !dialed {
-		t.Fatal("client did not reconnect")
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
@@ -697,11 +730,7 @@ func TestClientDisconnectCancelsUnixSocketHandler(t *testing.T) {
 		close(serverDone)
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	callDone := make(chan error, 1)
 	go func() {
 		_, err := client.ObserveSession(context.Background(), api.ObserveSessionRequest{SessionID: "web1"})
@@ -744,17 +773,18 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 		serverDone <- Serve(ctx, listener, testHandler{}, ServeOptions{})
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
-	response, err := client.Ping(context.Background())
-	if err != nil {
+	reader := bufio.NewReader(clientConn)
+	writer := bufio.NewWriter(clientConn)
+	if err := writeJSONLine(writer, request{
+		ProtocolVersion: api.ProtocolVersion,
+		Method:          "ping",
+		Params:          api.PingRequest{ProtocolVersion: api.ProtocolVersion},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if response.ProtocolVersion != api.ProtocolVersion {
-		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
+	var res response
+	if err := readJSONLine(reader, &res); err != nil {
+		t.Fatal(err)
 	}
 
 	cancel()
@@ -766,7 +796,5 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("RPC server did not close its idle connection")
 	}
-	if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		t.Fatal(err)
-	}
+	clientConn.Close()
 }

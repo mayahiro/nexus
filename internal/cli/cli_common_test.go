@@ -1,13 +1,77 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/config"
 	"github.com/mayahiro/nexus/internal/daemon"
 )
+
+func TestEnsureDaemonCanceledContextDoesNotStart(t *testing.T) {
+	root := t.TempDir()
+	paths := config.Paths{
+		Socket: filepath.Join(root, "nxd.sock"),
+		PID:    filepath.Join(root, "nxd.pid"),
+	}
+
+	original := startDaemonProcess
+	defer func() {
+		startDaemonProcess = original
+	}()
+	started := false
+	startDaemonProcess = func(config.Paths) error {
+		started = true
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	client, daemonStarted, err := ensureDaemon(ctx, paths)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if client != nil || daemonStarted || started {
+		t.Fatalf("canceled ensure started daemon: client=%v daemon_started=%t start_called=%t", client, daemonStarted, started)
+	}
+}
+
+func TestDaemonProcessLockReleasedTracksLifetimeLock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nxd.pid")
+	lock, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+
+	released, err := daemonProcessLockReleased(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if released {
+		t.Fatal("daemon process lock was reported as released while held")
+	}
+
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	released, err = daemonProcessLockReleased(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !released {
+		t.Fatal("daemon process lock was not reported as released after unlock")
+	}
+}
 
 func TestDaemonCompatibleRequiresProtocolAndBuild(t *testing.T) {
 	if !daemonCompatible(api.PingResponse{

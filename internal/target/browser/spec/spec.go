@@ -17,7 +17,6 @@ type Capabilities struct {
 	Observe       bool
 	Act           bool
 	Screenshot    bool
-	Logs          bool
 	LayoutContext bool
 }
 
@@ -34,8 +33,6 @@ type Backend interface {
 	Detach(ctx context.Context) error
 	Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error)
 	Act(ctx context.Context, action api.Action) (*api.ActionResult, error)
-	Screenshot(ctx context.Context, path string) error
-	Logs(ctx context.Context, opts api.LogOptions) ([]api.LogEntry, error)
 }
 
 func CapabilityList(c Capabilities) []string {
@@ -48,9 +45,6 @@ func CapabilityList(c Capabilities) []string {
 	}
 	if c.Screenshot {
 		out = append(out, "screenshot")
-	}
-	if c.Logs {
-		out = append(out, "logs")
 	}
 	if c.LayoutContext {
 		out = append(out, "layout-context")

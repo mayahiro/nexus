@@ -90,10 +90,6 @@ type ObserveOptions struct {
 	Verbose           bool     `json:"verbose,omitempty"`
 }
 
-type LogOptions struct {
-	Limit int `json:"limit,omitempty"`
-}
-
 type Observation struct {
 	SessionID      string            `json:"session_id"`
 	TargetType     string            `json:"target_type"`
@@ -102,7 +98,6 @@ type Observation struct {
 	Text           string            `json:"text,omitempty"`
 	Tree           []Node            `json:"tree,omitempty"`
 	Screenshot     string            `json:"screenshot,omitempty"`
-	Logs           []LogEntry        `json:"logs,omitempty"`
 	Capabilities   []string          `json:"capabilities,omitempty"`
 	Meta           map[string]string `json:"meta,omitempty"`
 	ScreenshotData []byte            `json:"-"`
@@ -191,12 +186,6 @@ type ActionResult struct {
 	Screenshot string            `json:"screenshot,omitempty"`
 	Value      interface{}       `json:"value"`
 	Meta       map[string]string `json:"meta,omitempty"`
-}
-
-type LogEntry struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
 }
 
 type Rect struct {

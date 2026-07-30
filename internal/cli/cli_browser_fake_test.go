@@ -56,14 +56,6 @@ func (fakeChromiumBackend) Act(context.Context, api.Action) (*api.ActionResult, 
 	return nil, nil
 }
 
-func (fakeChromiumBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (fakeChromiumBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
-}
-
 func (autoStartChromiumBackend) Name() spec.BackendName {
 	return spec.BackendChromium
 }
@@ -100,14 +92,6 @@ func (autoStartChromiumBackend) Act(_ context.Context, action api.Action) (*api.
 		}
 	}
 	return &api.ActionResult{OK: true}, nil
-}
-
-func (autoStartChromiumBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (autoStartChromiumBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
 }
 
 func (fakeBrowserManager) Setup(context.Context) (browsermgr.SetupResult, error) {
