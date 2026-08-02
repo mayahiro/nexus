@@ -126,17 +126,124 @@ func TestServerDetachSessionDoesNotStopDaemon(t *testing.T) {
 }
 
 func TestServerDetachSessionReturnsError(t *testing.T) {
+	var entries []string
 	server := Server{
 		sessions: fakeSessionManager{
 			detachErr: errors.New("boom"),
 		},
-		stop: func() {},
+		stop:   func() {},
+		logger: func(entry string) { entries = append(entries, entry) },
 	}
 
 	if _, err := server.DetachSession(context.Background(), api.DetachSessionRequest{
 		SessionID: "web1",
 	}); err == nil {
 		t.Fatal("expected detach error")
+	}
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`request="detach_session" event="failure"`,
+		`daemon_version=`,
+		`go_version=`,
+		`os=`,
+		`os_version=`,
+		`arch=`,
+		`stage="daemon_request" event="start"`,
+		`error="boom"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("failure diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
+func TestServerNonVerboseSuccessDoesNotLogRequest(t *testing.T) {
+	var entries []string
+	server := Server{
+		sessions: fakeSessionManager{},
+		logger:   func(entry string) { entries = append(entries, entry) },
+	}
+
+	if _, err := server.ListSessions(context.Background(), api.ListSessionsRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("successful non-verbose request emitted diagnostics: %v", entries)
+	}
+}
+
+func TestServerVerboseSuccessLogsRequestStages(t *testing.T) {
+	var entries []string
+	server := Server{
+		sessions: fakeSessionManager{},
+		verbose:  true,
+		logger:   func(entry string) { entries = append(entries, entry) },
+	}
+
+	if _, err := server.ListSessions(context.Background(), api.ListSessionsRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`stage="environment" event="snapshot"`,
+		`stage="daemon_request" event="start"`,
+		`stage="daemon_request" event="finish"`,
+		`event="complete" outcome="success"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("verbose diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
+func TestServerVerboseCoversEveryDaemonRequest(t *testing.T) {
+	var entries []string
+	server := Server{
+		sessions: fakeSessionManager{session: api.Session{ID: "web1"}},
+		verbose:  true,
+		logger:   func(entry string) { entries = append(entries, entry) },
+	}
+	ctx := context.Background()
+
+	if _, err := server.Ping(ctx, api.PingRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.AttachSession(ctx, api.AttachSessionRequest{SessionID: "web1", TargetType: "browser"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.ListSessions(ctx, api.ListSessionsRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.DetachSession(ctx, api.DetachSessionRequest{SessionID: "web1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.ObserveSession(ctx, api.ObserveSessionRequest{SessionID: "web1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.ActSession(ctx, api.ActSessionRequest{SessionID: "web1", Action: api.Action{Kind: "click"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.StopDaemon(ctx, api.StopDaemonRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	joined := strings.Join(entries, "\n")
+	for _, request := range []string{
+		"ping",
+		"attach_session",
+		"list_sessions",
+		"detach_session",
+		"observe_session",
+		"act_session",
+		"stop_daemon",
+		"shutdown",
+	} {
+		if !strings.Contains(joined, `request="`+request+`" event="complete" outcome="success"`) {
+			t.Fatalf("verbose diagnostics do not cover %s:\n%s", request, joined)
+		}
 	}
 }
 

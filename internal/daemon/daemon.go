@@ -15,6 +15,7 @@ import (
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/config"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/rpc"
 	"github.com/mayahiro/nexus/internal/session"
 )
@@ -23,6 +24,7 @@ type Server struct {
 	sessions sessionManager
 	stop     context.CancelFunc
 	verbose  bool
+	logger   func(string)
 }
 
 type sessionManager interface {
@@ -57,11 +59,17 @@ func Run(ctx context.Context, paths config.Paths, opts RunOptions) (runErr error
 	defer releaseProcessLock(processLock)
 
 	log.Printf(
-		"nexus daemon event=start pid=%d socket=%q log=%q verbose=%t",
+		"nexus daemon event=start pid=%d socket=%q log=%q verbose=%t daemon_version=%q protocol_version=%q go_version=%q os=%q os_version=%q arch=%q",
 		os.Getpid(),
 		paths.Socket,
 		opts.LogPath,
 		opts.Verbose,
+		api.DaemonVersion,
+		api.ProtocolVersion,
+		runtimeEnvironmentValue("go_version"),
+		runtimeEnvironmentValue("os"),
+		runtimeEnvironmentValue("os_version"),
+		runtimeEnvironmentValue("arch"),
 	)
 	defer func() {
 		log.Printf(
@@ -87,7 +95,11 @@ func Run(ctx context.Context, paths config.Paths, opts RunOptions) (runErr error
 
 	server := NewServer(cancel)
 	server.verbose = opts.Verbose
-	serveOpts := rpc.ServeOptions{}
+	serveOpts := rpc.ServeOptions{
+		NewTrace: func(method string) *diagnostic.Trace {
+			return server.newTrace(method, server.verbose)
+		},
+	}
 	if opts.IdleTimeout > 0 {
 		activity := make(chan struct{}, 1)
 		serveOpts.OnActivity = func() {
@@ -177,23 +189,25 @@ func NewServer(stop context.CancelFunc) Server {
 	}
 }
 
-func (s Server) Ping(_ context.Context, _ api.PingRequest) (api.PingResponse, error) {
+func (s Server) Ping(ctx context.Context, _ api.PingRequest) (response api.PingResponse, resultErr error) {
+	_, finish := s.beginRequest(ctx, "ping", s.verbose)
+	defer func() { finish(resultErr) }()
+
 	return api.PingResponse{
 		ProtocolVersion: api.ProtocolVersion,
 		DaemonVersion:   api.DaemonVersion,
 	}, nil
 }
 
-func (s Server) AttachSession(ctx context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
-	startedAt := time.Now()
-	s.logVerbose("request=attach event=start session=%q", req.SessionID)
-	session, err := s.sessions.Attach(ctx, req)
-	s.logVerbose(
-		"request=attach event=finish session=%q duration_ms=%d error=%q",
-		req.SessionID,
-		time.Since(startedAt).Milliseconds(),
-		errorMessage(err),
+func (s Server) AttachSession(ctx context.Context, req api.AttachSessionRequest) (response api.AttachSessionResponse, resultErr error) {
+	ctx, finish := s.beginRequest(ctx, "attach_session", s.verbose,
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("backend", req.Backend),
+		diagnostic.Value("target_type", req.TargetType),
 	)
+	defer func() { finish(resultErr) }()
+
+	session, err := s.sessions.Attach(ctx, req)
 	if err != nil {
 		return api.AttachSessionResponse{}, err
 	}
@@ -201,23 +215,22 @@ func (s Server) AttachSession(ctx context.Context, req api.AttachSessionRequest)
 	return api.AttachSessionResponse{Session: session}, nil
 }
 
-func (s Server) ListSessions(_ context.Context, _ api.ListSessionsRequest) (api.ListSessionsResponse, error) {
-	s.logVerbose("request=list_sessions")
+func (s Server) ListSessions(ctx context.Context, _ api.ListSessionsRequest) (response api.ListSessionsResponse, resultErr error) {
+	_, finish := s.beginRequest(ctx, "list_sessions", s.verbose)
+	defer func() { finish(resultErr) }()
+
 	return api.ListSessionsResponse{
 		Sessions: s.sessions.List(),
 	}, nil
 }
 
-func (s Server) DetachSession(ctx context.Context, req api.DetachSessionRequest) (api.DetachSessionResponse, error) {
-	startedAt := time.Now()
-	s.logVerbose("request=detach event=start session=%q", req.SessionID)
-	session, err := s.sessions.Detach(ctx, req.SessionID)
-	s.logVerbose(
-		"request=detach event=finish session=%q duration_ms=%d error=%q",
-		req.SessionID,
-		time.Since(startedAt).Milliseconds(),
-		errorMessage(err),
+func (s Server) DetachSession(ctx context.Context, req api.DetachSessionRequest) (response api.DetachSessionResponse, resultErr error) {
+	ctx, finish := s.beginRequest(ctx, "detach_session", s.verbose,
+		diagnostic.Value("session", req.SessionID),
 	)
+	defer func() { finish(resultErr) }()
+
+	session, err := s.sessions.Detach(ctx, req.SessionID)
 	if err != nil {
 		return api.DetachSessionResponse{}, err
 	}
@@ -225,43 +238,31 @@ func (s Server) DetachSession(ctx context.Context, req api.DetachSessionRequest)
 	return api.DetachSessionResponse{Session: session}, nil
 }
 
-func (s Server) StopDaemon(_ context.Context, _ api.StopDaemonRequest) (api.StopDaemonResponse, error) {
-	s.logVerbose("request=stop_daemon")
+func (s Server) StopDaemon(ctx context.Context, _ api.StopDaemonRequest) (response api.StopDaemonResponse, resultErr error) {
+	_, finish := s.beginRequest(ctx, "stop_daemon", s.verbose)
+	defer func() { finish(resultErr) }()
+
 	if s.stop != nil {
 		s.stop()
 	}
 	return api.StopDaemonResponse{Stopped: true}, nil
 }
 
-func (s Server) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+func (s Server) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (response api.ObserveSessionResponse, resultErr error) {
 	req.Options.Verbose = req.Options.Verbose || s.verbose
-	startedAt := time.Now()
-	if req.Options.Verbose {
-		log.Printf(
-			"nexus daemon request=observe event=start session=%q screenshot=%t full=%t recover=%t timeout_ms=%d",
-			req.SessionID,
-			req.Options.WithScreenshot,
-			req.Options.FullScreenshot,
-			req.Options.RecoverScreenshot,
-			req.Options.TimeoutMS,
-		)
-	}
+	ctx, finish := s.beginRequest(ctx, "observe_session", req.Options.Verbose,
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("screenshot", req.Options.WithScreenshot),
+		diagnostic.Value("full", req.Options.FullScreenshot),
+		diagnostic.Value("recover", req.Options.RecoverScreenshot),
+		diagnostic.Value("timeout_ms", req.Options.TimeoutMS),
+	)
+	defer func() { finish(resultErr) }()
+
 	observeCtx, cancel := observeSessionContext(ctx, req.Options)
 	defer cancel()
 
 	observation, err := s.sessions.Observe(observeCtx, req.SessionID, req.Options)
-	if req.Options.Verbose {
-		log.Printf(
-			"nexus daemon request=observe event=finish session=%q screenshot=%t full=%t recover=%t timeout_ms=%d duration_ms=%d error=%q",
-			req.SessionID,
-			req.Options.WithScreenshot,
-			req.Options.FullScreenshot,
-			req.Options.RecoverScreenshot,
-			req.Options.TimeoutMS,
-			time.Since(startedAt).Milliseconds(),
-			errorMessage(err),
-		)
-	}
 	if err != nil {
 		return api.ObserveSessionResponse{}, err
 	}
@@ -280,17 +281,14 @@ func observeSessionContext(ctx context.Context, opts api.ObserveOptions) (contex
 	return context.WithCancel(ctx)
 }
 
-func (s Server) ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
-	startedAt := time.Now()
-	s.logVerbose("request=act event=start session=%q action=%q", req.SessionID, req.Action.Kind)
-	result, err := s.sessions.Act(ctx, req.SessionID, req.Action)
-	s.logVerbose(
-		"request=act event=finish session=%q action=%q duration_ms=%d error=%q",
-		req.SessionID,
-		req.Action.Kind,
-		time.Since(startedAt).Milliseconds(),
-		errorMessage(err),
+func (s Server) ActSession(ctx context.Context, req api.ActSessionRequest) (response api.ActSessionResponse, resultErr error) {
+	ctx, finish := s.beginRequest(ctx, "act_session", s.verbose,
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("action", req.Action.Kind),
 	)
+	defer func() { finish(resultErr) }()
+
+	result, err := s.sessions.Act(ctx, req.SessionID, req.Action)
 	if err != nil {
 		return api.ActSessionResponse{}, err
 	}
@@ -298,23 +296,68 @@ func (s Server) ActSession(ctx context.Context, req api.ActSessionRequest) (api.
 	return api.ActSessionResponse{Result: result}, nil
 }
 
-func (s Server) Shutdown(ctx context.Context) error {
-	startedAt := time.Now()
-	s.logVerbose("request=shutdown event=start")
-	err := s.sessions.Shutdown(ctx)
-	s.logVerbose(
-		"request=shutdown event=finish duration_ms=%d error=%q",
-		time.Since(startedAt).Milliseconds(),
-		errorMessage(err),
-	)
-	return err
+func (s Server) Shutdown(ctx context.Context) (resultErr error) {
+	ctx, finish := s.beginRequest(ctx, "shutdown", s.verbose)
+	defer func() { finish(resultErr) }()
+	return s.sessions.Shutdown(ctx)
 }
 
-func (s Server) logVerbose(format string, args ...any) {
-	if !s.verbose {
+func (s Server) beginRequest(ctx context.Context, request string, verbose bool, fields ...diagnostic.Field) (context.Context, func(error)) {
+	trace := diagnostic.FromContext(ctx)
+	owned := trace == nil
+	if owned {
+		trace = s.newTrace(request, verbose)
+		ctx = diagnostic.WithTrace(ctx, trace)
+	} else {
+		trace.SetVerbose(verbose)
+	}
+
+	startedAt := time.Now()
+	trace.Event("daemon_request", "start", fields...)
+	return ctx, func(err error) {
+		finishFields := []diagnostic.Field{
+			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+		}
+		if err != nil {
+			finishFields = append(finishFields, diagnostic.Value("error", err))
+		}
+		trace.Event("daemon_request", "finish", finishFields...)
+		if owned {
+			trace.Finish(err)
+		}
+	}
+}
+
+func (s Server) newTrace(request string, verbose bool) *diagnostic.Trace {
+	return diagnostic.New(request, verbose, s.emitLog, daemonEnvironment()...)
+}
+
+func (s Server) emitLog(message string) {
+	if s.logger != nil {
+		s.logger(message)
 		return
 	}
-	log.Printf("nexus daemon "+format, args...)
+	log.Print(message)
+}
+
+func daemonEnvironment() []diagnostic.Field {
+	fields := diagnostic.RuntimeEnvironment()
+	return append(fields,
+		diagnostic.Value("daemon_version", api.DaemonVersion),
+		diagnostic.Value("protocol_version", api.ProtocolVersion),
+		diagnostic.Value("daemon_pid", os.Getpid()),
+	)
+}
+
+func runtimeEnvironmentValue(key string) string {
+	for _, field := range diagnostic.RuntimeEnvironment() {
+		if field.Key == key {
+			if value, ok := field.Value.(string); ok {
+				return value
+			}
+		}
+	}
+	return "unknown"
 }
 
 func prepareSocket(path string) error {

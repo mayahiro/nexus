@@ -3,16 +3,45 @@ package session
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
 const testBackendName spec.BackendName = "test"
+
+func TestSessionGateCancellationIsTraced(t *testing.T) {
+	var entries []string
+	trace := diagnostic.New("act_session", true, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx, cancel := context.WithCancel(diagnostic.WithTrace(context.Background(), trace))
+	cancel()
+
+	sessionEntry := &entry{opGate: make(chan struct{}, 1)}
+	err := sessionEntry.acquire(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled session gate, got %v", err)
+	}
+	trace.Finish(err)
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`stage="session_gate" event="wait"`,
+		`stage="session_gate" event="canceled"`,
+		`error="context canceled"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("session gate diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
 
 func TestAttachListDetach(t *testing.T) {
 	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 )
 
 type Handler interface {
@@ -29,6 +30,7 @@ type Handler interface {
 
 type ServeOptions struct {
 	OnActivity func()
+	NewTrace   func(method string) *diagnostic.Trace
 }
 
 const maxBinaryResponseSize int64 = 512 << 20
@@ -316,158 +318,175 @@ func serveConn(ctx context.Context, conn net.Conn, handler Handler, opts ServeOp
 	writer := bufio.NewWriter(conn)
 	defer recoverHandlerPanic(writer)
 
+	handledRequests := 0
 	for {
 		if err := setDeadline(ctx, conn); err != nil {
-			writeError(writer, err)
+			if handledRequests > 0 {
+				return
+			}
+			trace := newRequestTrace(opts, "unknown")
+			trace.Event("rpc_deadline", "failure", diagnostic.Value("error", err))
+			writeErr := writeError(writer, err)
+			trace.Finish(errors.Join(err, writeErr))
 			return
 		}
 
 		var req request
 		if err := readJSONLine(reader, &req); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
+				trace := newRequestTrace(opts, "unknown")
+				trace.Event("rpc_request", "decode_failure", diagnostic.Value("error", err))
+				trace.Finish(err)
+			}
 			return
 		}
-		if req.ProtocolVersion != api.ProtocolVersion {
-			writeError(writer, fmt.Errorf(
-				"RPC protocol mismatch: client=%q daemon=%q",
-				req.ProtocolVersion,
-				api.ProtocolVersion,
-			))
-			return
-		}
+
+		trace := newRequestTrace(opts, req.Method)
+		trace.Event("rpc_request", "decoded",
+			diagnostic.Value("protocol_version", req.ProtocolVersion),
+		)
 
 		if opts.OnActivity != nil {
 			opts.OnActivity()
 		}
 
-		requestCtx, finishRequest := contextForRequest(ctx, conn)
-		var responseErr error
-		switch req.Method {
-		case "ping":
-			params, err := decodeParams[api.PingRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
+		requestCtx, finishRequest := contextForRequest(ctx, conn, trace)
+		requestCtx = diagnostic.WithTrace(requestCtx, trace)
 
-			res, err := handler.Ping(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
+		var result interface{}
+		var binary []byte
+		var requestErr error
+		if req.ProtocolVersion != api.ProtocolVersion {
+			requestErr = fmt.Errorf(
+				"RPC protocol mismatch: client=%q daemon=%q",
+				req.ProtocolVersion,
+				api.ProtocolVersion,
+			)
+		} else {
+			result, binary, requestErr = dispatchRequestSafely(requestCtx, req, handler)
+		}
 
-			responseErr = writeResult(writer, res, nil)
-		case "attach_session":
-			params, err := decodeParams[api.AttachSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
+		if requestErr != nil {
+			if ctx.Err() != nil {
+				trace.Event("rpc_connection", "server_context_canceled",
+					diagnostic.Value("error", ctx.Err()),
+				)
 			}
-
-			res, err := handler.AttachSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
+			trace.Event("rpc_handler", "failure", diagnostic.Value("error", requestErr))
+			writeErr := writeError(writer, requestErr)
+			if writeErr != nil {
+				trace.Event("rpc_response", "write_failure", diagnostic.Value("error", writeErr))
 			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "list_sessions":
-			params, err := decodeParams[api.ListSessionsRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ListSessions(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "detach_session":
-			params, err := decodeParams[api.DetachSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.DetachSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "stop_daemon":
-			params, err := decodeParams[api.StopDaemonRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.StopDaemon(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "observe_session":
-			params, err := decodeParams[api.ObserveSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ObserveSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			screenshot := res.Observation.ScreenshotData
-			res.Observation.ScreenshotData = nil
-			if len(screenshot) > 0 {
-				res.Observation.Screenshot = ""
-			}
-			responseErr = writeResult(writer, res, screenshot)
-		case "act_session":
-			params, err := decodeParams[api.ActSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ActSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		default:
-			writeError(writer, fmt.Errorf("unknown method: %s", req.Method))
 			finishRequest()
+			trace.Finish(errors.Join(requestErr, writeErr))
 			return
 		}
+
+		trace.Event("rpc_handler", "finish",
+			diagnostic.Value("binary_bytes", len(binary)),
+		)
+		responseErr := writeResult(writer, result, binary)
+		if responseErr != nil {
+			trace.Event("rpc_response", "write_failure",
+				diagnostic.Value("binary_bytes", len(binary)),
+				diagnostic.Value("error", responseErr),
+			)
+		} else {
+			trace.Event("rpc_response", "finish",
+				diagnostic.Value("binary_bytes", len(binary)),
+			)
+		}
 		finishRequest()
+		trace.Finish(responseErr)
 		if responseErr != nil {
 			return
 		}
+		handledRequests++
+	}
+}
+
+func newRequestTrace(opts ServeOptions, method string) *diagnostic.Trace {
+	if opts.NewTrace != nil {
+		if trace := opts.NewTrace(method); trace != nil {
+			return trace
+		}
+	}
+	return diagnostic.New(method, false, nil)
+}
+
+func dispatchRequestSafely(ctx context.Context, req request, handler Handler) (result interface{}, binary []byte, resultErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("RPC handler panic: %v\n%s", recovered, debug.Stack())
+			result = nil
+			binary = nil
+			resultErr = errors.New("internal daemon error")
+		}
+	}()
+	return dispatchRequest(ctx, req, handler)
+}
+
+func dispatchRequest(ctx context.Context, req request, handler Handler) (interface{}, []byte, error) {
+	switch req.Method {
+	case "ping":
+		params, err := decodeParams[api.PingRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.Ping(ctx, params)
+		return res, nil, err
+	case "attach_session":
+		params, err := decodeParams[api.AttachSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.AttachSession(ctx, params)
+		return res, nil, err
+	case "list_sessions":
+		params, err := decodeParams[api.ListSessionsRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ListSessions(ctx, params)
+		return res, nil, err
+	case "detach_session":
+		params, err := decodeParams[api.DetachSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.DetachSession(ctx, params)
+		return res, nil, err
+	case "stop_daemon":
+		params, err := decodeParams[api.StopDaemonRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.StopDaemon(ctx, params)
+		return res, nil, err
+	case "observe_session":
+		params, err := decodeParams[api.ObserveSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ObserveSession(ctx, params)
+		if err != nil {
+			return nil, nil, err
+		}
+		screenshot := res.Observation.ScreenshotData
+		res.Observation.ScreenshotData = nil
+		if len(screenshot) > 0 {
+			res.Observation.Screenshot = ""
+		}
+		return res, screenshot, nil
+	case "act_session":
+		params, err := decodeParams[api.ActSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ActSession(ctx, params)
+		return res, nil, err
+	default:
+		return nil, nil, fmt.Errorf("unknown method: %s", req.Method)
 	}
 }
 
@@ -480,10 +499,13 @@ func recoverHandlerPanic(writer *bufio.Writer) {
 	writeError(writer, errors.New("internal daemon error"))
 }
 
-func writeError(writer *bufio.Writer, err error) {
-	writeJSONLine(writer, struct {
+func writeError(writer *bufio.Writer, err error) error {
+	if writeErr := writeJSONLine(writer, struct {
 		Error string `json:"error"`
-	}{Error: err.Error()})
+	}{Error: err.Error()}); writeErr != nil {
+		return fmt.Errorf("write RPC error response: %w", writeErr)
+	}
+	return nil
 }
 
 func writeResult(writer *bufio.Writer, result interface{}, binary []byte) error {
@@ -494,15 +516,19 @@ func writeResult(writer *bufio.Writer, result interface{}, binary []byte) error 
 		Result     interface{} `json:"result"`
 		BinarySize int         `json:"binary_size,omitempty"`
 	}{Result: result, BinarySize: len(binary)}); err != nil {
-		return err
+		return fmt.Errorf("write RPC response header: %w", err)
 	}
 	if len(binary) == 0 {
 		return nil
 	}
-	if _, err := writer.Write(binary); err != nil {
-		return err
+	written, err := writer.Write(binary)
+	if err != nil {
+		return fmt.Errorf("write RPC binary response: wrote %d of %d bytes: %w", written, len(binary), err)
 	}
-	return writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush RPC binary response: %d bytes: %w", len(binary), err)
+	}
+	return nil
 }
 
 func decodeParams[T any](value interface{}) (T, error) {
@@ -553,7 +579,7 @@ func readJSONLine(reader *bufio.Reader, value interface{}) error {
 	return json.Unmarshal(data, value)
 }
 
-func contextForRequest(parent context.Context, conn net.Conn) (context.Context, func()) {
+func contextForRequest(parent context.Context, conn net.Conn, trace *diagnostic.Trace) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	var once sync.Once
@@ -563,12 +589,13 @@ func contextForRequest(parent context.Context, conn net.Conn) (context.Context, 
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-parent.Done():
 				return
 			case <-done:
 				return
 			case <-ticker.C:
 				if connectionClosed(conn) {
+					trace.Event("rpc_connection", "client_disconnected")
 					cancel()
 					return
 				}

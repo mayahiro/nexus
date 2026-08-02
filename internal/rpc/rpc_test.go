@@ -15,11 +15,16 @@ import (
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 )
 
 type testHandler struct{}
 
 type binaryTestHandler struct {
+	testHandler
+}
+
+type diagnosticBinaryTestHandler struct {
 	testHandler
 }
 
@@ -106,6 +111,13 @@ func (binaryTestHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 			ScreenshotData: []byte{0, 1, 2, 3, 255},
 		},
 	}, nil
+}
+
+func (diagnosticBinaryTestHandler) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	diagnostic.FromContext(ctx).Event("browser_capture", "finish",
+		diagnostic.Value("bytes", 5),
+	)
+	return binaryTestHandler{}.ObserveSession(ctx, req)
 }
 
 func (h cancelTestHandler) ObserveSession(ctx context.Context, _ api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
@@ -484,6 +496,56 @@ func TestBinaryObservationOverPipe(t *testing.T) {
 	}
 }
 
+func TestBinaryResponseWriteFailureFlushesRequestDiagnostics(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	var entries []string
+	opts := ServeOptions{
+		NewTrace: func(method string) *diagnostic.Trace {
+			return diagnostic.New(method, false, func(entry string) {
+				entries = append(entries, entry)
+			}, diagnostic.Value("daemon_version", "test-version"))
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		serveConn(context.Background(), serverConn, diagnosticBinaryTestHandler{}, opts)
+		close(done)
+	}()
+
+	writer := bufio.NewWriter(clientConn)
+	if err := writeJSONLine(writer, request{
+		ProtocolVersion: api.ProtocolVersion,
+		Method:          "observe_session",
+		Params: api.ObserveSessionRequest{
+			SessionID: "web1",
+			Options:   api.ObserveOptions{WithScreenshot: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clientConn.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after binary response write failure")
+	}
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`request="observe_session" event="failure"`,
+		`daemon_version="test-version"`,
+		`stage="browser_capture" event="finish" bytes=5`,
+		`stage="rpc_response" event="write_failure" binary_bytes=5`,
+		`error="write RPC response header:`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("RPC write failure diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
 func TestServeRecoversHandlerPanic(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	secondServerConn, secondClientConn := net.Pipe()
@@ -724,9 +786,20 @@ func TestClientDisconnectCancelsUnixSocketHandler(t *testing.T) {
 		entered:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
+	var diagnosticMu sync.Mutex
+	var diagnosticEntries []string
+	opts := ServeOptions{
+		NewTrace: func(method string) *diagnostic.Trace {
+			return diagnostic.New(method, false, func(entry string) {
+				diagnosticMu.Lock()
+				diagnosticEntries = append(diagnosticEntries, entry)
+				diagnosticMu.Unlock()
+			})
+		},
+	}
 	serverDone := make(chan struct{})
 	go func() {
-		serveConn(context.Background(), serverConn, handler, ServeOptions{})
+		serveConn(context.Background(), serverConn, handler, opts)
 		close(serverDone)
 	}()
 
@@ -760,6 +833,18 @@ func TestClientDisconnectCancelsUnixSocketHandler(t *testing.T) {
 	case <-serverDone:
 	case <-time.After(time.Second):
 		t.Fatal("server connection did not stop")
+	}
+	diagnosticMu.Lock()
+	joined := strings.Join(diagnosticEntries, "\n")
+	diagnosticMu.Unlock()
+	for _, expected := range []string{
+		`stage="rpc_connection" event="client_disconnected"`,
+		`stage="rpc_handler" event="failure" error="context canceled"`,
+		`stage="rpc_response" event="write_failure"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("client disconnect diagnostic does not contain %q:\n%s", expected, joined)
+		}
 	}
 }
 

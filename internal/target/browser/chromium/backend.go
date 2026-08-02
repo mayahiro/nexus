@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -28,6 +27,7 @@ import (
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
@@ -36,6 +36,7 @@ const shutdownTimeout = 5 * time.Second
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 const screenshotAttemptTimeout = 10 * time.Second
+const browserVersionTimeout = time.Second
 const maxFullScreenshotWidth = 16384
 const maxFullScreenshotHeight = 50000
 const maxFullScreenshotPixels = 120_000_000
@@ -1125,6 +1126,7 @@ type Backend struct {
 	dialogType          string
 	dialogMessage       string
 	activateBeforeOp    bool
+	processDiagnostics  *chromiumProcessDiagnostics
 }
 
 var errPageTargetNotFound = errors.New("page target not found")
@@ -1152,7 +1154,20 @@ func (*Backend) Capabilities() spec.Capabilities {
 	}
 }
 
-func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
+func (b *Backend) Attach(ctx context.Context, cfg spec.SessionConfig) (resultErr error) {
+	processDiagnostics := newChromiumProcessDiagnostics(cfg.TargetRef, "")
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_attach",
+		"chromium_attach",
+		false,
+		processDiagnostics,
+		diagnostic.Value("session", cfg.SessionID),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_attach", startedAt, processDiagnostics, resultErr)
+	}()
+
 	if cfg.TargetRef == "" {
 		return errors.New("chromium executable path is required")
 	}
@@ -1172,6 +1187,11 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 	if err != nil {
 		return err
 	}
+	outputRedactions := []string{userDataDir, cfg.TargetRef}
+	if startURL := initialURL(cfg.Options); startURL != "about:blank" {
+		outputRedactions = append(outputRedactions, startURL)
+	}
+	processDiagnostics.output = newBrowserOutputBuffer(outputRedactions...)
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	args := []string{
@@ -1207,6 +1227,13 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 		os.RemoveAll(userDataDir)
 		return err
 	}
+	processDiagnostics.setPID(cmd.Process.Pid)
+	trace.SetEnvironment(processDiagnostics.environment()...)
+	trace.Event("chromium_process", "started",
+		diagnostic.Value("browser_pid", cmd.Process.Pid),
+		diagnostic.Value("viewport_width", viewportWidth(cfg.Options)),
+		diagnostic.Value("viewport_height", viewportHeight(cfg.Options)),
+	)
 
 	waitCh := make(chan error, 1)
 	startedCh := make(chan string, 1)
@@ -1218,12 +1245,24 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 	b.waitCh = waitCh
 	b.userDataDir = userDataDir
 	b.devtoolsURL = ""
+	b.processDiagnostics = processDiagnostics
 	b.mu.Unlock()
 
-	go readStartupOutput(stdout, startedCh)
-	go readStartupOutput(stderr, startedCh)
+	var outputWait sync.WaitGroup
+	outputWait.Add(2)
 	go func() {
-		waitCh <- cmd.Wait()
+		defer outputWait.Done()
+		readStartupOutput(stdout, "stdout", startedCh, processDiagnostics.output)
+	}()
+	go func() {
+		defer outputWait.Done()
+		readStartupOutput(stderr, "stderr", startedCh, processDiagnostics.output)
+	}()
+	go func() {
+		waitErr := cmd.Wait()
+		outputWait.Wait()
+		processDiagnostics.logUnexpectedExit(waitErr)
+		waitCh <- waitErr
 		close(waitCh)
 	}()
 
@@ -1235,24 +1274,67 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 		b.mu.Lock()
 		b.devtoolsURL = url
 		b.mu.Unlock()
+		trace.Event("chromium_devtools", "ready")
+		if processDiagnostics.beginVersionLookup() {
+			versionCtx, versionCancel := context.WithTimeout(ctx, browserVersionTimeout)
+			trace.Event("browser_version", "start", diagnostic.Value("source", "devtools_http"))
+			protocolVersion, product, revision, versionErr := readBrowserVersionHTTP(versionCtx, url)
+			versionCancel()
+			processDiagnostics.setVersion(protocolVersion, product, revision, versionErr)
+			if versionErr != nil {
+				processDiagnostics.allowVersionRetry()
+			}
+			trace.SetEnvironment(processDiagnostics.environment()...)
+			versionFields := []diagnostic.Field{
+				diagnostic.Value("source", "devtools_http"),
+				diagnostic.Value("browser_product", fallbackDiagnosticValue(product)),
+				diagnostic.Value("browser_protocol_version", fallbackDiagnosticValue(protocolVersion)),
+				diagnostic.Value("browser_revision", fallbackDiagnosticValue(revision)),
+			}
+			if versionErr != nil {
+				versionFields = append(versionFields, diagnostic.Value("error", versionErr))
+			}
+			trace.Event("browser_version", "finish", versionFields...)
+		}
 		return nil
 	case err := <-waitCh:
+		trace.Event("chromium_devtools", "process_exit", diagnostic.Value("error", err))
 		b.cleanupAfterExit()
 		if err == nil {
 			return errors.New("chromium exited before startup completed")
 		}
 		return err
 	case <-timer.C:
+		timeoutErr := errors.New("chromium startup timed out")
+		trace.Event("chromium_devtools", "timeout", diagnostic.Value("error", timeoutErr))
 		if err := b.Detach(context.Background()); err != nil {
 			return err
 		}
-		return errors.New("chromium startup timed out")
+		return timeoutErr
 	}
 }
 
-func (b *Backend) Detach(_ context.Context) error {
+func (b *Backend) Detach(ctx context.Context) (resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
+
+	b.mu.Lock()
+	processDiagnostics := b.processDiagnostics
+	b.mu.Unlock()
+	_, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_detach",
+		"chromium_detach",
+		false,
+		processDiagnostics,
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_detach", startedAt, processDiagnostics, resultErr)
+	}()
+
+	if processDiagnostics != nil {
+		processDiagnostics.markExpectedExit()
+	}
 
 	b.mu.Lock()
 	cmd := b.cmd
@@ -1281,6 +1363,7 @@ func (b *Backend) Detach(_ context.Context) error {
 	b.dialogOpen = false
 	b.dialogType = ""
 	b.dialogMessage = ""
+	b.processDiagnostics = nil
 	b.mu.Unlock()
 
 	if cmd == nil {
@@ -1288,6 +1371,7 @@ func (b *Backend) Detach(_ context.Context) error {
 	}
 
 	cancel()
+	trace.Event("chromium_process", "stop_requested")
 	if targetCancel != nil {
 		targetCancel()
 	}
@@ -1300,9 +1384,12 @@ func (b *Backend) Detach(_ context.Context) error {
 
 	select {
 	case <-waitCh:
+		trace.Event("chromium_process", "stopped")
 	case <-timer.C:
+		trace.Event("chromium_process", "kill_requested")
 		killProcessGroup(cmd.Process)
 		<-waitCh
+		trace.Event("chromium_process", "killed")
 	}
 
 	return os.RemoveAll(userDataDir)
@@ -1319,13 +1406,27 @@ func killProcessGroup(process *os.Process) error {
 	return err
 }
 
-func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
+func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (result *api.Observation, resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
 
 	b.mu.Lock()
 	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
 	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_observe",
+		"chromium_observe",
+		opts.Verbose,
+		processDiagnostics,
+		diagnostic.Value("screenshot", opts.WithScreenshot),
+		diagnostic.Value("full", opts.FullScreenshot),
+		diagnostic.Value("recover", opts.RecoverScreenshot),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_observe", startedAt, processDiagnostics, resultErr)
+	}()
 
 	if url == "" {
 		return nil, errors.New("chromium backend is not attached")
@@ -1334,13 +1435,25 @@ func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Ob
 	return b.observeViaCDP(ctx, url, opts)
 }
 
-func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult, error) {
+func (b *Backend) Act(ctx context.Context, action api.Action) (result *api.ActionResult, resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
 
 	b.mu.Lock()
 	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
 	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_act",
+		"chromium_act",
+		false,
+		processDiagnostics,
+		diagnostic.Value("action", action.Kind),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_act", startedAt, processDiagnostics, resultErr)
+	}()
 
 	if url == "" {
 		return nil, errors.New("chromium backend is not attached")
@@ -1392,7 +1505,7 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult
 	}
 }
 
-func readStartupOutput(reader io.Reader, startedCh chan<- string) {
+func readStartupOutput(reader io.Reader, stream string, startedCh chan<- string, output *browserOutputBuffer) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
@@ -1402,7 +1515,12 @@ func readStartupOutput(reader io.Reader, startedCh chan<- string) {
 			case startedCh <- url:
 			default:
 			}
+			continue
 		}
+		output.add(stream, line)
+	}
+	if err := scanner.Err(); err != nil {
+		output.add(stream, "read browser output: "+err.Error())
 	}
 }
 
@@ -1431,6 +1549,7 @@ func (b *Backend) cleanupAfterExit() {
 	b.dialogOpen = false
 	b.dialogType = ""
 	b.dialogMessage = ""
+	b.processDiagnostics = nil
 	b.mu.Unlock()
 
 	if targetCancel != nil {
@@ -1491,12 +1610,24 @@ type pageTargetInfo struct {
 
 func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoolsURL string, fn func(context.Context, pageTargetInfo) (T, error)) (T, error) {
 	var zero T
+	trace := diagnostic.FromContext(ctx)
+	startedAt := time.Now()
+	trace.Event("page_target", "start")
 
 	targetCtx, targetInfo, release, err := b.pageTargetContext(ctx, devtoolsURL)
 	if err != nil {
+		trace.Event("page_target", "finish",
+			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return zero, err
 	}
 	defer release()
+	b.ensureBrowserVersion(targetCtx)
+	trace.Event("page_target", "finish",
+		diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+		diagnostic.Value("target", targetInfo.ID),
+	)
 
 	result, err := fn(targetCtx, targetInfo)
 	if err != nil {
@@ -1614,9 +1745,10 @@ func NewRemote(ctx context.Context, devtoolsURL string, allocatorOptions ...chro
 	runCtx, cancel := context.WithCancel(ctx)
 	return &Remote{
 		backend: &Backend{
-			runCtx:           runCtx,
-			devtoolsURL:      devtoolsURL,
-			allocatorOptions: append([]chromedp.RemoteAllocatorOption(nil), allocatorOptions...),
+			runCtx:             runCtx,
+			devtoolsURL:        devtoolsURL,
+			allocatorOptions:   append([]chromedp.RemoteAllocatorOption(nil), allocatorOptions...),
+			processDiagnostics: newChromiumProcessDiagnostics("remote", ""),
 		},
 		cancel: cancel,
 	}
@@ -1714,6 +1846,7 @@ func operationContext(targetCtx context.Context, requestCtx context.Context) (co
 	} else {
 		operationCtx, cancel = context.WithCancel(targetCtx)
 	}
+	operationCtx = diagnostic.WithTrace(operationCtx, diagnostic.FromContext(requestCtx))
 	stop := context.AfterFunc(requestCtx, cancel)
 	return operationCtx, func() {
 		stop()
@@ -1824,10 +1957,26 @@ func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts ap
 		}
 
 		startedAt := time.Now()
+		trace := diagnostic.FromContext(targetCtx)
+		trace.Event("observe_target", "start",
+			diagnostic.Value("target", targetInfo.ID),
+			diagnostic.Value("with_text", opts.WithText),
+			diagnostic.Value("with_tree", opts.WithTree),
+			diagnostic.Value("with_screenshot", opts.WithScreenshot),
+		)
 		observation, err := observeTarget(targetCtx, devtoolsURL, targetInfo, opts)
 		if err != nil {
+			trace.Event("observe_target", "finish",
+				diagnostic.Value("target", targetInfo.ID),
+				diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+				diagnostic.Value("error", err),
+			)
 			return nil, err
 		}
+		trace.Event("observe_target", "finish",
+			diagnostic.Value("target", targetInfo.ID),
+			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+		)
 		observation.Meta["observe_duration_ms"] = strconv.FormatInt(time.Since(startedAt).Milliseconds(), 10)
 		if !opts.WithScreenshot {
 			if opts.WithTree {
@@ -1849,11 +1998,24 @@ func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts ap
 			if err != nil {
 				return nil, err
 			}
+			recoveredStartedAt := time.Now()
+			trace.Event("observe_recovered_target", "start",
+				diagnostic.Value("target", recoveredTarget.ID),
+			)
 			recoveredObservation, err := observeTarget(recoveredCtx, devtoolsURL, recoveredTarget, opts)
 			release()
 			if err != nil {
+				trace.Event("observe_recovered_target", "finish",
+					diagnostic.Value("target", recoveredTarget.ID),
+					diagnostic.Value("duration_ms", time.Since(recoveredStartedAt).Milliseconds()),
+					diagnostic.Value("error", err),
+				)
 				return nil, err
 			}
+			trace.Event("observe_recovered_target", "finish",
+				diagnostic.Value("target", recoveredTarget.ID),
+				diagnostic.Value("duration_ms", time.Since(recoveredStartedAt).Milliseconds()),
+			)
 			recoveredObservation.ScreenshotData = screenshot
 			for key, value := range screenshotMeta {
 				recoveredObservation.Meta[key] = value
@@ -2010,13 +2172,11 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	if opts.FullScreenshot {
 		meta["screenshot_full"] = "true"
 	}
-	if err := b.javascriptDialogError(); err != nil {
-		return nil, nil, err
-	}
 
 	totalStartedAt := time.Now()
 	captureID := strconv.FormatInt(totalStartedAt.UnixNano(), 10)
-	requestTrace := newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	diagnosticTrace := diagnostic.FromContext(requestCtx)
+	requestTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	requestTrace(fmt.Sprintf(
 		"stage=request event=start full=%t recover=%t remaining_ms=%d",
 		opts.FullScreenshot,
@@ -2030,11 +2190,14 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 			errorMessage(resultErr),
 		))
 	}()
+	if err := b.javascriptDialogError(); err != nil {
+		return nil, nil, err
+	}
 
 	data, width, height, lastErr := b.captureScreenshotAttempt(
 		targetCtx,
 		opts.FullScreenshot,
-		opts.Verbose,
+		diagnosticTrace,
 		captureID,
 		targetInfo.ID,
 		1,
@@ -2053,7 +2216,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	reattachStartedAt := time.Now()
-	reattachTrace := newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	reattachTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	reattachTrace(fmt.Sprintf(
 		"stage=reattach event=start remaining_ms=%d",
 		contextRemainingMilliseconds(requestCtx),
@@ -2073,7 +2236,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		data, width, height, lastErr = b.captureScreenshotAttempt(
 			targetCtx,
 			opts.FullScreenshot,
-			opts.Verbose,
+			diagnosticTrace,
 			captureID,
 			targetInfo.ID,
 			2,
@@ -2099,7 +2262,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	recoveryStartedAt := time.Now()
-	recoveryTrace := newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	recoveryTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	recoveryTrace(fmt.Sprintf(
 		"stage=replace_target event=start remaining_ms=%d",
 		contextRemainingMilliseconds(requestCtx),
@@ -2133,7 +2296,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	data, width, height, err = b.captureScreenshotAttempt(
 		recoveryCtx,
 		opts.FullScreenshot,
-		opts.Verbose,
+		diagnosticTrace,
 		captureID,
 		recoveredTarget.ID,
 		3,
@@ -2150,10 +2313,10 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 
 type screenshotTrace func(string)
 
-func (b *Backend) captureScreenshotAttempt(targetCtx context.Context, full bool, verbose bool, captureID string, targetID string, attempt int) ([]byte, int64, int64, error) {
+func (b *Backend) captureScreenshotAttempt(targetCtx context.Context, full bool, diagnosticTrace *diagnostic.Trace, captureID string, targetID string, attempt int) ([]byte, int64, int64, error) {
 	attemptCtx, cancel := screenshotAttemptContext(targetCtx)
 	startedAt := time.Now()
-	trace := newScreenshotTrace(verbose, captureID, targetID, attempt)
+	trace := newScreenshotTrace(diagnosticTrace, captureID, targetID, attempt)
 	trace(fmt.Sprintf(
 		"stage=capture event=start full=%t remaining_ms=%d",
 		full,
@@ -2173,14 +2336,20 @@ func (b *Backend) captureScreenshotAttempt(targetCtx context.Context, full bool,
 	return data, width, height, err
 }
 
-func newScreenshotTrace(verbose bool, captureID string, targetID string, attempt int) screenshotTrace {
-	if !verbose {
+func newScreenshotTrace(diagnosticTrace *diagnostic.Trace, captureID string, targetID string, attempt int) screenshotTrace {
+	if diagnosticTrace == nil {
 		return func(string) {}
 	}
-	prefix := screenshotTracePrefix(captureID, targetID, attempt)
 	return func(message string) {
-		entry := strings.TrimSpace(prefix + " " + message)
-		log.Print(entry)
+		fields := []diagnostic.Field{
+			diagnostic.Value("component", "screenshot"),
+			diagnostic.Value("capture_id", captureID),
+			diagnostic.Value("target", targetID),
+		}
+		if attempt > 0 {
+			fields = append(fields, diagnostic.Value("attempt", attempt))
+		}
+		diagnosticTrace.Message(message, fields...)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target"
 	"github.com/mayahiro/nexus/internal/target/browser"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
@@ -67,9 +68,26 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 		TargetRef: req.TargetRef,
 		Options:   req.Options,
 	}
+	trace := diagnostic.FromContext(ctx)
+	backendStartedAt := time.Now()
+	trace.Event("session_backend", "attach_start",
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("backend", backendName),
+	)
 	if err := adapter.Attach(ctx, cfg); err != nil {
+		trace.Event("session_backend", "attach_finish",
+			diagnostic.Value("session", req.SessionID),
+			diagnostic.Value("backend", backendName),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return api.Session{}, err
 	}
+	trace.Event("session_backend", "attach_finish",
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("backend", backendName),
+		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+	)
 
 	now := time.Now()
 	session := api.Session{
@@ -136,9 +154,21 @@ func (m *Manager) Detach(ctx context.Context, sessionID string) (api.Session, er
 	if sessionEntry.closed {
 		return api.Session{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
 	}
+	trace := diagnostic.FromContext(ctx)
+	backendStartedAt := time.Now()
+	trace.Event("session_backend", "detach_start", diagnostic.Value("session", sessionID))
 	if err := sessionEntry.adapter.Detach(ctx); err != nil {
+		trace.Event("session_backend", "detach_finish",
+			diagnostic.Value("session", sessionID),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return api.Session{}, err
 	}
+	trace.Event("session_backend", "detach_finish",
+		diagnostic.Value("session", sessionID),
+		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+	)
 
 	m.mu.Lock()
 	if current, exists := m.sessions[sessionID]; exists && current == sessionEntry {
@@ -172,10 +202,22 @@ func (m *Manager) Observe(ctx context.Context, sessionID string, opts api.Observ
 	}
 	m.touch(sessionID, sessionEntry)
 
+	trace := diagnostic.FromContext(ctx)
+	backendStartedAt := time.Now()
+	trace.Event("session_backend", "observe_start", diagnostic.Value("session", sessionID))
 	observation, err := sessionEntry.adapter.Observe(ctx, opts)
 	if err != nil {
+		trace.Event("session_backend", "observe_finish",
+			diagnostic.Value("session", sessionID),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return api.Observation{}, err
 	}
+	trace.Event("session_backend", "observe_finish",
+		diagnostic.Value("session", sessionID),
+		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+	)
 	if observation == nil {
 		return api.Observation{}, errors.New("empty observation")
 	}
@@ -206,10 +248,27 @@ func (m *Manager) Act(ctx context.Context, sessionID string, action api.Action) 
 	}
 	m.touch(sessionID, sessionEntry)
 
+	trace := diagnostic.FromContext(ctx)
+	backendStartedAt := time.Now()
+	trace.Event("session_backend", "act_start",
+		diagnostic.Value("session", sessionID),
+		diagnostic.Value("action", action.Kind),
+	)
 	result, err := sessionEntry.adapter.Act(ctx, action)
 	if err != nil {
+		trace.Event("session_backend", "act_finish",
+			diagnostic.Value("session", sessionID),
+			diagnostic.Value("action", action.Kind),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return api.ActionResult{}, err
 	}
+	trace.Event("session_backend", "act_finish",
+		diagnostic.Value("session", sessionID),
+		diagnostic.Value("action", action.Kind),
+		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+	)
 	if result == nil {
 		return api.ActionResult{}, errors.New("empty action result")
 	}
@@ -230,10 +289,20 @@ func (m *Manager) touch(sessionID string, sessionEntry *entry) {
 }
 
 func (e *entry) acquire(ctx context.Context) error {
+	trace := diagnostic.FromContext(ctx)
+	startedAt := time.Now()
+	trace.Event("session_gate", "wait")
 	select {
 	case <-ctx.Done():
+		trace.Event("session_gate", "canceled",
+			diagnostic.Value("wait_ms", time.Since(startedAt).Milliseconds()),
+			diagnostic.Value("error", ctx.Err()),
+		)
 		return ctx.Err()
 	case <-e.opGate:
+		trace.Event("session_gate", "acquired",
+			diagnostic.Value("wait_ms", time.Since(startedAt).Milliseconds()),
+		)
 		return nil
 	}
 }
@@ -283,7 +352,20 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 			sessionEntry.release()
 			continue
 		}
+		trace := diagnostic.FromContext(ctx)
+		backendStartedAt := time.Now()
+		trace.Event("session_backend", "shutdown_detach_start",
+			diagnostic.Value("session", sessionEntry.session.ID),
+		)
 		err := sessionEntry.adapter.Detach(ctx)
+		fields := []diagnostic.Field{
+			diagnostic.Value("session", sessionEntry.session.ID),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+		}
+		if err != nil {
+			fields = append(fields, diagnostic.Value("error", err))
+		}
+		trace.Event("session_backend", "shutdown_detach_finish", fields...)
 		sessionEntry.closed = true
 		sessionEntry.release()
 		if err != nil {

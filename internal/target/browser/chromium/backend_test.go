@@ -26,6 +26,7 @@ import (
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/browsermgr"
 	"github.com/mayahiro/nexus/internal/config"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
@@ -250,6 +251,27 @@ func TestDebugHTTPBaseURL(t *testing.T) {
 
 	if baseURL != "http://127.0.0.1:9222" {
 		t.Fatalf("unexpected base url: %s", baseURL)
+	}
+}
+
+func TestReadBrowserVersionHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"Browser":"Chrome/151.0.0.0","Protocol-Version":"1.3","WebKit-Version":"537.36@test"}`)
+	}))
+	defer server.Close()
+
+	devtoolsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	protocolVersion, product, revision, err := readBrowserVersionHTTP(context.Background(), devtoolsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protocolVersion != "1.3" || product != "Chrome/151.0.0.0" || revision != "537.36@test" {
+		t.Fatalf("unexpected browser version: protocol=%q product=%q revision=%q", protocolVersion, product, revision)
 	}
 }
 
@@ -700,17 +722,117 @@ func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
 }
 
 func TestScreenshotTraceIncludesCorrelationFields(t *testing.T) {
-	trace := screenshotTracePrefix("capture-1", "page-1", 2) + " stage=capture_action event=start"
+	var entries []string
+	requestTrace := diagnostic.New("observe_session", true, func(entry string) {
+		entries = append(entries, entry)
+	})
+	trace := newScreenshotTrace(requestTrace, "capture-1", "page-1", 2)
+	trace("stage=capture_action event=start")
+	requestTrace.Finish(nil)
+	joined := strings.Join(entries, "\n")
 	for _, expected := range []string{
-		"capture_id=capture-1",
-		"target=page-1",
+		`component="screenshot"`,
+		`capture_id="capture-1"`,
+		`target="page-1"`,
 		"attempt=2",
 		"stage=capture_action",
 		"event=start",
 	} {
-		if !strings.Contains(trace, expected) {
-			t.Fatalf("trace does not contain %q: %s", expected, trace)
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("trace does not contain %q: %s", expected, joined)
 		}
+	}
+}
+
+func TestBrowserOutputBufferIsBoundedAndRedactsPaths(t *testing.T) {
+	buffer := newBrowserOutputBuffer("/private/tmp/profile")
+	for index := 0; index < maxBrowserOutputLines+3; index++ {
+		buffer.add("stderr", fmt.Sprintf("line %d /private/tmp/profile", index))
+	}
+
+	lines, dropped := buffer.snapshot()
+	if len(lines) != maxBrowserOutputLines {
+		t.Fatalf("unexpected output line count: %d", len(lines))
+	}
+	if dropped != 3 {
+		t.Fatalf("unexpected dropped line count: %d", dropped)
+	}
+	for _, line := range lines {
+		if strings.Contains(line.message, "/private/tmp/profile") {
+			t.Fatalf("browser output retained redacted path: %s", line.message)
+		}
+		if !strings.Contains(line.message, "<redacted-path>") {
+			t.Fatalf("browser output does not contain redaction marker: %s", line.message)
+		}
+	}
+}
+
+func TestReadStartupOutputSeparatesDevToolsURLFromDiagnostics(t *testing.T) {
+	startedCh := make(chan string, 1)
+	buffer := newBrowserOutputBuffer()
+	readStartupOutput(
+		strings.NewReader("warning before startup\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/private\n"),
+		"stderr",
+		startedCh,
+		buffer,
+	)
+
+	select {
+	case devtoolsURL := <-startedCh:
+		if devtoolsURL != "ws://127.0.0.1:9222/devtools/browser/private" {
+			t.Fatalf("unexpected DevTools URL: %s", devtoolsURL)
+		}
+	default:
+		t.Fatal("DevTools URL was not detected")
+	}
+	lines, dropped := buffer.snapshot()
+	if dropped != 0 || len(lines) != 1 || lines[0].message != "warning before startup" {
+		t.Fatalf("unexpected diagnostic output: lines=%v dropped=%d", lines, dropped)
+	}
+}
+
+func TestUnexpectedChromiumExitFlushesEnvironmentAndOutput(t *testing.T) {
+	var entries []string
+	processDiagnostics := newChromiumProcessDiagnostics("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/private/tmp/profile")
+	processDiagnostics.pid = 4321
+	processDiagnostics.product = "Chrome/151.0.0.0"
+	processDiagnostics.protocolVersion = "1.3"
+	processDiagnostics.output.add("stderr", "fatal error in /private/tmp/profile")
+	processDiagnostics.emit = func(entry string) {
+		entries = append(entries, entry)
+	}
+
+	processDiagnostics.logUnexpectedExit(errors.New("signal: killed"))
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`request="chromium_process" event="failure"`,
+		`browser_executable="Google Chrome"`,
+		`browser_pid=4321`,
+		`browser_product="Chrome/151.0.0.0"`,
+		`browser_protocol_version="1.3"`,
+		`os_version=`,
+		`stage="chromium_process" event="unexpected_exit"`,
+		`stage="browser_output" event="line"`,
+		`message="fatal error in <redacted-path>"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("unexpected process diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
+func TestExpectedChromiumExitDoesNotLog(t *testing.T) {
+	var entries []string
+	processDiagnostics := newChromiumProcessDiagnostics("chromium", "")
+	processDiagnostics.emit = func(entry string) {
+		entries = append(entries, entry)
+	}
+	processDiagnostics.markExpectedExit()
+
+	processDiagnostics.logUnexpectedExit(errors.New("signal: killed"))
+	if len(entries) != 0 {
+		t.Fatalf("expected process exit emitted diagnostics: %v", entries)
 	}
 }
 
