@@ -21,6 +21,8 @@ import (
 
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
@@ -137,6 +139,106 @@ func TestCurrentPageTarget(t *testing.T) {
 	}
 }
 
+func TestTracePageTargetSnapshotReportsExpectedTargetPresence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/list" {
+			http.NotFound(w, r)
+			return
+		}
+		targets := []pageTargetInfo{
+			{ID: "worker1", Type: "worker", URL: "https://private.example/worker.js"},
+		}
+		for index := 1; index <= maxPageTargetSnapshotIDs+1; index++ {
+			targets = append(targets, pageTargetInfo{
+				ID:   fmt.Sprintf("page%d", index),
+				Type: "page",
+				URL:  fmt.Sprintf("https://private.example/page/%d", index),
+			})
+		}
+		json.NewEncoder(w).Encode(targets)
+	}))
+	defer server.Close()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := &Backend{
+		runCtx:     runCtx,
+		targetInfo: pageTargetInfo{ID: "page1"},
+	}
+	var entries []string
+	trace := diagnostic.New("observe_session", false, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx := diagnostic.WithTrace(context.Background(), trace)
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	backend.tracePageTargetSnapshot(ctx, wsURL, "")
+	trace.Finish(errors.New("capture screenshot failed"))
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`stage="page_target_snapshot" event="finish"`,
+		`expected_target="page1"`,
+		`expected_target_present=true`,
+		`page_target_count=17`,
+		`page_target_ids="page1,page2`,
+		`page_target_ids_truncated=true`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("target snapshot does not contain %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "private.example") {
+		t.Fatalf("target snapshot exposed a target URL:\n%s", joined)
+	}
+	if strings.Contains(joined, "page17") {
+		t.Fatalf("target snapshot did not limit listed target IDs:\n%s", joined)
+	}
+}
+
+func TestTracePageTargetSnapshotRespectsRequestCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Second):
+			json.NewEncoder(w).Encode([]pageTargetInfo{{ID: "page1", Type: "page"}})
+		}
+	}))
+	defer server.Close()
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	backend := &Backend{runCtx: runCtx, targetInfo: pageTargetInfo{ID: "page1"}}
+	var entries []string
+	trace := diagnostic.New("observe_session", false, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx, cancel := context.WithCancel(diagnostic.WithTrace(context.Background(), trace))
+	cancel()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	backend.tracePageTargetSnapshot(ctx, wsURL, "page1")
+	trace.Finish(errors.New("capture screenshot failed"))
+	if joined := strings.Join(entries, "\n"); !strings.Contains(joined, "context canceled") {
+		t.Fatalf("target snapshot did not report request cancellation:\n%s", joined)
+	}
+}
+
+func TestShouldTracePageTargetSnapshot(t *testing.T) {
+	for _, message := range []string{
+		"capture screenshot failed: context deadline exceeded",
+		"No target with given id found (-32602)",
+		"page target changed during reattach",
+		"target crashed",
+	} {
+		if !shouldTracePageTargetSnapshot(errors.New(message)) {
+			t.Fatalf("expected target snapshot for %q", message)
+		}
+	}
+	if shouldTracePageTargetSnapshot(errors.New("selector not found")) {
+		t.Fatal("ordinary page errors should not trigger a target snapshot")
+	}
+}
+
 func TestCurrentPageTargetTimesOutWhenDevToolsDoesNotRespond(t *testing.T) {
 	previousTimeout := pageTargetTimeout
 	pageTargetTimeout = 20 * time.Millisecond
@@ -240,6 +342,106 @@ func TestPageTargetContextKeepsPersistentContextAcrossOperations(t *testing.T) {
 	secondRelease()
 	if err := persistentTargetCtx.Err(); err != nil {
 		t.Fatalf("persistent target context was canceled after second operation: %v", err)
+	}
+}
+
+func TestDetachRemoteTargetContextDoesNotRequestTargetClose(t *testing.T) {
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/test",
+		chromedp.NoModifyURL,
+	)
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID("page1")))
+	chromedpContext := chromedp.FromContext(targetCtx)
+	if chromedpContext == nil {
+		t.Fatal("expected chromedp context")
+	}
+	chromedpContext.Target = &chromedp.Target{TargetID: target.ID("page1")}
+
+	var targetIDAtCancel target.ID
+	detachRemoteTargetContext(targetCtx, func() {
+		targetIDAtCancel = chromedpContext.Target.TargetID
+		targetCancel()
+	}, allocCancel)
+
+	if targetIDAtCancel != "" {
+		t.Fatalf("target context cancellation would close the existing target: %s", targetIDAtCancel)
+	}
+	if err := targetCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("target context was not canceled: %v", err)
+	}
+}
+
+func TestDetachRemoteTargetContextAcceptsMissingContext(t *testing.T) {
+	targetCanceled := false
+	allocatorCanceled := false
+	detachRemoteTargetContext(
+		nil,
+		func() { targetCanceled = true },
+		func() { allocatorCanceled = true },
+	)
+	if !targetCanceled || !allocatorCanceled {
+		t.Fatalf("cancel functions were not called: target=%t allocator=%t", targetCanceled, allocatorCanceled)
+	}
+}
+
+func TestCommitReattachedPageTargetDetachesPreviousConnectionWithoutClosingTarget(t *testing.T) {
+	oldAllocCtx, oldAllocCancel := chromedp.NewRemoteAllocator(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/old",
+		chromedp.NoModifyURL,
+	)
+	oldTargetCtx, oldTargetCancel := chromedp.NewContext(oldAllocCtx, chromedp.WithTargetID(target.ID("page1")))
+	oldChromedpContext := chromedp.FromContext(oldTargetCtx)
+	if oldChromedpContext == nil {
+		t.Fatal("expected old chromedp context")
+	}
+	oldChromedpContext.Target = &chromedp.Target{TargetID: target.ID("page1")}
+
+	var targetIDAtCancel target.ID
+	backend := &Backend{
+		allocCtx:    oldAllocCtx,
+		allocCancel: oldAllocCancel,
+		targetCtx:   oldTargetCtx,
+		targetCancel: func() {
+			targetIDAtCancel = oldChromedpContext.Target.TargetID
+			oldTargetCancel()
+		},
+		targetInfo: pageTargetInfo{ID: "page1", Type: "page"},
+	}
+	newAllocCtx, newAllocCancel := context.WithCancel(context.Background())
+	newTargetCtx, newTargetCancel := context.WithCancel(context.Background())
+	var messages []string
+	err := backend.commitReattachedPageTarget(
+		pageTargetInfo{ID: "page1", Type: "page"},
+		newAllocCtx,
+		newAllocCancel,
+		newTargetCtx,
+		newTargetCancel,
+		func(message string) {
+			messages = append(messages, message)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(backend.closeRemoteContexts)
+
+	if targetIDAtCancel != "" {
+		t.Fatalf("previous connection cancellation would close the page target: %s", targetIDAtCancel)
+	}
+	if err := oldTargetCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("old target context was not canceled: %v", err)
+	}
+	backend.mu.Lock()
+	storedTargetCtx := backend.targetCtx
+	storedTargetID := backend.targetInfo.ID
+	backend.mu.Unlock()
+	if storedTargetCtx != newTargetCtx || storedTargetID != "page1" {
+		t.Fatalf("reattached target was not committed: context=%v target=%q", storedTargetCtx, storedTargetID)
+	}
+	if !strings.Contains(strings.Join(messages, "\n"), "stage=reattach_detach_previous event=finish") {
+		t.Fatalf("previous connection detach was not traced: %v", messages)
 	}
 }
 

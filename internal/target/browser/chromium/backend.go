@@ -37,6 +37,8 @@ const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 const screenshotAttemptTimeout = 10 * time.Second
 const browserVersionTimeout = time.Second
+const pageTargetSnapshotTimeout = 500 * time.Millisecond
+const maxPageTargetSnapshotIDs = 16
 const maxFullScreenshotWidth = 16384
 const maxFullScreenshotHeight = 50000
 const maxFullScreenshotPixels = 120_000_000
@@ -1616,6 +1618,9 @@ func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoo
 
 	targetCtx, targetInfo, release, err := b.pageTargetContext(ctx, devtoolsURL)
 	if err != nil {
+		if shouldTracePageTargetSnapshot(err) {
+			b.tracePageTargetSnapshot(ctx, devtoolsURL, "")
+		}
 		trace.Event("page_target", "finish",
 			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
 			diagnostic.Value("error", err),
@@ -1631,6 +1636,9 @@ func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoo
 
 	result, err := fn(targetCtx, targetInfo)
 	if err != nil {
+		if shouldTracePageTargetSnapshot(err) {
+			b.tracePageTargetSnapshot(ctx, devtoolsURL, targetInfo.ID)
+		}
 		return zero, err
 	}
 	return result, nil
@@ -1672,8 +1680,7 @@ func (b *Backend) pageTargetContextWithDependencies(
 			b.trackDialogEvent(targetInfo.ID, event)
 		})
 		if err := initializeTarget(ctx, targetCtx); err != nil {
-			targetCancel()
-			allocCancel()
+			detachRemoteTargetContext(targetCtx, targetCancel, allocCancel)
 			return nil, pageTargetInfo{}, nil, err
 		}
 
@@ -2511,8 +2518,7 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	traceScreenshot(trace, "stage=reattach_initialize event=start")
 	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
 		traceScreenshot(trace, fmt.Sprintf("stage=reattach_initialize event=finish error=%q", errorMessage(err)))
-		targetCancel()
-		allocCancel()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
 		return nil, pageTargetInfo{}, nil, err
 	}
 	traceScreenshot(trace, "stage=reattach_initialize event=finish error=\"\"")
@@ -2521,40 +2527,75 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
 		traceScreenshot(trace, fmt.Sprintf("stage=reattach_activate_cdp event=finish error=%q", errorMessage(err)))
 		release()
-		targetCancel()
-		allocCancel()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
 		return nil, pageTargetInfo{}, nil, err
 	}
 	traceScreenshot(trace, "stage=reattach_activate_cdp event=finish error=\"\"")
 
+	if err := b.commitReattachedPageTarget(
+		targetInfo,
+		allocCtx,
+		allocCancel,
+		persistentTargetCtx,
+		targetCancel,
+		trace,
+	); err != nil {
+		release()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	return operationCtx, targetInfo, release, nil
+}
+
+func (b *Backend) commitReattachedPageTarget(
+	targetInfo pageTargetInfo,
+	allocCtx context.Context,
+	allocCancel context.CancelFunc,
+	targetCtx context.Context,
+	targetCancel context.CancelFunc,
+	trace screenshotTrace,
+) error {
 	b.mu.Lock()
 	if b.targetInfo.ID != targetInfo.ID {
 		b.mu.Unlock()
-		release()
-		targetCancel()
-		allocCancel()
-		return nil, pageTargetInfo{}, nil, errors.New("page target changed during reattach")
+		return errors.New("page target changed during reattach")
 	}
+	oldTargetCtx := b.targetCtx
 	oldTargetCancel := b.targetCancel
 	oldAllocCancel := b.allocCancel
 	b.allocCtx = allocCtx
 	b.allocCancel = allocCancel
-	b.targetCtx = persistentTargetCtx
+	b.targetCtx = targetCtx
 	b.targetCancel = targetCancel
 	b.targetInfo = targetInfo
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
 	b.mu.Unlock()
-	if oldTargetCancel != nil {
-		oldTargetCancel()
-	}
-	if oldAllocCancel != nil {
-		oldAllocCancel()
-	}
+	traceScreenshot(trace, "stage=reattach_detach_previous event=start")
+	detachRemoteTargetContext(oldTargetCtx, oldTargetCancel, oldAllocCancel)
+	traceScreenshot(trace, "stage=reattach_detach_previous event=finish")
 	traceScreenshot(trace, "stage=reattach_context event=finish error=\"\"")
+	return nil
+}
 
-	return operationCtx, targetInfo, release, nil
+// detachRemoteTargetContext releases a RemoteAllocator connection without closing its existing page target
+//
+// chromedp closes TargetID when a target context is canceled, even when WithTargetID attached to an existing tab
+// Clearing the stored target ID keeps chromedp's session detach cleanup while preventing Target.closeTarget
+func detachRemoteTargetContext(targetCtx context.Context, targetCancel context.CancelFunc, allocCancel context.CancelFunc) {
+	if targetCtx != nil {
+		if chromedpContext := chromedp.FromContext(targetCtx); chromedpContext != nil && chromedpContext.Target != nil {
+			chromedpContext.Target.TargetID = ""
+		}
+	}
+	if targetCancel != nil {
+		targetCancel()
+	}
+	if allocCancel != nil {
+		allocCancel()
+	}
 }
 
 func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx context.Context, currentURL string, viewportWidth int, viewportHeight int, scrollX int, scrollY int, trace screenshotTrace) (context.Context, pageTargetInfo, func(), error) {
@@ -3935,28 +3976,8 @@ func currentPageTarget(ctx context.Context, devtoolsURL string) (pageTargetInfo,
 }
 
 func currentPageTargetOnce(ctx context.Context, devtoolsURL string) (pageTargetInfo, error) {
-	baseURL, err := debugHTTPBaseURL(devtoolsURL)
+	targets, err := listDevToolsTargetsOnce(ctx, devtoolsURL)
 	if err != nil {
-		return pageTargetInfo{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
-	if err != nil {
-		return pageTargetInfo{}, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return pageTargetInfo{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return pageTargetInfo{}, errors.New("failed to list page targets")
-	}
-
-	var targets []pageTargetInfo
-	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
 		return pageTargetInfo{}, err
 	}
 
@@ -3967,6 +3988,109 @@ func currentPageTargetOnce(ctx context.Context, devtoolsURL string) (pageTargetI
 	}
 
 	return pageTargetInfo{}, errPageTargetNotFound
+}
+
+func listDevToolsTargetsOnce(ctx context.Context, devtoolsURL string) ([]pageTargetInfo, error) {
+	baseURL, err := debugHTTPBaseURL(devtoolsURL)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, errors.New("failed to list page targets")
+	}
+
+	var targets []pageTargetInfo
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func shouldTracePageTargetSnapshot(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "capture screenshot") ||
+		strings.Contains(message, "no target with given id") ||
+		strings.Contains(message, "page target") ||
+		strings.Contains(message, "target closed") ||
+		strings.Contains(message, "target crashed") ||
+		strings.Contains(message, "target detached")
+}
+
+func (b *Backend) tracePageTargetSnapshot(ctx context.Context, devtoolsURL string, expectedTargetID string) {
+	trace := diagnostic.FromContext(ctx)
+	if trace == nil {
+		return
+	}
+
+	b.mu.Lock()
+	runCtx := b.runCtx
+	if strings.TrimSpace(expectedTargetID) == "" {
+		expectedTargetID = b.targetInfo.ID
+	}
+	b.mu.Unlock()
+
+	fields := []diagnostic.Field{
+		diagnostic.Value("expected_target", expectedTargetID),
+	}
+	trace.Event("page_target_snapshot", "start", fields...)
+	if runCtx == nil {
+		trace.Event("page_target_snapshot", "finish",
+			diagnostic.Value("expected_target", expectedTargetID),
+			diagnostic.Value("error", "chromium backend is not attached"),
+		)
+		return
+	}
+
+	snapshotParentCtx, release := operationContext(runCtx, ctx)
+	defer release()
+	snapshotCtx, cancel := context.WithTimeout(snapshotParentCtx, pageTargetSnapshotTimeout)
+	defer cancel()
+	targets, err := listDevToolsTargetsOnce(snapshotCtx, devtoolsURL)
+	if err != nil {
+		trace.Event("page_target_snapshot", "finish",
+			diagnostic.Value("expected_target", expectedTargetID),
+			diagnostic.Value("error", err),
+		)
+		return
+	}
+
+	pageTargetIDs := make([]string, 0, min(len(targets), maxPageTargetSnapshotIDs))
+	pageTargetCount := 0
+	expectedTargetPresent := false
+	for _, targetInfo := range targets {
+		if targetInfo.Type != "page" {
+			continue
+		}
+		pageTargetCount++
+		if len(pageTargetIDs) < maxPageTargetSnapshotIDs {
+			pageTargetIDs = append(pageTargetIDs, targetInfo.ID)
+		}
+		if targetInfo.ID == expectedTargetID {
+			expectedTargetPresent = true
+		}
+	}
+	trace.Event("page_target_snapshot", "finish",
+		diagnostic.Value("expected_target", expectedTargetID),
+		diagnostic.Value("expected_target_present", expectedTargetPresent),
+		diagnostic.Value("page_target_count", pageTargetCount),
+		diagnostic.Value("page_target_ids", strings.Join(pageTargetIDs, ",")),
+		diagnostic.Value("page_target_ids_truncated", pageTargetCount > len(pageTargetIDs)),
+	)
 }
 
 func activatePageTargetHTTP(ctx context.Context, devtoolsURL string, targetID string) error {
