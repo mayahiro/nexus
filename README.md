@@ -17,7 +17,7 @@ Nexus is currently in an early usable stage.
 Prerequisites:
 
 - macOS
-- Go 1.26.1
+- Go 1.26.5
 - `$(go env GOPATH)/bin` or `~/go/bin` on `PATH`
 
 Install:
