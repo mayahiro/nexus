@@ -11,6 +11,7 @@ This is the main entry point for AI agents that use Nexus.
 ## Quick Links
 
 - Compare guide: [docs/ai/compare.md](compare.md)
+- Inspect guide: [docs/ai/inspect.md](inspect.md)
 - Flow guide: [docs/ai/flow.md](flow.md)
 - Playbooks: [docs/ai/playbooks/README.md](playbooks/README.md)
 - Migration playbook: [docs/ai/playbooks/migration.md](playbooks/migration.md)
@@ -38,6 +39,7 @@ nxctl doctor
 nxctl browser setup
 nxctl open https://example.com
 nxctl state
+nxctl help inspect
 nxctl help compare
 nxctl help flow
 ```
@@ -58,7 +60,7 @@ nxctl help flow
 - Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional, because page changes can stale later refs
 - Use `batch --keep-going` only when later diagnostic steps remain useful after an earlier command fails
 - Add `wait` after actions that trigger async UI updates
-- Move to `inspect` when whole-page compare is too broad
+- Move to `inspect` when one element needs computed styles or matched declaration sources
 
 Nexus serializes operations within one session. A queued operation still honors its own context deadline, so parallel callers fail by timeout instead of starting concurrent CDP work on the same tab.
 
@@ -156,5 +158,6 @@ The selector must resolve to exactly one `input[type=file]`. Nexus resolves the 
 ## Which Guide To Open Next
 
 - Open [docs/ai/compare.md](compare.md) when the task is about compare timing, noise, or compare scope
+- Open [docs/ai/inspect.md](inspect.md) when one element needs computed styles, matched declarations, or source locations
 - Open [docs/ai/flow.md](flow.md) when the task requires login, session reuse, or multi-step navigation
 - Open [docs/ai/playbooks/migration.md](playbooks/migration.md) when the task is a legacy-to-new-system migration audit

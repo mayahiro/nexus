@@ -32,6 +32,7 @@ type sessionManager interface {
 	List() []api.Session
 	Detach(ctx context.Context, sessionID string) (api.Session, error)
 	Observe(ctx context.Context, sessionID string, opts api.ObserveOptions) (api.Observation, error)
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.StyleInspection, error)
 	Act(ctx context.Context, sessionID string, action api.Action) (api.ActionResult, error)
 	Shutdown(ctx context.Context) error
 }
@@ -279,6 +280,22 @@ func observeSessionContext(ctx context.Context, opts api.ObserveOptions) (contex
 		return context.WithTimeout(ctx, timeout)
 	}
 	return context.WithCancel(ctx)
+}
+
+// InspectStyles returns computed styles and best-effort authored declarations
+// for one recently observed node.
+func (s Server) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (response api.InspectStylesResponse, resultErr error) {
+	ctx, finish := s.beginRequest(ctx, "inspect_styles", s.verbose,
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("node_ref", req.NodeRef),
+	)
+	defer func() { finish(resultErr) }()
+
+	inspection, err := s.sessions.InspectStyles(ctx, req)
+	if err != nil {
+		return api.InspectStylesResponse{}, err
+	}
+	return api.InspectStylesResponse{Inspection: inspection}, nil
 }
 
 func (s Server) ActSession(ctx context.Context, req api.ActSessionRequest) (response api.ActSessionResponse, resultErr error) {

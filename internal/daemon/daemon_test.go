@@ -220,6 +220,9 @@ func TestServerVerboseCoversEveryDaemonRequest(t *testing.T) {
 	if _, err := server.ObserveSession(ctx, api.ObserveSessionRequest{SessionID: "web1"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := server.InspectStyles(ctx, api.InspectStylesRequest{SessionID: "web1", NodeRef: "@e1"}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := server.ActSession(ctx, api.ActSessionRequest{SessionID: "web1", Action: api.Action{Kind: "click"}}); err != nil {
 		t.Fatal(err)
 	}
@@ -237,6 +240,7 @@ func TestServerVerboseCoversEveryDaemonRequest(t *testing.T) {
 		"list_sessions",
 		"detach_session",
 		"observe_session",
+		"inspect_styles",
 		"act_session",
 		"stop_daemon",
 		"shutdown",
@@ -295,10 +299,41 @@ func TestServerVerbosePropagatesToObserveOptions(t *testing.T) {
 	}
 }
 
+func TestServerInspectStylesForwardsRequest(t *testing.T) {
+	var inspected api.InspectStylesRequest
+	server := Server{
+		sessions: fakeSessionManager{
+			inspectStyles: func(_ context.Context, req api.InspectStylesRequest) (api.StyleInspection, error) {
+				inspected = req
+				return api.StyleInspection{
+					Computed:           map[string]string{"width": "154px"},
+					StyleSourcesStatus: api.StyleSourcesStatusComplete,
+				}, nil
+			},
+		},
+	}
+
+	response, err := server.InspectStyles(context.Background(), api.InspectStylesRequest{
+		SessionID:     "web1",
+		NodeRef:       "@e1",
+		CSSProperties: []string{"width"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.NodeRef != "@e1" {
+		t.Fatalf("unexpected forwarded style request: %+v", inspected)
+	}
+	if response.Inspection.Computed["width"] != "154px" {
+		t.Fatalf("unexpected style response: %+v", response)
+	}
+}
+
 type fakeSessionManager struct {
-	session   api.Session
-	detachErr error
-	observe   func(context.Context, string, api.ObserveOptions) (api.Observation, error)
+	session       api.Session
+	detachErr     error
+	observe       func(context.Context, string, api.ObserveOptions) (api.Observation, error)
+	inspectStyles func(context.Context, api.InspectStylesRequest) (api.StyleInspection, error)
 }
 
 func (f fakeSessionManager) Attach(context.Context, api.AttachSessionRequest) (api.Session, error) {
@@ -321,6 +356,13 @@ func (f fakeSessionManager) Observe(ctx context.Context, sessionID string, opts 
 		return f.observe(ctx, sessionID, opts)
 	}
 	return api.Observation{}, nil
+}
+
+func (f fakeSessionManager) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.StyleInspection, error) {
+	if f.inspectStyles != nil {
+		return f.inspectStyles(ctx, req)
+	}
+	return api.StyleInspection{}, nil
 }
 
 func (f fakeSessionManager) Act(context.Context, string, api.Action) (api.ActionResult, error) {

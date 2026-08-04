@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -364,10 +365,12 @@ type inspectLocator struct {
 }
 
 type inspectMatch struct {
-	SessionID string   `json:"session_id"`
-	URL       string   `json:"url,omitempty"`
-	Title     string   `json:"title,omitempty"`
-	Node      api.Node `json:"node"`
+	SessionID          string   `json:"session_id"`
+	URL                string   `json:"url,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	Node               api.Node `json:"node"`
+	StyleSourcesStatus string   `json:"style_sources_status"`
+	StyleSourcesError  string   `json:"style_sources_error,omitempty"`
 }
 
 type inspectScopeSide struct {
@@ -382,10 +385,12 @@ type inspectScope struct {
 }
 
 type inspectPropertyReport struct {
-	Name string `json:"name"`
-	Old  string `json:"old,omitempty"`
-	New  string `json:"new,omitempty"`
-	Same bool   `json:"same"`
+	Name            string                 `json:"name"`
+	Old             string                 `json:"old,omitempty"`
+	New             string                 `json:"new,omitempty"`
+	Same            bool                   `json:"same"`
+	OldDeclarations []api.StyleDeclaration `json:"old_declarations"`
+	NewDeclarations []api.StyleDeclaration `json:"new_declarations"`
 }
 
 type inspectReport struct {
@@ -397,6 +402,21 @@ type inspectReport struct {
 	New              inspectMatch            `json:"new"`
 	Properties       []inspectPropertyReport `json:"properties"`
 	Same             bool                    `json:"same"`
+}
+
+type inspectSinglePropertyReport struct {
+	Name         string                 `json:"name"`
+	Value        string                 `json:"value,omitempty"`
+	Declarations []api.StyleDeclaration `json:"declarations"`
+}
+
+type inspectSingleReport struct {
+	Locator          inspectLocator                `json:"locator"`
+	Scope            *inspectScopeSide             `json:"scope,omitempty"`
+	CSSProperties    []string                      `json:"css_properties"`
+	LayoutProperties []string                      `json:"layout_properties,omitempty"`
+	Session          inspectMatch                  `json:"session"`
+	Properties       []inspectSinglePropertyReport `json:"properties"`
 }
 
 var inspectDefaultLayoutProperties = []string{
@@ -440,6 +460,7 @@ var inspectDefaultLayoutProperties = []string{
 }
 
 func runInspectInvocation(ctx context.Context, invocation *nagicli.Invocation, stdout io.Writer, stderr io.Writer) int {
+	sessionID := nagiStringValue(invocation, "session")
 	oldSession := nagiStringValue(invocation, "old-session")
 	newSession := nagiStringValue(invocation, "new-session")
 	locatorValue := strings.TrimSpace(nagiRawValue(invocation, "locator"))
@@ -449,6 +470,7 @@ func runInspectInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 	newScopeSelectorValue := strings.TrimSpace(nagiStringValue(invocation, "new-scope-selector"))
 	asJSON := nagiBoolValue(invocation, "json")
 	withLayoutContext := nagiBoolValue(invocation, "layout-context")
+	includeStyleSources := !nagiBoolValue(invocation, "no-style-sources")
 	nth := nagiIntValue(invocation, "nth")
 	cssProperty := nagiStringValues(invocation, "css-property")
 
@@ -456,18 +478,7 @@ func runInspectInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 	targetSelectorMode := !hasLocator
 
 	locator := inspectLocator{}
-	commonScopeSelector := scopeSelectorValue
-	if targetSelectorMode {
-		commonScopeSelector = firstNonEmpty(selectorValue, scopeSelectorValue)
-	}
-	oldEffectiveScopeSelector, newEffectiveScopeSelector, err := resolveInspectScopeSelectors(commonScopeSelector, oldScopeSelectorValue, newScopeSelectorValue)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	if targetSelectorMode {
-		locator = inspectSelectorLocator(oldEffectiveScopeSelector, newEffectiveScopeSelector)
-	} else {
+	if hasLocator {
 		locator, _ = nagicli.ValueAs[inspectLocator](invocation, "locator")
 	}
 
@@ -480,52 +491,65 @@ func runInspectInvocation(ctx context.Context, invocation *nagicli.Invocation, s
 
 	cssProperties := comparecmd.ResolveCSSProperties(true, append([]string(nil), cssProperty...))
 	layoutProperties := inspectResolveLayoutProperties(withLayoutContext)
-	oldObservation, err := inspectObservation(ctx, client, oldSession, cssProperties, oldEffectiveScopeSelector, withLayoutContext, layoutProperties)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
-	}
-	newObservation, err := inspectObservation(ctx, client, newSession, cssProperties, newEffectiveScopeSelector, withLayoutContext, layoutProperties)
-	if err != nil {
-		fmt.Fprintln(stderr, err)
-		return 1
+	selection := nodeSelectionOptions{Nth: nth}
+	if strings.TrimSpace(sessionID) != "" {
+		effectiveScopeSelector := scopeSelectorValue
+		if targetSelectorMode {
+			effectiveScopeSelector = firstNonEmpty(selectorValue, scopeSelectorValue)
+			locator = inspectSelectorLocator(effectiveScopeSelector, effectiveScopeSelector)
+		}
+		match, inspection, observation, err := inspectSession(ctx, client, sessionID, locator, selection, cssProperties, effectiveScopeSelector, withLayoutContext, layoutProperties, includeStyleSources)
+		if err != nil {
+			fmt.Fprintf(stderr, "session %s: %v\n", sessionID, err)
+			return 1
+		}
+		report := buildInspectSingleReport(locator, cssProperties, layoutProperties, match, inspection, inspectSingleScopeFromObservation(effectiveScopeSelector, observation))
+		if asJSON {
+			return writeInspectJSON(stdout, stderr, report)
+		}
+		printInspectSingleReport(stdout, report)
+		return 0
 	}
 
-	selection := nodeSelectionOptions{Nth: nth}
-	oldNode, err := resolveInspectNode(oldObservation.Tree, locator, selection)
+	commonScopeSelector := scopeSelectorValue
+	if targetSelectorMode {
+		commonScopeSelector = firstNonEmpty(selectorValue, scopeSelectorValue)
+	}
+	oldEffectiveScopeSelector, newEffectiveScopeSelector, err := resolveInspectScopeSelectors(commonScopeSelector, oldScopeSelectorValue, newScopeSelectorValue)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	if targetSelectorMode {
+		locator = inspectSelectorLocator(oldEffectiveScopeSelector, newEffectiveScopeSelector)
+	}
+
+	oldMatch, oldInspection, oldObservation, err := inspectSession(ctx, client, oldSession, locator, selection, cssProperties, oldEffectiveScopeSelector, withLayoutContext, layoutProperties, includeStyleSources)
 	if err != nil {
 		fmt.Fprintf(stderr, "old session %s: %v\n", oldSession, err)
 		return 1
 	}
-	newNode, err := resolveInspectNode(newObservation.Tree, locator, selection)
+	newMatch, newInspection, newObservation, err := inspectSession(ctx, client, newSession, locator, selection, cssProperties, newEffectiveScopeSelector, withLayoutContext, layoutProperties, includeStyleSources)
 	if err != nil {
 		fmt.Fprintf(stderr, "new session %s: %v\n", newSession, err)
 		return 1
 	}
 
-	report := buildInspectReport(locator, cssProperties, layoutProperties, inspectMatch{
-		SessionID: oldSession,
-		URL:       oldObservation.URLOrScreen,
-		Title:     oldObservation.Title,
-		Node:      oldNode,
-	}, inspectMatch{
-		SessionID: newSession,
-		URL:       newObservation.URLOrScreen,
-		Title:     newObservation.Title,
-		Node:      newNode,
-	}, inspectScopeFromObservations(oldEffectiveScopeSelector, newEffectiveScopeSelector, oldObservation, newObservation))
-
+	report := buildInspectReport(locator, cssProperties, layoutProperties, oldMatch, newMatch, oldInspection, newInspection, inspectScopeFromObservations(oldEffectiveScopeSelector, newEffectiveScopeSelector, oldObservation, newObservation))
 	if asJSON {
-		encoder := json.NewEncoder(stdout)
-		encoder.SetIndent("", "  ")
-		if err := encoder.Encode(report); err != nil {
-			fmt.Fprintln(stderr, err)
-			return 1
-		}
-		return 0
+		return writeInspectJSON(stdout, stderr, report)
 	}
-
 	printInspectReport(stdout, report)
+	return 0
+}
+
+func writeInspectJSON(w io.Writer, stderr io.Writer, value any) int {
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	return 0
 }
 
@@ -577,6 +601,77 @@ func inspectScopeFromObservations(oldSelector string, newSelector string, oldObs
 	return scope
 }
 
+func inspectSingleScopeFromObservation(selector string, observation api.Observation) *inspectScopeSide {
+	selector = firstNonEmpty(strings.TrimSpace(observation.Meta["scope_selector"]), strings.TrimSpace(selector))
+	if selector == "" {
+		return nil
+	}
+	return &inspectScopeSide{
+		Selector: selector,
+		Tag:      strings.TrimSpace(observation.Meta["scope_tag"]),
+	}
+}
+
+func inspectSession(ctx context.Context, client clientInspector, sessionID string, locator inspectLocator, selection nodeSelectionOptions, cssProperties []string, scopeSelector string, withLayoutContext bool, layoutProperties []string, includeStyleSources bool) (inspectMatch, api.StyleInspection, api.Observation, error) {
+	observation, err := inspectObservation(ctx, client, sessionID, cssProperties, scopeSelector, withLayoutContext, layoutProperties)
+	if err != nil {
+		return inspectMatch{}, api.StyleInspection{}, api.Observation{}, err
+	}
+	node, err := resolveInspectNode(observation.Tree, locator, selection)
+	if err != nil {
+		return inspectMatch{}, api.StyleInspection{}, observation, err
+	}
+
+	inspection := disabledStyleInspection(cssProperties)
+	if includeStyleSources {
+		res, inspectErr := client.InspectStyles(ctx, api.InspectStylesRequest{
+			SessionID:     sessionID,
+			NodeRef:       node.Ref,
+			CSSProperties: append([]string(nil), cssProperties...),
+		})
+		if inspectErr != nil {
+			if errors.Is(inspectErr, context.Canceled) || errors.Is(inspectErr, context.DeadlineExceeded) {
+				return inspectMatch{}, api.StyleInspection{}, observation, inspectErr
+			}
+			inspection.StyleSourcesStatus = api.StyleSourcesStatusUnavailable
+			inspection.StyleSourcesError = strings.TrimSpace(inspectErr.Error())
+		} else {
+			inspection = res.Inspection
+		}
+	}
+	if node.Styles == nil {
+		node.Styles = map[string]string{}
+	}
+	for property, value := range inspection.Computed {
+		node.Styles[property] = value
+	}
+
+	match := inspectMatch{
+		SessionID:          sessionID,
+		URL:                observation.URLOrScreen,
+		Title:              observation.Title,
+		Node:               node,
+		StyleSourcesStatus: inspection.StyleSourcesStatus,
+		StyleSourcesError:  inspection.StyleSourcesError,
+	}
+	return match, inspection, observation, nil
+}
+
+func disabledStyleInspection(cssProperties []string) api.StyleInspection {
+	properties := make([]api.StylePropertyInspection, 0, len(cssProperties))
+	for _, property := range cssProperties {
+		properties = append(properties, api.StylePropertyInspection{
+			Name:         property,
+			Declarations: []api.StyleDeclaration{},
+		})
+	}
+	return api.StyleInspection{
+		Computed:           map[string]string{},
+		StyleSourcesStatus: api.StyleSourcesStatusDisabled,
+		Properties:         properties,
+	}
+}
+
 func inspectObservation(ctx context.Context, client clientObserver, sessionID string, cssProperties []string, scopeSelector string, withLayoutContext bool, layoutProperties []string) (api.Observation, error) {
 	res, err := client.ObserveSession(ctx, api.ObserveSessionRequest{
 		SessionID: sessionID,
@@ -603,6 +698,11 @@ func inspectResolveLayoutProperties(enabled bool) []string {
 
 type clientObserver interface {
 	ObserveSession(context.Context, api.ObserveSessionRequest) (api.ObserveSessionResponse, error)
+}
+
+type clientInspector interface {
+	clientObserver
+	InspectStyles(context.Context, api.InspectStylesRequest) (api.InspectStylesResponse, error)
 }
 
 func parseInspectLocator(value string) (inspectLocator, error) {
@@ -720,17 +820,19 @@ func resolveInspectNode(nodes []api.Node, locator inspectLocator, selection node
 	}
 }
 
-func buildInspectReport(locator inspectLocator, cssProperties []string, layoutProperties []string, oldMatch inspectMatch, newMatch inspectMatch, scope *inspectScope) inspectReport {
+func buildInspectReport(locator inspectLocator, cssProperties []string, layoutProperties []string, oldMatch inspectMatch, newMatch inspectMatch, oldInspection api.StyleInspection, newInspection api.StyleInspection, scope *inspectScope) inspectReport {
 	properties := make([]inspectPropertyReport, 0, len(cssProperties))
 	same := true
 	for _, property := range cssProperties {
 		oldValue := strings.TrimSpace(oldMatch.Node.Styles[property])
 		newValue := strings.TrimSpace(newMatch.Node.Styles[property])
 		entry := inspectPropertyReport{
-			Name: property,
-			Old:  oldValue,
-			New:  newValue,
-			Same: oldValue == newValue,
+			Name:            property,
+			Old:             oldValue,
+			New:             newValue,
+			Same:            oldValue == newValue,
+			OldDeclarations: inspectStyleDeclarations(oldInspection, property),
+			NewDeclarations: inspectStyleDeclarations(newInspection, property),
 		}
 		if !entry.Same {
 			same = false
@@ -749,6 +851,34 @@ func buildInspectReport(locator inspectLocator, cssProperties []string, layoutPr
 	}
 }
 
+func buildInspectSingleReport(locator inspectLocator, cssProperties []string, layoutProperties []string, match inspectMatch, inspection api.StyleInspection, scope *inspectScopeSide) inspectSingleReport {
+	properties := make([]inspectSinglePropertyReport, 0, len(cssProperties))
+	for _, property := range cssProperties {
+		properties = append(properties, inspectSinglePropertyReport{
+			Name:         property,
+			Value:        strings.TrimSpace(match.Node.Styles[property]),
+			Declarations: inspectStyleDeclarations(inspection, property),
+		})
+	}
+	return inspectSingleReport{
+		Locator:          locator,
+		Scope:            scope,
+		CSSProperties:    append([]string(nil), cssProperties...),
+		LayoutProperties: append([]string(nil), layoutProperties...),
+		Session:          match,
+		Properties:       properties,
+	}
+}
+
+func inspectStyleDeclarations(inspection api.StyleInspection, property string) []api.StyleDeclaration {
+	for _, inspected := range inspection.Properties {
+		if inspected.Name == property {
+			return append([]api.StyleDeclaration{}, inspected.Declarations...)
+		}
+	}
+	return []api.StyleDeclaration{}
+}
+
 func printInspectReport(w io.Writer, report inspectReport) {
 	fmt.Fprintf(w, "locator: %s\n", report.Locator.Raw)
 	if report.Scope != nil {
@@ -757,6 +887,10 @@ func printInspectReport(w io.Writer, report inspectReport) {
 	fmt.Fprintf(w, "old: %s %s\n", report.Old.SessionID, inspectNodeSummary(report.Old.Node))
 	fmt.Fprintf(w, "new: %s %s\n", report.New.SessionID, inspectNodeSummary(report.New.Node))
 	fmt.Fprintf(w, "same: %t\n", report.Same)
+	fmt.Fprintf(w, "style sources: old=%s new=%s\n",
+		inspectStyleSourcesStatusLabel(report.Old.StyleSourcesStatus, report.Old.StyleSourcesError),
+		inspectStyleSourcesStatusLabel(report.New.StyleSourcesStatus, report.New.StyleSourcesError),
+	)
 	if len(report.Properties) > 0 {
 		fmt.Fprintln(w, "")
 		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -770,12 +904,110 @@ func printInspectReport(w io.Writer, report inspectReport) {
 		}
 		tw.Flush()
 	}
+	if inspectShouldPrintSourceSummary(report.Old.StyleSourcesStatus) || inspectShouldPrintSourceSummary(report.New.StyleSourcesStatus) {
+		fmt.Fprintln(w, "")
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "property\told declarations\tnew declarations")
+		for _, property := range report.Properties {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n",
+				property.Name,
+				inspectDeclarationsSummary(property.OldDeclarations),
+				inspectDeclarationsSummary(property.NewDeclarations),
+			)
+		}
+		tw.Flush()
+	}
 
 	if len(report.LayoutProperties) > 0 {
 		fmt.Fprintln(w, "")
 		printInspectLayoutContext(w, "old layout context", report.Old.Node.LayoutContext)
 		printInspectLayoutContext(w, "new layout context", report.New.Node.LayoutContext)
 	}
+}
+
+func printInspectSingleReport(w io.Writer, report inspectSingleReport) {
+	fmt.Fprintf(w, "locator: %s\n", report.Locator.Raw)
+	if report.Scope != nil {
+		fmt.Fprintf(w, "scope: %s\n", report.Scope.Selector)
+	}
+	fmt.Fprintf(w, "session: %s %s\n", report.Session.SessionID, inspectNodeSummary(report.Session.Node))
+	fmt.Fprintf(w, "style sources: %s\n", inspectStyleSourcesStatusLabel(report.Session.StyleSourcesStatus, report.Session.StyleSourcesError))
+	if len(report.Properties) > 0 {
+		fmt.Fprintln(w, "")
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "property\tcomputed\tdeclarations")
+		for _, property := range report.Properties {
+			fmt.Fprintf(tw, "%s\t%s\t%s\n", property.Name, property.Value, inspectDeclarationsSummary(property.Declarations))
+		}
+		tw.Flush()
+	}
+	if len(report.LayoutProperties) > 0 {
+		fmt.Fprintln(w, "")
+		printInspectLayoutContext(w, "layout context", report.Session.Node.LayoutContext)
+	}
+}
+
+func inspectShouldPrintSourceSummary(status string) bool {
+	return status == api.StyleSourcesStatusComplete || status == api.StyleSourcesStatusPartial
+}
+
+func inspectStyleSourcesStatusLabel(status string, message string) string {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		status = api.StyleSourcesStatusUnavailable
+	}
+	message = strings.Join(strings.Fields(message), " ")
+	if message == "" {
+		return status
+	}
+	return status + " (" + message + ")"
+}
+
+func inspectDeclarationsSummary(declarations []api.StyleDeclaration) string {
+	switch len(declarations) {
+	case 0:
+		return "none"
+	case 1:
+		return inspectDeclarationSummary(declarations[0])
+	default:
+		return strconv.Itoa(len(declarations)) + " declarations"
+	}
+}
+
+func inspectDeclarationSummary(declaration api.StyleDeclaration) string {
+	parts := []string{declaration.Property + "=" + strconv.Quote(declaration.Value)}
+	if declaration.Relation == "shorthand" && strings.TrimSpace(declaration.ResolvedValue) != "" {
+		parts = append(parts, "resolved="+strconv.Quote(declaration.ResolvedValue))
+	}
+	switch {
+	case declaration.Inline:
+		parts = append(parts, "element.style")
+	case declaration.Attribute:
+		parts = append(parts, "element attribute")
+	case strings.TrimSpace(declaration.Selector) != "":
+		parts = append(parts, strings.Join(strings.Fields(declaration.Selector), " "))
+	}
+	if declaration.Inherited {
+		parts = append(parts, "ancestor="+strconv.Itoa(declaration.AncestorDepth))
+	}
+	if location := inspectDeclarationLocation(declaration); location != "" {
+		parts = append(parts, location)
+	}
+	return strings.Join(parts, " ")
+}
+
+func inspectDeclarationLocation(declaration api.StyleDeclaration) string {
+	location := strings.TrimSpace(declaration.SourceURL)
+	if declaration.Line > 0 {
+		if location == "" {
+			location = "line"
+		}
+		location += ":" + strconv.Itoa(declaration.Line)
+		if declaration.Column > 0 {
+			location += ":" + strconv.Itoa(declaration.Column)
+		}
+	}
+	return location
 }
 
 func inspectScopeLabel(scope *inspectScope) string {

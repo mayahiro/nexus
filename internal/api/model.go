@@ -63,6 +63,72 @@ type ObserveSessionResponse struct {
 	Observation Observation `json:"observation"`
 }
 
+const (
+	// StyleSourcesStatusComplete means the supported matched declaration data
+	// and its available source metadata were collected.
+	StyleSourcesStatusComplete = "complete"
+	// StyleSourcesStatusPartial means declaration data was collected but some
+	// stylesheet source metadata was unavailable.
+	StyleSourcesStatusPartial = "partial"
+	// StyleSourcesStatusUnavailable means matched declaration collection failed.
+	StyleSourcesStatusUnavailable = "unavailable"
+	// StyleSourcesStatusDisabled means matched declaration collection was skipped.
+	StyleSourcesStatusDisabled = "disabled"
+)
+
+// InspectStylesRequest identifies one recently observed node and the computed
+// CSS properties to inspect in its current document generation.
+type InspectStylesRequest struct {
+	SessionID     string   `json:"session_id"`
+	NodeRef       string   `json:"node_ref"`
+	CSSProperties []string `json:"css_properties"`
+}
+
+// InspectStylesResponse contains one targeted style inspection.
+type InspectStylesResponse struct {
+	Inspection StyleInspection `json:"inspection"`
+}
+
+// StyleInspection contains computed values and best-effort authored
+// declarations for one node.
+type StyleInspection struct {
+	Computed           map[string]string         `json:"computed"`
+	StyleSourcesStatus string                    `json:"style_sources_status"`
+	StyleSourcesError  string                    `json:"style_sources_error,omitempty"`
+	Properties         []StylePropertyInspection `json:"properties"`
+}
+
+// StylePropertyInspection groups authored declarations by requested computed
+// property without claiming which declaration wins the cascade.
+type StylePropertyInspection struct {
+	Name         string             `json:"name"`
+	Declarations []StyleDeclaration `json:"declarations"`
+}
+
+// StyleDeclaration describes one authored declaration reported by Chromium as
+// directly matched, inline, attribute-derived, shorthand-derived, or inherited.
+type StyleDeclaration struct {
+	Property          string   `json:"property"`
+	Value             string   `json:"value"`
+	ResolvedValue     string   `json:"resolved_value,omitempty"`
+	Text              string   `json:"text,omitempty"`
+	Selector          string   `json:"selector,omitempty"`
+	MatchingSelectors []string `json:"matching_selectors,omitempty"`
+	Origin            string   `json:"origin,omitempty"`
+	Relation          string   `json:"relation"`
+	Important         bool     `json:"important,omitempty"`
+	Disabled          bool     `json:"disabled,omitempty"`
+	Implicit          bool     `json:"implicit,omitempty"`
+	Inline            bool     `json:"inline,omitempty"`
+	Attribute         bool     `json:"attribute,omitempty"`
+	Inherited         bool     `json:"inherited,omitempty"`
+	AncestorDepth     int      `json:"ancestor_depth,omitempty"`
+	SourceURL         string   `json:"source_url,omitempty"`
+	SourceMapURL      string   `json:"source_map_url,omitempty"`
+	Line              int      `json:"line,omitempty"`
+	Column            int      `json:"column,omitempty"`
+}
+
 type ActSessionRequest struct {
 	SessionID string `json:"session_id"`
 	Action    Action `json:"action"`

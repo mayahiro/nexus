@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/css"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -1149,10 +1151,11 @@ func (*Backend) Name() spec.BackendName {
 
 func (*Backend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{
-		Observe:       true,
-		Act:           true,
-		Screenshot:    true,
-		LayoutContext: true,
+		Observe:         true,
+		Act:             true,
+		Screenshot:      true,
+		LayoutContext:   true,
+		StyleInspection: true,
 	}
 }
 
@@ -1435,6 +1438,41 @@ func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (result 
 	}
 
 	return b.observeViaCDP(ctx, url, opts)
+}
+
+// InspectStyles returns computed styles and best-effort authored declarations
+// for one recently observed node.
+func (b *Backend) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (result *api.StyleInspection, resultErr error) {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
+	b.mu.Lock()
+	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
+	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_inspect_styles",
+		"chromium_inspect_styles",
+		false,
+		processDiagnostics,
+		diagnostic.Value("node_ref", req.NodeRef),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_inspect_styles", startedAt, processDiagnostics, resultErr)
+	}()
+
+	if url == "" {
+		return nil, errors.New("chromium backend is not attached")
+	}
+
+	return withBackendPageTargetContext(b, ctx, url, func(targetCtx context.Context, _ pageTargetInfo) (*api.StyleInspection, error) {
+		selector, err := b.resolveNodeReferenceInContext(targetCtx, req.NodeRef)
+		if err != nil {
+			return nil, err
+		}
+		return inspectTargetStyles(targetCtx, selector, req.CSSProperties)
+	})
 }
 
 func (b *Backend) Act(ctx context.Context, action api.Action) (result *api.ActionResult, resultErr error) {
@@ -1863,6 +1901,405 @@ func operationContext(targetCtx context.Context, requestCtx context.Context) (co
 
 func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 	return p.WithAwaitPromise(true)
+}
+
+type matchedStyleSnapshot struct {
+	InlineStyle     *css.Style
+	AttributesStyle *css.Style
+	MatchedRules    []*css.RuleMatch
+	Inherited       []*css.InheritedStyleEntry
+	Headers         map[cdp.StyleSheetID]*css.StyleSheetHeader
+}
+
+type styleDeclarationContext struct {
+	Selector          string
+	MatchingSelectors []string
+	Origin            string
+	Inline            bool
+	Attribute         bool
+	Inherited         bool
+	AncestorDepth     int
+	StyleSheetID      cdp.StyleSheetID
+}
+
+type stylePropertyTarget struct {
+	Index         int
+	Relation      string
+	ResolvedValue string
+}
+
+func inspectTargetStyles(ctx context.Context, selector string, requested []string) (*api.StyleInspection, error) {
+	properties := normalizeRequestedStyleProperties(requested)
+	computed := map[string]string{}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(inspectComputedStylesExpression(selector, properties), &computed)); err != nil {
+		return nil, err
+	}
+
+	inspection := &api.StyleInspection{
+		Computed:   normalizeStringMap(computed),
+		Properties: emptyStylePropertyInspections(properties),
+	}
+
+	snapshot, err := captureMatchedStyleSnapshot(ctx, selector)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		inspection.StyleSourcesStatus = api.StyleSourcesStatusUnavailable
+		inspection.StyleSourcesError = strings.TrimSpace(err.Error())
+		return inspection, nil
+	}
+
+	partial := populateStyleDeclarations(inspection.Properties, snapshot)
+	inspection.StyleSourcesStatus = api.StyleSourcesStatusComplete
+	if partial {
+		inspection.StyleSourcesStatus = api.StyleSourcesStatusPartial
+	}
+	return inspection, nil
+}
+
+func normalizeRequestedStyleProperties(values []string) []string {
+	properties := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		duplicate := false
+		for _, property := range properties {
+			if stylePropertyNamesEqual(property, trimmed) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			properties = append(properties, trimmed)
+		}
+	}
+	return properties
+}
+
+func emptyStylePropertyInspections(properties []string) []api.StylePropertyInspection {
+	out := make([]api.StylePropertyInspection, 0, len(properties))
+	for _, property := range properties {
+		out = append(out, api.StylePropertyInspection{
+			Name:         property,
+			Declarations: []api.StyleDeclaration{},
+		})
+	}
+	return out
+}
+
+func captureMatchedStyleSnapshot(ctx context.Context, selector string) (matchedStyleSnapshot, error) {
+	snapshot := matchedStyleSnapshot{}
+	headers := map[cdp.StyleSheetID]*css.StyleSheetHeader{}
+	var headerMu sync.Mutex
+	listenerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	chromedp.ListenTarget(listenerCtx, func(event any) {
+		added, ok := event.(*css.EventStyleSheetAdded)
+		if !ok || added.Header == nil {
+			return
+		}
+		header := *added.Header
+		headerMu.Lock()
+		headers[header.StyleSheetID] = &header
+		headerMu.Unlock()
+	})
+
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		_ = css.Disable().Do(runCtx)
+		if err := css.Enable().Do(runCtx); err != nil {
+			return err
+		}
+		defer func() {
+			_ = css.Disable().Do(runCtx)
+		}()
+
+		root, err := dom.GetDocument().Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if root == nil {
+			return errors.New("style inspection document root is unavailable")
+		}
+		nodeID, err := dom.QuerySelector(root.NodeID, selector).Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if nodeID == 0 {
+			return errors.New("style inspection target is no longer available")
+		}
+
+		var matched css.GetMatchedStylesForNodeReturns
+		if err := cdp.Execute(runCtx, css.CommandGetMatchedStylesForNode, css.GetMatchedStylesForNode(nodeID), &matched); err != nil {
+			return err
+		}
+		snapshot.InlineStyle = matched.InlineStyle
+		snapshot.AttributesStyle = matched.AttributesStyle
+		snapshot.MatchedRules = matched.MatchedCSSRules
+		snapshot.Inherited = matched.Inherited
+		return nil
+	}))
+	if err != nil {
+		return matchedStyleSnapshot{}, err
+	}
+
+	cancel()
+	headerMu.Lock()
+	headerSnapshot := make(map[cdp.StyleSheetID]*css.StyleSheetHeader, len(headers))
+	for id, header := range headers {
+		headerSnapshot[id] = header
+	}
+	headerMu.Unlock()
+	snapshot.Headers = headerSnapshot
+	return snapshot, nil
+}
+
+func populateStyleDeclarations(properties []api.StylePropertyInspection, snapshot matchedStyleSnapshot) bool {
+	partial := false
+	if snapshot.InlineStyle != nil {
+		partial = appendStyleDeclarations(properties, snapshot.InlineStyle, styleDeclarationContext{
+			Origin: "regular",
+			Inline: true,
+		}, snapshot.Headers) || partial
+	}
+	if snapshot.AttributesStyle != nil {
+		partial = appendStyleDeclarations(properties, snapshot.AttributesStyle, styleDeclarationContext{
+			Origin:    "regular",
+			Attribute: true,
+		}, snapshot.Headers) || partial
+	}
+	for _, match := range snapshot.MatchedRules {
+		partial = appendRuleMatchDeclarations(properties, match, false, 0, snapshot.Headers) || partial
+	}
+	for index, inherited := range snapshot.Inherited {
+		if inherited == nil {
+			continue
+		}
+		depth := index + 1
+		if inherited.InlineStyle != nil {
+			partial = appendStyleDeclarations(properties, inherited.InlineStyle, styleDeclarationContext{
+				Origin:        "regular",
+				Inline:        true,
+				Inherited:     true,
+				AncestorDepth: depth,
+			}, snapshot.Headers) || partial
+		}
+		for _, match := range inherited.MatchedCSSRules {
+			partial = appendRuleMatchDeclarations(properties, match, true, depth, snapshot.Headers) || partial
+		}
+	}
+	return partial
+}
+
+func appendRuleMatchDeclarations(properties []api.StylePropertyInspection, match *css.RuleMatch, inherited bool, depth int, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) bool {
+	if match == nil || match.Rule == nil || match.Rule.Style == nil {
+		return false
+	}
+	rule := match.Rule
+	selector := ""
+	matchingSelectors := []string(nil)
+	if rule.SelectorList != nil {
+		selector = strings.TrimSpace(rule.SelectorList.Text)
+		for _, index := range match.MatchingSelectors {
+			if index < 0 || index >= int64(len(rule.SelectorList.Selectors)) {
+				continue
+			}
+			value := rule.SelectorList.Selectors[index]
+			if value != nil && strings.TrimSpace(value.Text) != "" {
+				matchingSelectors = append(matchingSelectors, strings.TrimSpace(value.Text))
+			}
+		}
+	}
+	styleSheetID := rule.StyleSheetID
+	if styleSheetID == "" {
+		styleSheetID = rule.Style.StyleSheetID
+	}
+	return appendStyleDeclarations(properties, rule.Style, styleDeclarationContext{
+		Selector:          selector,
+		MatchingSelectors: matchingSelectors,
+		Origin:            rule.Origin.String(),
+		Inherited:         inherited,
+		AncestorDepth:     depth,
+		StyleSheetID:      styleSheetID,
+	}, headers)
+}
+
+func appendStyleDeclarations(properties []api.StylePropertyInspection, style *css.Style, declarationContext styleDeclarationContext, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) bool {
+	if style == nil {
+		return false
+	}
+	if declarationContext.StyleSheetID == "" {
+		declarationContext.StyleSheetID = style.StyleSheetID
+	}
+	partial := false
+	for _, property := range style.CSSProperties {
+		if property == nil || strings.TrimSpace(property.Name) == "" {
+			continue
+		}
+		if declarationContext.StyleSheetID != "" && style.Range != nil && property.Range == nil {
+			continue
+		}
+		for _, target := range stylePropertyTargets(properties, property) {
+			declaration, sourcePartial := buildStyleDeclaration(style, property, target, declarationContext, headers)
+			properties[target.Index].Declarations = append(properties[target.Index].Declarations, declaration)
+			partial = partial || sourcePartial
+		}
+	}
+	return partial
+}
+
+func stylePropertyTargets(properties []api.StylePropertyInspection, property *css.Property) []stylePropertyTarget {
+	targets := make([]stylePropertyTarget, 0, 1)
+	seen := map[int]struct{}{}
+	for index := range properties {
+		if stylePropertyNamesEqual(properties[index].Name, property.Name) {
+			targets = append(targets, stylePropertyTarget{Index: index, Relation: "direct"})
+			seen[index] = struct{}{}
+		}
+	}
+	for _, longhand := range property.LonghandProperties {
+		if longhand == nil {
+			continue
+		}
+		for index := range properties {
+			if _, ok := seen[index]; ok || !stylePropertyNamesEqual(properties[index].Name, longhand.Name) {
+				continue
+			}
+			targets = append(targets, stylePropertyTarget{
+				Index:         index,
+				Relation:      "shorthand",
+				ResolvedValue: strings.TrimSpace(longhand.Value),
+			})
+			seen[index] = struct{}{}
+		}
+	}
+	return targets
+}
+
+func stylePropertyNamesEqual(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if strings.HasPrefix(left, "--") || strings.HasPrefix(right, "--") {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
+}
+
+func buildStyleDeclaration(style *css.Style, property *css.Property, target stylePropertyTarget, declarationContext styleDeclarationContext, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) (api.StyleDeclaration, bool) {
+	declaration := api.StyleDeclaration{
+		Property:          strings.TrimSpace(property.Name),
+		Value:             strings.TrimSpace(property.Value),
+		ResolvedValue:     target.ResolvedValue,
+		Text:              strings.TrimSpace(property.Text),
+		Selector:          declarationContext.Selector,
+		MatchingSelectors: append([]string(nil), declarationContext.MatchingSelectors...),
+		Origin:            declarationContext.Origin,
+		Relation:          target.Relation,
+		Important:         property.Important,
+		Disabled:          property.Disabled,
+		Implicit:          property.Implicit,
+		Inline:            declarationContext.Inline,
+		Attribute:         declarationContext.Attribute,
+		Inherited:         declarationContext.Inherited,
+		AncestorDepth:     declarationContext.AncestorDepth,
+	}
+	if declaration.Text == "" && !property.Implicit {
+		declaration.Text = declaration.Property + ": " + declaration.Value
+		if declaration.Important {
+			declaration.Text += " !important"
+		}
+		declaration.Text += ";"
+	}
+
+	styleSheetID := declarationContext.StyleSheetID
+	if styleSheetID == "" {
+		styleSheetID = style.StyleSheetID
+	}
+	if styleSheetID == "" {
+		return declaration, false
+	}
+	header := headers[styleSheetID]
+	if header == nil {
+		return declaration, true
+	}
+	declaration.SourceURL = strings.TrimSpace(header.SourceURL)
+	declaration.SourceMapURL = strings.TrimSpace(header.SourceMapURL)
+	rangeValue := property.Range
+	if rangeValue == nil {
+		rangeValue = style.Range
+	}
+	if rangeValue == nil {
+		return declaration, true
+	}
+	declaration.Line = int(header.StartLine) + int(rangeValue.StartLine) + 1
+	declaration.Column = int(rangeValue.StartColumn) + 1
+	if rangeValue.StartLine == 0 {
+		declaration.Column += int(header.StartColumn)
+	}
+	return declaration, false
+}
+
+func inspectComputedStylesExpression(selector string, properties []string) string {
+	selectorJSON, _ := json.Marshal(strings.TrimSpace(selector))
+	propertiesJSON, _ := json.Marshal(properties)
+	return `(function () {
+  const selector = ` + string(selectorJSON) + `;
+  const properties = ` + string(propertiesJSON) + `;
+  const el = document.querySelector(selector);
+  if (!el) throw new Error('style inspection target is no longer available');
+
+  const colorPropertyPattern = /(^|-)color$/;
+  const colorPropertyNames = new Set(['fill', 'stroke']);
+  const colorProbe = document.createElement('span');
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = 1;
+  colorCanvas.height = 1;
+  const colorContext = colorCanvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+  const isColorProperty = (property) => colorPropertyPattern.test(property) || colorPropertyNames.has(property);
+  const formatColorNumber = (value) => {
+    const rounded = Math.round(value * 10000) / 10000;
+    if (Math.abs(rounded) < 0.00005) return '0';
+    return rounded.toFixed(4).replace(/\.?0+$/, '');
+  };
+  const normalizeColorValue = (value) => {
+    if (!colorContext || !value) return value;
+    colorProbe.style.color = '';
+    colorProbe.style.color = value;
+    if (!colorProbe.style.color) return value;
+    colorContext.clearRect(0, 0, 1, 1);
+    colorContext.globalCompositeOperation = 'copy';
+    colorContext.fillStyle = value;
+    colorContext.fillRect(0, 0, 1, 1);
+    try {
+      const imageData = colorContext.getImageData(0, 0, 1, 1, { colorSpace: 'srgb', pixelFormat: 'rgba-float16' });
+      if (imageData && imageData.pixelFormat === 'rgba-float16' && imageData.data.length >= 4) {
+        const red = Math.min(Math.max(imageData.data[0] * 255, 0), 255);
+        const green = Math.min(Math.max(imageData.data[1] * 255, 0), 255);
+        const blue = Math.min(Math.max(imageData.data[2] * 255, 0), 255);
+        const alpha = Math.min(Math.max(imageData.data[3], 0), 1);
+        if (alpha >= 0.99995) return 'rgb(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ')';
+        return 'rgba(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ', ' + formatColorNumber(alpha) + ')';
+      }
+    } catch (error) {
+    }
+    const imageData = colorContext.getImageData(0, 0, 1, 1);
+    if (!imageData || imageData.data.length < 4) return value;
+    const alpha = imageData.data[3] / 255;
+    if (imageData.data[3] === 255) return 'rgb(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ')';
+    return 'rgba(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ', ' + formatColorNumber(alpha) + ')';
+  };
+
+  const style = window.getComputedStyle(el);
+  const selected = properties.includes('*') ? Array.from(style) : properties;
+  const values = {};
+  for (const property of selected) {
+    const value = style.getPropertyValue(property).trim();
+    values[property] = isColorProperty(property) ? normalizeColorValue(value) : value;
+  }
+  return values;
+})()`
 }
 
 func observeTarget(ctx context.Context, devtoolsURL string, targetInfo pageTargetInfo, opts api.ObserveOptions) (*api.Observation, error) {

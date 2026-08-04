@@ -19,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/css"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
@@ -71,8 +73,150 @@ func TestAttachAndDetach(t *testing.T) {
 
 func TestCapabilities(t *testing.T) {
 	capabilities := New().Capabilities()
-	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.LayoutContext {
+	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.LayoutContext || !capabilities.StyleInspection {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
+	}
+}
+
+func TestPopulateStyleDeclarations(t *testing.T) {
+	const styleSheetID cdp.StyleSheetID = "sheet-1"
+	properties := emptyStylePropertyInspections([]string{"width", "margin-left", "color", "--Brand"})
+	snapshot := matchedStyleSnapshot{
+		MatchedRules: []*css.RuleMatch{
+			{
+				Rule: &css.Rule{
+					StyleSheetID: styleSheetID,
+					SelectorList: &css.SelectorList{
+						Text: ".card, .link-list",
+						Selectors: []*css.Value{
+							{Text: ".card"},
+							{Text: ".link-list"},
+						},
+					},
+					Origin: css.StyleSheetOriginRegular,
+					Style: &css.Style{
+						StyleSheetID: styleSheetID,
+						Range:        &css.SourceRange{StartLine: 0, StartColumn: 15},
+						CSSProperties: []*css.Property{
+							{
+								Name:      "width",
+								Value:     "11em",
+								Text:      "width: 11em;",
+								Important: true,
+								Range:     &css.SourceRange{StartLine: 0, StartColumn: 6},
+							},
+							{
+								Name:  "width",
+								Value: "11em",
+								Text:  "width: 11em;",
+							},
+							{
+								Name:  "margin",
+								Value: "1px 2px 3px 12px",
+								LonghandProperties: []*css.Property{
+									{Name: "margin-left", Value: "12px"},
+								},
+								Range: &css.SourceRange{StartLine: 2, StartColumn: 4},
+							},
+							{
+								Name:  "--Brand",
+								Value: "navy",
+								Range: &css.SourceRange{StartLine: 3, StartColumn: 4},
+							},
+						},
+					},
+				},
+				MatchingSelectors: []int64{1},
+			},
+		},
+		Inherited: []*css.InheritedStyleEntry{
+			{
+				InlineStyle: &css.Style{CSSProperties: []*css.Property{{
+					Name:  "color",
+					Value: "red",
+				}}},
+			},
+		},
+		Headers: map[cdp.StyleSheetID]*css.StyleSheetHeader{
+			styleSheetID: {
+				StyleSheetID: styleSheetID,
+				SourceURL:    "https://example.com/handbooks.css",
+				SourceMapURL: "handbooks.css.map",
+				StartLine:    10,
+				StartColumn:  4,
+			},
+		},
+	}
+
+	if partial := populateStyleDeclarations(properties, snapshot); partial {
+		t.Fatal("complete stylesheet metadata was reported as partial")
+	}
+
+	width := properties[0].Declarations
+	if len(width) != 1 {
+		t.Fatalf("unexpected width declarations: %+v", width)
+	}
+	if width[0].Property != "width" || width[0].Value != "11em" || width[0].Relation != "direct" || !width[0].Important {
+		t.Fatalf("unexpected width declaration: %+v", width[0])
+	}
+	if width[0].Selector != ".card, .link-list" || len(width[0].MatchingSelectors) != 1 || width[0].MatchingSelectors[0] != ".link-list" {
+		t.Fatalf("unexpected matched selector metadata: %+v", width[0])
+	}
+	if width[0].SourceURL != "https://example.com/handbooks.css" || width[0].SourceMapURL != "handbooks.css.map" || width[0].Line != 11 || width[0].Column != 11 {
+		t.Fatalf("unexpected width source location: %+v", width[0])
+	}
+
+	margin := properties[1].Declarations
+	if len(margin) != 1 || margin[0].Property != "margin" || margin[0].Relation != "shorthand" || margin[0].ResolvedValue != "12px" {
+		t.Fatalf("unexpected shorthand declaration: %+v", margin)
+	}
+	if margin[0].Line != 13 || margin[0].Column != 5 {
+		t.Fatalf("unexpected shorthand source location: %+v", margin[0])
+	}
+
+	color := properties[2].Declarations
+	if len(color) != 1 || !color[0].Inline || !color[0].Inherited || color[0].AncestorDepth != 1 {
+		t.Fatalf("unexpected inherited declaration: %+v", color)
+	}
+	custom := properties[3].Declarations
+	if len(custom) != 1 || custom[0].Property != "--Brand" {
+		t.Fatalf("unexpected custom property declaration: %+v", custom)
+	}
+}
+
+func TestPopulateStyleDeclarationsReportsMissingSourceMetadata(t *testing.T) {
+	properties := emptyStylePropertyInspections([]string{"width"})
+	snapshot := matchedStyleSnapshot{
+		MatchedRules: []*css.RuleMatch{{
+			Rule: &css.Rule{
+				StyleSheetID: "missing",
+				Style: &css.Style{CSSProperties: []*css.Property{{
+					Name:  "width",
+					Value: "11em",
+				}}},
+			},
+		}},
+		Headers: map[cdp.StyleSheetID]*css.StyleSheetHeader{},
+	}
+
+	if partial := populateStyleDeclarations(properties, snapshot); !partial {
+		t.Fatal("missing stylesheet metadata was not reported as partial")
+	}
+	if len(properties[0].Declarations) != 1 || properties[0].Declarations[0].SourceURL != "" {
+		t.Fatalf("unexpected partial declaration: %+v", properties[0].Declarations)
+	}
+}
+
+func TestNormalizeRequestedStylePropertiesPreservesCustomPropertyCase(t *testing.T) {
+	got := normalizeRequestedStyleProperties([]string{" color ", "COLOR", "--Brand", "--brand", ""})
+	want := []string{"color", "--Brand", "--brand"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected normalized properties: %#v", got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("unexpected normalized properties: got=%#v want=%#v", got, want)
+		}
 	}
 }
 
@@ -1263,6 +1407,105 @@ func waitForProcessExit(t *testing.T, pid int) {
 			t.Fatalf("process %d did not exit", pid)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestInspectStylesChromiumE2E(t *testing.T) {
+	if os.Getenv("NEXUS_E2E") != "1" {
+		t.Skip("set NEXUS_E2E=1 to run real chromium e2e")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("chromium e2e is only supported on darwin")
+	}
+
+	executable := resolveChromiumForE2E(t)
+	if executable == "" {
+		t.Skip("chromium executable not available for e2e")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><button id="style-target">Target</button></body></html>`)
+		case "/styles.css":
+			w.Header().Set("Content-Type", "text/css")
+			fmt.Fprint(w, `#style-target { width: 120px; background: rgb(0, 0, 255); }
+/*# sourceMappingURL=styles.css.map */`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	backend := New()
+	if err := backend.Attach(context.Background(), spec.SessionConfig{
+		SessionID: "style-e2e",
+		TargetRef: executable,
+		Options: map[string]string{
+			"initial_url": server.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Detach(context.Background())
+
+	operationCtx, operationCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if _, err := backend.Act(operationCtx, api.Action{Kind: "wait", Args: map[string]string{"target": "selector", "value": "#style-target", "state": "visible", "timeout_ms": "10000"}}); err != nil {
+		operationCancel()
+		t.Fatal(err)
+	}
+	operationCancel()
+
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	obs, err := backend.Observe(operationCtx, api.ObserveOptions{WithTree: true})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleTarget := requireNodeByAttrNode(t, obs.Tree, "id", "style-target")
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	inspection, err := backend.InspectStyles(operationCtx, api.InspectStylesRequest{
+		NodeRef:       styleTarget.Ref,
+		CSSProperties: []string{"width", "background-color"},
+	})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Computed["width"] != "120px" || inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected targeted style inspection: %+v", inspection)
+	}
+	if len(inspection.Properties) != 2 || len(inspection.Properties[0].Declarations) != 1 {
+		t.Fatalf("unexpected targeted style declarations: %+v", inspection.Properties)
+	}
+	widthDeclaration := inspection.Properties[0].Declarations[0]
+	if widthDeclaration.Property != "width" || widthDeclaration.Value != "120px" || widthDeclaration.Selector != "#style-target" {
+		t.Fatalf("unexpected targeted width declaration: %+v", widthDeclaration)
+	}
+	if widthDeclaration.SourceURL != server.URL+"/styles.css" || widthDeclaration.SourceMapURL != "styles.css.map" || widthDeclaration.Line != 1 || widthDeclaration.Column <= 0 {
+		t.Fatalf("unexpected targeted width source: %+v", widthDeclaration)
+	}
+	regularBackgrounds := 0
+	for _, declaration := range inspection.Properties[1].Declarations {
+		if declaration.SourceURL != server.URL+"/styles.css" {
+			continue
+		}
+		regularBackgrounds++
+		if declaration.Property != "background" || declaration.Relation != "shorthand" || declaration.ResolvedValue != "rgb(0, 0, 255)" {
+			t.Fatalf("unexpected targeted background declaration: %+v", declaration)
+		}
+	}
+	if regularBackgrounds != 1 {
+		t.Fatalf("unexpected authored background declarations: %+v", inspection.Properties[1].Declarations)
+	}
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	evalResult, err := backend.Act(operationCtx, api.Action{Kind: "eval", Text: `document.getElementById("style-target").textContent`})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := evalResult.Value.(string); !ok || value != "Target" {
+		t.Fatalf("unexpected post-inspection eval result: %#v", evalResult.Value)
 	}
 }
 

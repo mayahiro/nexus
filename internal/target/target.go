@@ -12,3 +12,9 @@ type Adapter interface {
 	Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error)
 	Act(ctx context.Context, action api.Action) (*api.ActionResult, error)
 }
+
+// StyleInspector is implemented by target adapters that can inspect computed
+// styles and their authored declarations for one observed node.
+type StyleInspector interface {
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error)
+}

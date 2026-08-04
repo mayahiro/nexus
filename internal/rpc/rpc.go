@@ -25,6 +25,7 @@ type Handler interface {
 	DetachSession(ctx context.Context, req api.DetachSessionRequest) (api.DetachSessionResponse, error)
 	StopDaemon(ctx context.Context, req api.StopDaemonRequest) (api.StopDaemonResponse, error)
 	ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error)
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error)
 	ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error)
 }
 
@@ -127,6 +128,13 @@ func (c *Client) StopDaemon(ctx context.Context) (api.StopDaemonResponse, error)
 func (c *Client) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
 	var res api.ObserveSessionResponse
 	err := c.call(ctx, "observe_session", req, &res)
+	return res, err
+}
+
+// InspectStyles requests one targeted style inspection from the daemon.
+func (c *Client) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	var res api.InspectStylesResponse
+	err := c.call(ctx, "inspect_styles", req, &res)
 	return res, err
 }
 
@@ -478,6 +486,13 @@ func dispatchRequest(ctx context.Context, req request, handler Handler) (interfa
 			res.Observation.Screenshot = ""
 		}
 		return res, screenshot, nil
+	case "inspect_styles":
+		params, err := decodeParams[api.InspectStylesRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.InspectStyles(ctx, params)
+		return res, nil, err
 	case "act_session":
 		params, err := decodeParams[api.ActSessionRequest](req.Params)
 		if err != nil {

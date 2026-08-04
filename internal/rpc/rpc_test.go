@@ -182,6 +182,18 @@ func (testHandler) ObserveSession(_ context.Context, req api.ObserveSessionReque
 	}, nil
 }
 
+func (testHandler) InspectStyles(_ context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	return api.InspectStylesResponse{
+		Inspection: api.StyleInspection{
+			Computed:           map[string]string{"color": "rgb(0, 0, 0)"},
+			StyleSourcesStatus: api.StyleSourcesStatusComplete,
+			Properties: []api.StylePropertyInspection{
+				{Name: "color", Declarations: []api.StyleDeclaration{}},
+			},
+		},
+	}, nil
+}
+
 func (testHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
 	var value interface{}
 	switch req.Action.Text {
@@ -377,6 +389,18 @@ func TestSessionRPC(t *testing.T) {
 	}
 	if observed.Observation.SessionID != "web1" {
 		t.Fatalf("unexpected observe result: %+v", observed)
+	}
+
+	inspected, err := client.InspectStyles(context.Background(), api.InspectStylesRequest{
+		SessionID:     "web1",
+		NodeRef:       "@e1",
+		CSSProperties: []string{"color"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Inspection.Computed["color"] != "rgb(0, 0, 0)" || inspected.Inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected style inspection result: %+v", inspected)
 	}
 
 	acted, err := client.ActSession(context.Background(), api.ActSessionRequest{

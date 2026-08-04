@@ -42,6 +42,10 @@ func (noopRPCHandler) ObserveSession(context.Context, api.ObserveSessionRequest)
 	return api.ObserveSessionResponse{}, nil
 }
 
+func (noopRPCHandler) InspectStyles(context.Context, api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	return api.InspectStylesResponse{}, nil
+}
+
 func (noopRPCHandler) ActSession(context.Context, api.ActSessionRequest) (api.ActSessionResponse, error) {
 	return api.ActSessionResponse{}, nil
 }
@@ -65,7 +69,10 @@ type viewportRPCHandler struct{ noopRPCHandler }
 type waitRPCHandler struct{ noopRPCHandler }
 type getRPCHandler struct{ noopRPCHandler }
 type findRPCHandler struct{ noopRPCHandler }
-type inspectRPCHandler struct{ noopRPCHandler }
+type inspectRPCHandler struct {
+	noopRPCHandler
+	inspectRequests chan<- api.InspectStylesRequest
+}
 type selectUploadRPCHandler struct{ noopRPCHandler }
 
 func TestRPCTestHandlersReportCompatibleDaemon(t *testing.T) {
@@ -462,6 +469,67 @@ func (inspectRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 			Tree:        nodes,
 		},
 	}, nil
+}
+
+func (h inspectRPCHandler) InspectStyles(_ context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	if h.inspectRequests != nil {
+		h.inspectRequests <- req
+	}
+	computed := map[string]string{}
+	properties := make([]api.StylePropertyInspection, 0, len(req.CSSProperties))
+	for _, property := range req.CSSProperties {
+		value := ""
+		switch req.SessionID {
+		case "old":
+			switch property {
+			case "color":
+				if req.NodeRef == "@e4" {
+					value = "rgb(64, 64, 64)"
+				} else {
+					value = "rgb(0, 0, 0)"
+				}
+			case "display":
+				value = "inline-block"
+			}
+		case "new":
+			switch property {
+			case "color":
+				if req.NodeRef == "@e4" {
+					value = "rgb(0, 0, 255)"
+				} else {
+					value = "rgb(255, 0, 0)"
+				}
+			case "display":
+				value = "inline-block"
+			}
+		case "single":
+			if property == "width" {
+				value = "154px"
+			}
+		}
+		computed[property] = value
+		declarations := []api.StyleDeclaration{}
+		if property == "width" {
+			declarations = append(declarations, api.StyleDeclaration{
+				Property:          "width",
+				Value:             "11em",
+				Text:              "width: 11em;",
+				Selector:          ".link-list",
+				MatchingSelectors: []string{".link-list"},
+				Origin:            "regular",
+				Relation:          "direct",
+				SourceURL:         "https://example.com/handbooks.css",
+				Line:              412,
+				Column:            3,
+			})
+		}
+		properties = append(properties, api.StylePropertyInspection{Name: property, Declarations: declarations})
+	}
+	return api.InspectStylesResponse{Inspection: api.StyleInspection{
+		Computed:           computed,
+		StyleSourcesStatus: api.StyleSourcesStatusComplete,
+		Properties:         properties,
+	}}, nil
 }
 
 func (selectUploadRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {

@@ -102,12 +102,15 @@ nxctl compare --old-session old --new-session new --wait-function 'document.quer
 Targeted inspection:
 
 ```text
+nxctl inspect 'role button --name "Submit"' --session work
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width
 nxctl inspect --old-scope-selector '#legacy-filters' --new-scope-selector 'aside.filters' --old-session old --new-session new --css-property width
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 ```
+
+`inspect` collects matched declarations and compiled CSS source locations by default without claiming a cascade winner. See the [inspect guide](inspect.md) for one-session mode, JSON fields, status values, and `--no-style-sources`
 
 Style-focused compare:
 
@@ -296,10 +299,12 @@ If the new page looks incomplete:
 
 ## Inspect Selector Rules
 
-- `inspect --selector` accepts a raw CSS selector and compares the computed styles for exactly one matched element on each side
-- `inspect --scope-selector` limits semantic locator inspection to exactly one matched subtree on each side
+- `inspect --session` inspects one selected element in one existing session
+- `inspect --selector` accepts a raw CSS selector and inspects exactly one matched element in each selected session
+- `inspect --scope-selector` limits semantic locator inspection to exactly one matched subtree in each selected session
 - `inspect --old-scope-selector` and `inspect --new-scope-selector` override the inspect subtree per side
-- when no semantic locator is provided, side-specific scope selectors identify the inspected roots
+- side-specific scope selectors are available only in old/new comparison mode
+- when no semantic locator is provided, common or side-specific scope selectors identify the inspected roots
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - do not combine `--selector` with a positional inspect locator
 - do not combine `--selector` with `--nth`

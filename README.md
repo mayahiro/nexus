@@ -165,6 +165,9 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --ig
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
 nxctl flow run --manifest login-flow.json --json
+nxctl inspect 'role button --name "Submit"' --session work
+nxctl inspect --selector ".link-list" --session work --css-property width --json
+nxctl inspect --selector ".link-list" --session work --css-property width --no-style-sources
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
@@ -195,8 +198,7 @@ Available command groups include:
 
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
 - navigation: `open`, `navigate`, `back`, `scroll`
-- inspection: `state`, `observe`, `get`, `screenshot`
-- targeted style diff: `inspect`
+- inspection: `state`, `observe`, `get`, `screenshot`, `inspect`
 - interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
 - migration diff: `compare`
 - scenario flow: `flow run`
@@ -242,12 +244,13 @@ Use `--all-css-properties` when the task requires an exhaustive computed-style p
 Use `--compare-layout` when you want opt-in viewport-relative bounds findings for matching nodes, such as a button moving from center to left. Layout findings report observed placement changes; use `inspect --layout-context` when you need ancestor CSS context to investigate why the movement happened.
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
-Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
+Use `inspect --session <ID>` when one element needs computed values and authored declaration sources. Use both `--old-session` and `--new-session` for a focused comparison instead of a whole-page diff.
+Style sources are collected by default for the selected node and requested properties. JSON retains all collected declarations and their best-effort selector, origin, compiled CSS URL, one-based line and column, and source map URL metadata. The list does not claim a cascade winner, and Nexus does not resolve source maps back to SCSS. Use `--no-style-sources` to skip this collection while keeping computed-style inspection.
 Use `inspect --selector` when you need the computed styles for one CSS-selected container rather than a semantic locator.
-`inspect --selector` accepts a raw CSS selector, requires exactly one match on each side, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
+`inspect --selector` accepts a raw CSS selector, requires exactly one match in each selected session, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
 When an inspect selector or inspect scope selector matches multiple elements, Nexus reports up to five matched candidates as hints.
 Use `inspect --scope-selector` to resolve a semantic locator inside one CSS-selected subtree, or `--old-scope-selector` and `--new-scope-selector` when the old and new subtree selectors differ.
-When `inspect` has no semantic locator, side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior for different DOM structures.
+When `inspect` has no semantic locator, common or side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior.
 Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 Use `get bbox --selector <css>` when you need the viewport-relative bounds for any CSS-selected element without running ad hoc JavaScript.
@@ -308,6 +311,8 @@ Fallbacks:
 ## Documentation
 
 - AI guide: [`docs/ai/usage.md`](docs/ai/usage.md)
+- AI inspect guide: [`docs/ai/inspect.md`](docs/ai/inspect.md)
+- AI inspect guide (Japanese): [`docs/ai/inspect_ja.md`](docs/ai/inspect_ja.md)
 - AI compare guide: [`docs/ai/compare.md`](docs/ai/compare.md)
 - Compare decision schema: [`docs/ai/compare-decisions.schema.json`](docs/ai/compare-decisions.schema.json)
 - AI flow guide: [`docs/ai/flow.md`](docs/ai/flow.md)

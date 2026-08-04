@@ -14,10 +14,11 @@ const BackendChromium BackendName = "chromium"
 var ErrUnsupported = errors.New("unsupported operation")
 
 type Capabilities struct {
-	Observe       bool
-	Act           bool
-	Screenshot    bool
-	LayoutContext bool
+	Observe         bool
+	Act             bool
+	Screenshot      bool
+	LayoutContext   bool
+	StyleInspection bool
 }
 
 type SessionConfig struct {
@@ -35,6 +36,12 @@ type Backend interface {
 	Act(ctx context.Context, action api.Action) (*api.ActionResult, error)
 }
 
+// StyleInspector is the optional browser backend boundary for targeted CSS
+// inspection.
+type StyleInspector interface {
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error)
+}
+
 func CapabilityList(c Capabilities) []string {
 	var out []string
 	if c.Observe {
@@ -48,6 +55,9 @@ func CapabilityList(c Capabilities) []string {
 	}
 	if c.LayoutContext {
 		out = append(out, "layout-context")
+	}
+	if c.StyleInspection {
+		out = append(out, "style-inspection")
 	}
 	return out
 }

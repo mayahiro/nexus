@@ -7,7 +7,7 @@ import (
 
 const (
 	ProtocolVersion  = "v1"
-	daemonBuildEpoch = "2026.08.02.1"
+	daemonBuildEpoch = "2026.08.05.1"
 )
 
 var DaemonVersion = currentDaemonVersion()

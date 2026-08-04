@@ -226,6 +226,60 @@ func (m *Manager) Observe(ctx context.Context, sessionID string, opts api.Observ
 	return *observation, nil
 }
 
+// InspectStyles performs one targeted style inspection under the same
+// per-session operation gate used by observe and act operations.
+func (m *Manager) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.StyleInspection, error) {
+	if req.SessionID == "" {
+		return api.StyleInspection{}, errors.New("session_id is required")
+	}
+	if strings.TrimSpace(req.NodeRef) == "" {
+		return api.StyleInspection{}, errors.New("node_ref is required")
+	}
+
+	m.mu.RLock()
+	sessionEntry, ok := m.sessions[req.SessionID]
+	m.mu.RUnlock()
+	if !ok {
+		return api.StyleInspection{}, fmt.Errorf("%w: %s", ErrSessionNotFound, req.SessionID)
+	}
+
+	if err := sessionEntry.acquire(ctx); err != nil {
+		return api.StyleInspection{}, err
+	}
+	defer sessionEntry.release()
+
+	if sessionEntry.closed {
+		return api.StyleInspection{}, fmt.Errorf("%w: %s", ErrSessionNotFound, req.SessionID)
+	}
+	m.touch(req.SessionID, sessionEntry)
+
+	inspector, ok := sessionEntry.adapter.(target.StyleInspector)
+	if !ok {
+		return api.StyleInspection{}, fmt.Errorf("%w: style-inspection", spec.ErrUnsupported)
+	}
+
+	trace := diagnostic.FromContext(ctx)
+	backendStartedAt := time.Now()
+	trace.Event("session_backend", "inspect_styles_start", diagnostic.Value("session", req.SessionID))
+	inspection, err := inspector.InspectStyles(ctx, req)
+	if err != nil {
+		trace.Event("session_backend", "inspect_styles_finish",
+			diagnostic.Value("session", req.SessionID),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
+		return api.StyleInspection{}, err
+	}
+	trace.Event("session_backend", "inspect_styles_finish",
+		diagnostic.Value("session", req.SessionID),
+		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+	)
+	if inspection == nil {
+		return api.StyleInspection{}, errors.New("empty style inspection")
+	}
+	return *inspection, nil
+}
+
 func (m *Manager) Act(ctx context.Context, sessionID string, action api.Action) (api.ActionResult, error) {
 	if sessionID == "" {
 		return api.ActionResult{}, errors.New("session_id is required")

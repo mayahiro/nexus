@@ -278,27 +278,33 @@ func newNagiGetCommand() *nagicli.Command {
 
 func newNagiInspectCommand() *nagicli.Command {
 	return nagicli.NewCommand("inspect").
-		About("Compare one node across two sessions").
-		UsageVariant("locator", "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("selector", "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("scope-selector", "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("scopes", "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--layout-context] [--json]").
-		Option(nagiRequiredValueOption("old-session", "ID", "Old session identifier")).
-		Option(nagiRequiredValueOption("new-session", "ID", "New session identifier")).
+		About("Inspect one node in one session or compare it across two sessions").
+		UsageVariant("single-locator", "<LOCATOR> --session <ID> [--nth <N>] [--scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("single-selector", "--selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("single-scope-selector", "--scope-selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("locator", "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("selector", "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("scope-selector", "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("scopes", "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		Option(nagiValueOption("session", "ID", "Session identifier for single-session inspection")).
+		Option(nagiValueOption("old-session", "ID", "Old session identifier")).
+		Option(nagiValueOption("new-session", "ID", "New session identifier")).
 		Option(nagiValueOption("selector", "CSS", "Raw CSS selector to inspect")).
 		Option(nagiValueOption("scope-selector", "CSS", "Common CSS scope")).
 		Option(nagiValueOption("old-scope-selector", "CSS", "Old-side CSS scope")).
 		Option(nagiValueOption("new-scope-selector", "CSS", "New-side CSS scope")).
 		Option(nagiRepeatedValueOption("css-property", "NAME", "Computed CSS property")).
 		Option(nagiIntOption("nth", "N", "Choose the nth matching node")).
+		Option(nagicli.Flag("no-style-sources").Long("no-style-sources").Help("Skip matched declaration and source location collection")).
 		Option(nagicli.Flag("layout-context").Long("layout-context").Help("Include ancestor layout context")).
 		Option(nagiJSONFlag()).
 		Argument(nagicli.Positional("locator").Parser(nagiInspectLocatorParser()).Help("Node locator")).
 		Validator(validateNagiInspectInvocation).
 		Handle(nagiRunHandler(runInspectInvocation)).
 		Note("Locator forms include @eN, role, text, label, testid, and href").
-		Note("A side-specific scope needs a common scope fallback or the other side-specific scope").
-		Link("Compare guide", aiCompareDocURL)
+		Note("Style sources are collected by default and do not claim a cascade winner").
+		Note("A side-specific scope is available only for old/new comparison").
+		Link("Inspect guide", aiInspectDocURL)
 }
 
 func newNagiKeysCommand() *nagicli.Command {
@@ -810,12 +816,39 @@ func validateNagiUploadInvocation(invocation *nagicli.Invocation) *nagicli.Diagn
 }
 
 func validateNagiInspectInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
+	session := strings.TrimSpace(nagiRawValue(invocation, "session"))
+	oldSession := strings.TrimSpace(nagiRawValue(invocation, "old-session"))
+	newSession := strings.TrimSpace(nagiRawValue(invocation, "new-session"))
 	locator := strings.TrimSpace(nagiRawValue(invocation, "locator"))
 	selector := strings.TrimSpace(nagiRawValue(invocation, "selector"))
 	scope := strings.TrimSpace(nagiRawValue(invocation, "scope-selector"))
 	oldScope := strings.TrimSpace(nagiRawValue(invocation, "old-scope-selector"))
 	newScope := strings.TrimSpace(nagiRawValue(invocation, "new-scope-selector"))
 	nth := nagiIntValue(invocation, "nth")
+	if session != "" {
+		if oldSession != "" || newSession != "" {
+			return nagiDiagnostic(
+				"inspect can not combine --session with --old-session or --new-session",
+				nagicli.OptionTarget("session"),
+				nagicli.OptionTarget("old-session"),
+				nagicli.OptionTarget("new-session"),
+			)
+		}
+		if oldScope != "" || newScope != "" {
+			return nagiDiagnostic(
+				"inspect --old-scope-selector and --new-scope-selector require old/new comparison",
+				nagicli.OptionTarget("old-scope-selector"),
+				nagicli.OptionTarget("new-scope-selector"),
+			)
+		}
+	} else if oldSession == "" || newSession == "" {
+		return nagiDiagnostic(
+			"inspect requires --session, or both --old-session and --new-session",
+			nagicli.OptionTarget("session"),
+			nagicli.OptionTarget("old-session"),
+			nagicli.OptionTarget("new-session"),
+		)
+	}
 	if locator == "" && selector == "" && scope == "" && oldScope == "" && newScope == "" {
 		return nagiDiagnostic("inspect requires a locator or selector scope", nagicli.ArgumentTarget("locator"))
 	}
@@ -839,17 +872,19 @@ func validateNagiInspectInvocation(invocation *nagicli.Invocation) *nagicli.Diag
 	if locator == "" && nth > 0 {
 		return nagiDiagnostic("inspect selector mode does not support --nth", nagicli.OptionTarget("nth"))
 	}
-	commonScope := scope
-	if locator == "" {
-		commonScope = firstNonEmpty(selector, scope)
-	}
-	if _, _, err := resolveInspectScopeSelectors(commonScope, oldScope, newScope); err != nil {
-		return nagiDiagnostic(
-			err.Error(),
-			nagicli.OptionTarget("scope-selector"),
-			nagicli.OptionTarget("old-scope-selector"),
-			nagicli.OptionTarget("new-scope-selector"),
-		)
+	if session == "" {
+		commonScope := scope
+		if locator == "" {
+			commonScope = firstNonEmpty(selector, scope)
+		}
+		if _, _, err := resolveInspectScopeSelectors(commonScope, oldScope, newScope); err != nil {
+			return nagiDiagnostic(
+				err.Error(),
+				nagicli.OptionTarget("scope-selector"),
+				nagicli.OptionTarget("old-scope-selector"),
+				nagicli.OptionTarget("new-scope-selector"),
+			)
+		}
 	}
 	return nil
 }

@@ -161,6 +161,41 @@ func TestObserveSession(t *testing.T) {
 	}
 }
 
+func TestInspectStyles(t *testing.T) {
+	backend := &styleSessionBackend{requests: make(chan api.InspectStylesRequest, 1)}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return backend
+	})
+	defer restoreBackend()
+
+	manager := NewManager()
+	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
+		TargetType: "browser",
+		SessionID:  "web1",
+		Backend:    "test",
+		TargetRef:  "/tmp/test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := api.InspectStylesRequest{
+		SessionID:     "web1",
+		NodeRef:       "@e1",
+		CSSProperties: []string{"width"},
+	}
+	inspection, err := manager.InspectStyles(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Computed["width"] != "154px" || inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected style inspection: %+v", inspection)
+	}
+	if got := <-backend.requests; got.NodeRef != "@e1" || got.SessionID != "web1" {
+		t.Fatalf("unexpected backend style inspection request: %+v", got)
+	}
+}
+
 func TestActSessionUnsupported(t *testing.T) {
 	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
 		return fakeSessionBackend{}
@@ -320,6 +355,23 @@ func (fakeSessionBackend) Observe(context.Context, api.ObserveOptions) (*api.Obs
 
 func (fakeSessionBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
 	return nil, errors.New("unsupported operation")
+}
+
+type styleSessionBackend struct {
+	fakeSessionBackend
+	requests chan api.InspectStylesRequest
+}
+
+func (*styleSessionBackend) Capabilities() spec.Capabilities {
+	return spec.Capabilities{Observe: true, StyleInspection: true}
+}
+
+func (b *styleSessionBackend) InspectStyles(_ context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error) {
+	b.requests <- req
+	return &api.StyleInspection{
+		Computed:           map[string]string{"width": "154px"},
+		StyleSourcesStatus: api.StyleSourcesStatusComplete,
+	}, nil
 }
 
 type serialSessionBackend struct {

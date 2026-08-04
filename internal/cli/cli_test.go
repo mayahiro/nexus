@@ -134,6 +134,9 @@ func TestHelp(t *testing.T) {
 	if code := Run(context.Background(), []string{"help", "inspect"}, &stdout, &stdout); code != 0 {
 		t.Fatalf("unexpected help inspect exit code: %d\n%s", code, stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `nxctl inspect <LOCATOR> --session <ID>`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), `nxctl inspect <LOCATOR> --old-session <ID> --new-session <ID>`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
@@ -143,7 +146,13 @@ func TestHelp(t *testing.T) {
 	if !strings.Contains(stdout.String(), `--layout-context`) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `--no-style-sources`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), `nxctl inspect --selector <CSS> --old-session <ID> --new-session <ID>`) {
+		t.Fatalf("unexpected help inspect output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), aiInspectDocURL) {
 		t.Fatalf("unexpected help inspect output: %s", stdout.String())
 	}
 
