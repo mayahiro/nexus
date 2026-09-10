@@ -1,7 +1,8 @@
 package comparecmd
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,8 @@ import (
 )
 
 func buildCompareSnapshot(observation api.Observation, options compareSnapshotOptions) compareSnapshot {
+	originalNodes := observation.Tree
+	observation, originalIndices := normalizeCompareObservation(observation, options)
 	nodes := make([]compareSnapshotNode, 0, len(observation.Tree))
 	includeStructure := compareNodeScopeIncludesStructure(options.NodeScope)
 	byID := map[int]api.Node{}
@@ -20,14 +23,11 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			byID[node.ID] = node
 		}
 	}
-	for originalIndex, node := range observation.Tree {
-		if matchesCompareDefaultIgnore(node, options) {
+	for index, node := range observation.Tree {
+		originalIndex := originalIndices[index]
+		if !compareObservedNodeInScope(originalNodes[originalIndex], options.NodeScope) {
 			continue
 		}
-		if matchesCompareSelectorRule(node, options.IgnoreNode) {
-			continue
-		}
-
 		fingerprint := strings.TrimSpace(node.Fingerprint)
 		if fingerprint == "" {
 			fingerprint = strings.Join([]string{
@@ -38,24 +38,17 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			}, "|")
 		}
 
-		name := normalizeCompareString(node.Name, options.IgnoreText)
-		text := normalizeCompareString(node.Text, options.IgnoreText)
-		value := normalizeCompareString(node.Value, options.IgnoreText)
-		href := normalizeCompareString(node.Attrs["href"], options.IgnoreText)
-		testID := normalizeCompareString(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), options.IgnoreText)
-		tag := normalizeCompareString(node.Attrs["tag"], options.IgnoreText)
-		idAttr := normalizeCompareString(node.Attrs["id"], options.IgnoreText)
-		nameAttr := normalizeCompareString(node.Attrs["name"], options.IgnoreText)
-		typeAttr := normalizeCompareString(node.Attrs["type"], options.IgnoreText)
-		placeholder := normalizeCompareString(node.Attrs["placeholder"], options.IgnoreText)
-		ariaLabel := normalizeCompareString(node.Attrs["aria-label"], options.IgnoreText)
-		if matchesCompareSelectorRule(node, options.MaskNode) {
-			name = ""
-			text = ""
-			value = ""
-			placeholder = ""
-			ariaLabel = ""
-		}
+		name := normalizeCompareString(node.Name, nil)
+		text := normalizeCompareString(node.Text, nil)
+		value := normalizeCompareString(node.Value, nil)
+		href := normalizeCompareString(node.Attrs["href"], nil)
+		testID := normalizeCompareString(firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), nil)
+		tag := normalizeCompareString(node.Attrs["tag"], nil)
+		idAttr := normalizeCompareString(node.Attrs["id"], nil)
+		nameAttr := normalizeCompareString(node.Attrs["name"], nil)
+		typeAttr := normalizeCompareString(node.Attrs["type"], nil)
+		placeholder := normalizeCompareString(node.Attrs["placeholder"], nil)
+		ariaLabel := normalizeCompareString(node.Attrs["aria-label"], nil)
 		css := compareNodeCSS(node, options.CSSProperties)
 		bounds := compareNodeBounds(node, options.CompareLayout)
 		matchBounds := compareNodeMatchingBounds(node)
@@ -77,6 +70,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			Name:             name,
 			Text:             text,
 			Value:            value,
+			States:           node.States,
 			Href:             href,
 			TestID:           testID,
 			CSS:              css,
@@ -89,6 +83,7 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			ID:               node.ID,
 			Children:         append([]int(nil), node.Children...),
 			OriginalIndex:    originalIndex,
+			StructurePath:    strings.TrimSpace(node.StructurePath),
 			Tag:              tag,
 			IDAttr:           idAttr,
 			NameAttr:         nameAttr,
@@ -97,9 +92,6 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 			AriaLabel:        ariaLabel,
 			MatchBounds:      matchBounds,
 			CropBounds:       cropBounds,
-		}
-		if !compareNodeInScope(snapshotNode, options.NodeScope) {
-			continue
 		}
 		nodes = append(nodes, snapshotNode)
 	}
@@ -121,9 +113,9 @@ func buildCompareSnapshot(observation api.Observation, options compareSnapshotOp
 
 	return compareSnapshot{
 		SessionID:       observation.SessionID,
-		URL:             normalizeCompareString(observation.URLOrScreen, options.IgnoreText),
-		Title:           normalizeCompareString(observation.Title, options.IgnoreText),
-		Text:            normalizeCompareString(observation.Text, options.IgnoreText),
+		URL:             normalizeCompareString(observation.URLOrScreen, nil),
+		Title:           normalizeCompareString(observation.Title, nil),
+		Text:            normalizeCompareString(observation.Text, nil),
 		Nodes:           nodes,
 		ReferenceBounds: compareReferenceBounds(observation, options.CompareLayout),
 	}
@@ -147,14 +139,15 @@ func buildCompareReportWithDecisions(oldSnapshot compareSnapshot, newSnapshot co
 
 func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnapshot compareSnapshot, scope *compareScope, matchMode string, matchingDebug bool, decisionMatches []compareNodeMatch, decisionEffects compareDecisionEffects, findingDecisionEffects compareFindingDecisionEffects) compareReport {
 	report := compareReport{
-		Old:   oldSnapshot,
-		New:   newSnapshot,
-		Scope: scope,
+		FindingIDVersion: 2,
+		Old:              oldSnapshot,
+		New:              newSnapshot,
+		Scope:            scope,
 	}
 
 	add := func(finding compareFinding) {
 		if strings.TrimSpace(finding.FindingID) == "" {
-			finding.FindingID = compareFindingID(finding)
+			finding.FindingID = compareFindingID(finding, oldSnapshot.URL, newSnapshot.URL, scope)
 		}
 		applyCompareFindingDecisionEffect(&finding, findingDecisionEffects.ByID[finding.FindingID])
 		severity, impact := classifyCompareFinding(finding)
@@ -177,6 +170,8 @@ func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnaps
 			report.Summary.NewNodes++
 		case "state_changed":
 			report.Summary.StateChanged++
+		case "attribute_changed":
+			report.Summary.AttributeChanged++
 		case "css_changed":
 			report.Summary.CSSChanged++
 		case "layout_changed":
@@ -207,8 +202,8 @@ func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnaps
 		add(compareFinding{
 			Kind:  "page_text_changed",
 			Field: "page_text",
-			Old:   summarizeCompareValue(oldSnapshot.Text),
-			New:   summarizeCompareValue(newSnapshot.Text),
+			Old:   oldSnapshot.Text,
+			New:   newSnapshot.Text,
 		})
 	}
 
@@ -221,12 +216,19 @@ func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnaps
 		addCompareMatchSummary(&report.Summary, match)
 		oldNode := oldSnapshot.Nodes[match.OldIndex]
 		newNode := newSnapshot.Nodes[match.NewIndex]
-		addCompareMatchedNodeFindings(add, oldSnapshot, newSnapshot, oldNode, newNode, match)
+		addCompareMatchedNodeFindings(func(finding compareFinding) {
+			finding.OldRef, finding.NewRef = oldNode.Ref, newNode.Ref
+			finding.oldNodeKey = compareNodeOccurrenceKey(oldNode, match.OldIndex)
+			finding.newNodeKey = compareNodeOccurrenceKey(newNode, match.NewIndex)
+			add(finding)
+		}, oldSnapshot, newSnapshot, oldNode, newNode, match)
 	}
 	for _, index := range matchResult.UnmatchedOld {
 		node := oldSnapshot.Nodes[index]
 		finding := compareFinding{
 			Kind:             "missing_node",
+			OldRef:           node.Ref,
+			oldNodeKey:       compareNodeOccurrenceKey(node, index),
 			Locator:          compareFindingLocator(&node, nil),
 			Fingerprint:      node.Fingerprint,
 			StructureKey:     node.StructureKey,
@@ -241,6 +243,8 @@ func buildCompareReportWithDecisionEffects(oldSnapshot compareSnapshot, newSnaps
 		node := newSnapshot.Nodes[index]
 		finding := compareFinding{
 			Kind:             "new_node",
+			NewRef:           node.Ref,
+			newNodeKey:       compareNodeOccurrenceKey(node, index),
 			Locator:          compareFindingLocator(nil, &node),
 			Fingerprint:      node.Fingerprint,
 			StructureKey:     node.StructureKey,
@@ -303,26 +307,30 @@ func appendCompareDecisionReasons(current []string, reasons []string) []string {
 	return result
 }
 
-func compareFindingID(finding compareFinding) string {
+func compareNodeOccurrenceKey(node compareSnapshotNode, index int) string {
+	if node.StructurePath != "" {
+		return "path:" + node.StructurePath
+	}
+	if node.Ref != "" {
+		return "ref:" + node.Ref
+	}
+	if node.ID > 0 {
+		return "id:" + strconv.Itoa(node.ID)
+	}
+	return fmt.Sprintf("index:%d:%d", node.OriginalIndex, index)
+}
+
+func compareFindingID(finding compareFinding, oldURL string, newURL string, scope *compareScope) string {
 	kind := compareFindingIDKind(finding.Kind)
-	parts := []string{
-		strings.TrimSpace(finding.Kind),
-		strings.TrimSpace(finding.Locator),
-		strings.TrimSpace(finding.Fingerprint),
-		strings.TrimSpace(finding.StructureKey),
-		strings.TrimSpace(finding.SubtreeSignature),
-		strings.TrimSpace(finding.Role),
-		strings.TrimSpace(finding.Label),
-		strings.TrimSpace(finding.Field),
-		strings.TrimSpace(finding.Old),
-		strings.TrimSpace(finding.New),
-	}
-	sum := sha1.Sum([]byte(strings.Join(parts, "\x1f")))
-	hash := fmt.Sprintf("%x", sum)
-	if len(hash) > 12 {
-		hash = hash[:12]
-	}
-	return kind + ":" + hash
+	// JSON frames fields unambiguously; full values and individual occurrences
+	// distinguish repeated controls and changes beyond a display preview.
+	payload, _ := json.Marshal([]any{2, oldURL, newURL, scope,
+		finding.Kind, finding.oldNodeKey, finding.newNodeKey,
+		finding.Locator, finding.Fingerprint, finding.StructureKey,
+		finding.SubtreeSignature, finding.Role, finding.Label,
+		finding.Field, finding.Old, finding.New})
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%s:v2:%x", kind, sum[:12])
 }
 
 func compareFindingIDKind(kind string) string {
@@ -388,8 +396,8 @@ func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compare
 			Role:        oldNode.Role,
 			Label:       firstNonEmpty(oldNode.Label, newNode.Label),
 			Field:       "text",
-			Old:         summarizeCompareValue(oldNode.Text),
-			New:         summarizeCompareValue(newNode.Text),
+			Old:         oldNode.Text,
+			New:         newNode.Text,
 		}, match))
 	}
 	if oldNode.Value != newNode.Value {
@@ -402,6 +410,39 @@ func addCompareMatchedNodeFindings(add func(compareFinding), oldSnapshot compare
 			Field:       "value",
 			Old:         oldNode.Value,
 			New:         newNode.Value,
+		}, match))
+	}
+	for _, attribute := range []struct{ field, old, new string }{
+		{"href", oldNode.Href, newNode.Href},
+		{"role", oldNode.Role, newNode.Role},
+		{"type", oldNode.TypeAttr, newNode.TypeAttr},
+		{"placeholder", oldNode.Placeholder, newNode.Placeholder},
+	} {
+		if attribute.old == attribute.new {
+			continue
+		}
+		add(compareFindingWithMatch(compareFinding{
+			Kind: "attribute_changed", Locator: locator, Fingerprint: oldNode.Fingerprint,
+			Role: oldNode.Role, Label: firstNonEmpty(oldNode.Label, newNode.Label),
+			Field: attribute.field, Old: attribute.old, New: attribute.new,
+		}, match))
+	}
+	for _, state := range sortedCompareCSSPropertyKeys(oldNode.States, newNode.States) {
+		oldValue, oldPresent := oldNode.States[state]
+		newValue, newPresent := newNode.States[state]
+		if oldValue == newValue && oldPresent == newPresent {
+			continue
+		}
+		if !oldPresent {
+			oldValue = "<absent>"
+		}
+		if !newPresent {
+			newValue = "<absent>"
+		}
+		add(compareFindingWithMatch(compareFinding{
+			Kind: "state_changed", Locator: locator, Fingerprint: oldNode.Fingerprint,
+			Role: oldNode.Role, Label: firstNonEmpty(oldNode.Label, newNode.Label),
+			Field: state, Old: oldValue, New: newValue,
 		}, match))
 	}
 	oldState := compareNodeState(oldNode)
@@ -870,10 +911,11 @@ func ResolveCSSPropertiesMode(compareCSS bool, all bool, requested []string) ([]
 
 func summarizeCompareValue(value string) string {
 	trimmed := strings.TrimSpace(value)
-	if len(trimmed) <= 120 {
+	runes := []rune(trimmed)
+	if len(runes) <= 120 {
 		return trimmed
 	}
-	return trimmed[:117] + "..."
+	return string(runes[:117]) + "..."
 }
 
 func classifyCompareFinding(finding compareFinding) (string, string) {
@@ -903,6 +945,14 @@ func classifyCompareFinding(finding compareFinding) (string, string) {
 			if finding.Role == "button" {
 				return "critical", "primary_action_missing"
 			}
+		}
+		return "warning", "content_changed"
+	case "attribute_changed":
+		if finding.Field == "href" {
+			return "warning", "navigation_changed"
+		}
+		if finding.Field == "type" || finding.Field == "placeholder" {
+			return "warning", "form_input_changed"
 		}
 		return "warning", "content_changed"
 	case "css_changed":

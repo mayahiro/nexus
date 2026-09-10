@@ -190,18 +190,21 @@ func (o Observation) ScreenshotBytes() ([]byte, error) {
 }
 
 type Node struct {
-	ID             int                 `json:"id"`
-	Ref            string              `json:"ref,omitempty"`
-	Fingerprint    string              `json:"fingerprint,omitempty"`
-	LocatorHints   []LocatorHint       `json:"locator_hints,omitempty"`
-	StructurePath  string              `json:"structure_path,omitempty"`
-	Selector       string              `json:"selector,omitempty"`
-	TextLength     int                 `json:"text_length,omitempty"`
-	Descendants    int                 `json:"descendants,omitempty"`
-	Role           string              `json:"role"`
-	Name           string              `json:"name,omitempty"`
-	Text           string              `json:"text,omitempty"`
-	Value          string              `json:"value,omitempty"`
+	ID            int           `json:"id"`
+	Ref           string        `json:"ref,omitempty"`
+	Fingerprint   string        `json:"fingerprint,omitempty"`
+	LocatorHints  []LocatorHint `json:"locator_hints,omitempty"`
+	StructurePath string        `json:"structure_path,omitempty"`
+	Selector      string        `json:"selector,omitempty"`
+	TextLength    int           `json:"text_length,omitempty"`
+	Descendants   int           `json:"descendants,omitempty"`
+	Role          string        `json:"role"`
+	Name          string        `json:"name,omitempty"`
+	Text          string        `json:"text,omitempty"`
+	Value         string        `json:"value,omitempty"`
+	// States holds current native control properties and explicitly present ARIA states.
+	// Missing keys are unobserved or inapplicable, distinct from "false" and "mixed".
+	States         map[string]string   `json:"states,omitempty"`
 	Styles         map[string]string   `json:"styles,omitempty"`
 	LayoutContext  []LayoutContextNode `json:"layout_context,omitempty"`
 	Bounds         Rect                `json:"bounds,omitempty"`

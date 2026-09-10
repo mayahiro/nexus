@@ -140,7 +140,7 @@ func TestCompareManifest(t *testing.T) {
 	if report.Summary.TotalPages != 2 || report.Summary.ComparedPages != 2 || report.Summary.FailedPages != 0 {
 		t.Fatalf("unexpected compare manifest summary: %+v", report.Summary)
 	}
-	if report.Summary.TotalFindings != 6 || report.Summary.Critical != 2 || report.Summary.Warning != 4 {
+	if report.Summary.TotalFindings != 8 || report.Summary.Critical != 4 || report.Summary.Warning != 4 {
 		t.Fatalf("unexpected compare manifest findings: %+v", report.Summary)
 	}
 	if len(report.Pages) != 2 {

@@ -293,14 +293,14 @@ func compareReviewFindingCrops(report compareReport, finding compareFinding, scr
 		crops = append(crops, compareReviewFindingCrop{
 			Side:       "old",
 			Screenshot: screenshots.Old,
-			Rect:       compareReviewFindingCropRect(report.Old.Nodes, finding),
+			Rect:       compareReviewFindingCropRect(report.Old.Nodes, finding, finding.OldRef),
 		})
 	}
 	if finding.Kind != "missing_node" {
 		crops = append(crops, compareReviewFindingCrop{
 			Side:       "new",
 			Screenshot: screenshots.New,
-			Rect:       compareReviewFindingCropRect(report.New.Nodes, finding),
+			Rect:       compareReviewFindingCropRect(report.New.Nodes, finding, finding.NewRef),
 		})
 	}
 	return crops
@@ -313,17 +313,23 @@ func compareReviewFindingCropsIncluded(finding compareFinding) bool {
 	return strings.TrimSpace(finding.FindingID) != ""
 }
 
-func compareReviewFindingCropRect(nodes []compareSnapshotNode, finding compareFinding) *api.Rect {
+func compareReviewFindingCropRect(nodes []compareSnapshotNode, finding compareFinding, ref string) *api.Rect {
 	bestScore := 0
 	var best *api.Rect
 	for i := range nodes {
 		node := nodes[i]
+		if ref != "" && node.Ref != ref {
+			continue
+		}
 		rect := node.CropBounds
 		if rect == nil {
 			rect = node.MatchBounds
 		}
 		if rect == nil || !compareRectValid(*rect) {
 			continue
+		}
+		if ref != "" {
+			return rect
 		}
 		score := compareReviewFindingNodeScore(node, finding)
 		if score > bestScore {

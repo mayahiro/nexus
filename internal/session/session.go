@@ -24,7 +24,13 @@ var (
 type Manager struct {
 	mu           sync.RWMutex
 	sessions     map[string]*entry
+	pending      map[string]*pendingAttach
 	shuttingDown bool
+}
+
+type pendingAttach struct {
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
 type entry struct {
@@ -37,6 +43,7 @@ type entry struct {
 func NewManager() *Manager {
 	return &Manager{
 		sessions: map[string]*entry{},
+		pending:  map[string]*pendingAttach{},
 	}
 }
 
@@ -54,19 +61,30 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.shuttingDown {
+		m.mu.Unlock()
 		return api.Session{}, errors.New("session manager is shutting down")
 	}
-	if _, exists := m.sessions[req.SessionID]; exists {
+	if m.sessions[req.SessionID] != nil || m.pending[req.SessionID] != nil {
+		m.mu.Unlock()
 		return api.Session{}, fmt.Errorf("%w: %s", ErrSessionExists, req.SessionID)
 	}
+	attachCtx, cancel := context.WithCancel(ctx)
+	pending := &pendingAttach{cancel: cancel, done: make(chan struct{})}
+	m.pending[req.SessionID] = pending
+	m.mu.Unlock()
+	defer func() {
+		cancel()
+		m.mu.Lock()
+		delete(m.pending, req.SessionID)
+		close(pending.done)
+		m.mu.Unlock()
+	}()
 
 	cfg := api.AttachConfig{
 		SessionID: req.SessionID,
 		TargetRef: req.TargetRef,
-		Options:   req.Options,
+		Options:   cloneOptions(req.Options),
 	}
 	trace := diagnostic.FromContext(ctx)
 	backendStartedAt := time.Now()
@@ -74,20 +92,21 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 		diagnostic.Value("session", req.SessionID),
 		diagnostic.Value("backend", backendName),
 	)
-	if err := adapter.Attach(ctx, cfg); err != nil {
+	attachErr := adapter.Attach(attachCtx, cfg)
+	if attachErr != nil {
 		trace.Event("session_backend", "attach_finish",
 			diagnostic.Value("session", req.SessionID),
 			diagnostic.Value("backend", backendName),
 			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
-			diagnostic.Value("error", err),
+			diagnostic.Value("error", attachErr),
 		)
-		return api.Session{}, err
+	} else {
+		trace.Event("session_backend", "attach_finish",
+			diagnostic.Value("session", req.SessionID),
+			diagnostic.Value("backend", backendName),
+			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
+		)
 	}
-	trace.Event("session_backend", "attach_finish",
-		diagnostic.Value("session", req.SessionID),
-		diagnostic.Value("backend", backendName),
-		diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
-	)
 
 	now := time.Now()
 	session := api.Session{
@@ -106,9 +125,33 @@ func (m *Manager) Attach(ctx context.Context, req api.AttachSessionRequest) (api
 		opGate:  make(chan struct{}, 1),
 	}
 	sessionEntry.opGate <- struct{}{}
-	m.sessions[req.SessionID] = sessionEntry
+	m.mu.Lock()
+	if attachErr == nil {
+		attachErr = attachCtx.Err()
+	}
+	if attachErr == nil && m.shuttingDown {
+		attachErr = errors.New("session manager is shutting down")
+	}
+	if attachErr == nil {
+		m.sessions[req.SessionID] = sessionEntry
+		session.Options = cloneOptions(session.Options)
+		m.mu.Unlock()
+		return session, nil
+	}
+	m.mu.Unlock()
 
-	return session, nil
+	// A canceled startup can still have created a browser. Cleanup must not
+	// inherit its canceled context, and failed cleanup remains retryable.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cleanupCancel()
+	if cleanupErr := adapter.Detach(cleanupCtx); cleanupErr != nil {
+		m.mu.Lock()
+		m.sessions[req.SessionID] = sessionEntry
+		m.mu.Unlock()
+		return api.Session{}, errors.Join(attachErr, fmt.Errorf("cleanup session %s: %w", req.SessionID, cleanupErr))
+	}
+
+	return api.Session{}, attachErr
 }
 
 func (m *Manager) List() []api.Session {
@@ -117,7 +160,9 @@ func (m *Manager) List() []api.Session {
 
 	out := make([]api.Session, 0, len(m.sessions))
 	for _, entry := range m.sessions {
-		out = append(out, entry.session)
+		session := entry.session
+		session.Options = cloneOptions(session.Options)
+		out = append(out, session)
 	}
 
 	slices.SortFunc(out, func(a, b api.Session) int {
@@ -354,6 +399,11 @@ func (e *entry) acquire(ctx context.Context) error {
 		)
 		return ctx.Err()
 	case <-e.opGate:
+		if err := ctx.Err(); err != nil {
+			e.release()
+			trace.Event("session_gate", "canceled", diagnostic.Value("error", err))
+			return err
+		}
 		trace.Event("session_gate", "acquired",
 			diagnostic.Value("wait_ms", time.Since(startedAt).Milliseconds()),
 		)
@@ -388,46 +438,49 @@ func (m *Manager) applyActionOptions(sessionID string, action api.Action) {
 	}
 }
 
+// Shutdown cancels pending startups and attempts to detach every active session.
+// Sessions whose cleanup fails remain registered so a later call can retry.
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.mu.Lock()
-	entries := make([]*entry, 0, len(m.sessions))
-	for _, sessionEntry := range m.sessions {
-		entries = append(entries, sessionEntry)
-	}
-	m.sessions = map[string]*entry{}
 	m.shuttingDown = true
+	pending := make([]*pendingAttach, 0, len(m.pending))
+	for _, startup := range m.pending {
+		pending = append(pending, startup)
+	}
 	m.mu.Unlock()
 
-	for _, sessionEntry := range entries {
-		if err := sessionEntry.acquire(ctx); err != nil {
-			return err
-		}
-		if sessionEntry.closed {
-			sessionEntry.release()
-			continue
-		}
-		trace := diagnostic.FromContext(ctx)
-		backendStartedAt := time.Now()
-		trace.Event("session_backend", "shutdown_detach_start",
-			diagnostic.Value("session", sessionEntry.session.ID),
-		)
-		err := sessionEntry.adapter.Detach(ctx)
-		fields := []diagnostic.Field{
-			diagnostic.Value("session", sessionEntry.session.ID),
-			diagnostic.Value("duration_ms", time.Since(backendStartedAt).Milliseconds()),
-		}
-		if err != nil {
-			fields = append(fields, diagnostic.Value("error", err))
-		}
-		trace.Event("session_backend", "shutdown_detach_finish", fields...)
-		sessionEntry.closed = true
-		sessionEntry.release()
-		if err != nil {
-			return err
+	for _, startup := range pending {
+		startup.cancel()
+	}
+	var errs []error
+	for _, startup := range pending {
+		select {
+		case <-startup.done:
+		case <-ctx.Done():
+			errs = append(errs, ctx.Err())
 		}
 	}
 
-	return nil
+	sessions := m.List()
+	results := make(chan error, len(sessions))
+	for _, session := range sessions {
+		go func() {
+			_, err := m.Detach(ctx, session.ID)
+			if errors.Is(err, ErrSessionNotFound) {
+				err = nil // Another detach already completed cleanup.
+			}
+			if err != nil {
+				err = fmt.Errorf("detach session %s: %w", session.ID, err)
+			}
+			results <- err
+		}()
+	}
+	for range sessions {
+		if err := <-results; err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func newAdapter(req api.AttachSessionRequest) (target.Adapter, string, error) {

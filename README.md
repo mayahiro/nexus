@@ -161,7 +161,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --all-css-properties
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
-nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
+nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector 'role=link&text=Legacy' --mask-selector 'role=textbox&name=Email'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
 nxctl flow run --manifest login-flow.json --json

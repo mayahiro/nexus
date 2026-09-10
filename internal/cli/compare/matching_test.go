@@ -2312,15 +2312,13 @@ func TestCompareNodeScopeAllDefaultIgnoresStructuralNoise(t *testing.T) {
 	}}
 
 	filtered := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeAll})
-	refs := make([]string, 0, len(filtered.Nodes))
+	ids := make([]int, 0, len(filtered.Nodes))
 	for _, node := range filtered.Nodes {
-		refs = append(refs, node.Fingerprint)
+		ids = append(ids, node.ID)
 	}
-	if slices.Contains(refs, "path") || slices.Contains(refs, "hidden") || slices.Contains(refs, "skip") || slices.Contains(refs, "hidden-attr") || slices.Contains(refs, "script") {
-		t.Fatalf("expected default ignores to suppress structural noise, got %+v", refs)
-	}
-	if !slices.Contains(refs, "svg") || !slices.Contains(refs, "kept") {
-		t.Fatalf("expected svg root and normal node to remain, got %+v", refs)
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 5}) {
+		t.Fatalf("expected only svg root and normal node to remain, got %+v", ids)
 	}
 
 	unfiltered := buildCompareSnapshot(observation, compareSnapshotOptions{NodeScope: compareNodeScopeAll, NoDefaultIgnores: true})

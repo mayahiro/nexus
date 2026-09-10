@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -846,6 +847,11 @@ func TestObserveCandidateSelectorNodeScopes(t *testing.T) {
 	}
 
 	semantic := observeCandidateSelector("semantic")
+	for _, selector := range strings.Split(actionable, ",") {
+		if !slices.Contains(strings.Split(semantic, ","), selector) {
+			t.Fatalf("semantic omits actionable selector %q", selector)
+		}
+	}
 	if !strings.Contains(semantic, "h1") || !strings.Contains(semantic, `[role="status"]`) || !strings.Contains(semantic, "[data-testid]") {
 		t.Fatalf("unexpected semantic selector: %s", semantic)
 	}

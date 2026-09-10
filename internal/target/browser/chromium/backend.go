@@ -243,6 +243,22 @@ func observeTreeExpressionWithSelector(cssProperties []string, scopeSelector str
     return (el.innerText || el.textContent || '').trim();
   };
 
+  const statesFor = (el) => {
+    const states = {};
+    if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+      states.checked = String(el.checked);
+      if (el.type === 'checkbox') states.indeterminate = String(el.indeterminate);
+    }
+    if (el.tagName === 'OPTION') states.selected = String(el.selected);
+    if (el.tagName === 'SELECT') {
+      states.selected_indices = JSON.stringify(Array.from(el.options).flatMap((option, index) => option.selected ? [index] : []));
+    }
+    for (const name of ['aria-checked', 'aria-selected', 'aria-expanded', 'aria-pressed', 'aria-current', 'aria-invalid', 'aria-busy', 'aria-disabled', 'aria-readonly', 'aria-required']) {
+      if (el.hasAttribute(name)) states[name] = el.getAttribute(name);
+    }
+    return states;
+  };
+
   const attrsFor = (el) => {
     const attrs = {};
     attrs.tag = el.tagName.toLowerCase();
@@ -481,6 +497,7 @@ func observeTreeExpressionWithSelector(cssProperties []string, scopeSelector str
       name: name,
       text: textFor(el),
       value: valueFor(el),
+      states: statesFor(el),
       styles: styles,
       layout_context: layoutContextFor(el),
       bounds: {
@@ -529,20 +546,21 @@ func observeCandidateSelector(nodeScope string) string {
 		"[onclick]",
 		"[tabindex]",
 	}
+	actionable := append(append([]string(nil), current...),
+		`[role="switch"]`,
+		`[role="menuitem"]`,
+		`[role="menuitemcheckbox"]`,
+		`[role="menuitemradio"]`,
+		`[role="option"]`,
+		`[role="slider"]`,
+		`[role="spinbutton"]`,
+		`[role="searchbox"]`,
+	)
 	switch strings.ToLower(strings.TrimSpace(nodeScope)) {
 	case "actionable":
-		return strings.Join(append(current,
-			`[role="switch"]`,
-			`[role="menuitem"]`,
-			`[role="menuitemcheckbox"]`,
-			`[role="menuitemradio"]`,
-			`[role="option"]`,
-			`[role="slider"]`,
-			`[role="spinbutton"]`,
-			`[role="searchbox"]`,
-		), ",")
+		return strings.Join(actionable, ",")
 	case "semantic":
-		return strings.Join(append(current,
+		return strings.Join(append(actionable,
 			"h1",
 			"h2",
 			"h3",
@@ -1372,7 +1390,7 @@ func (b *Backend) Detach(ctx context.Context) (resultErr error) {
 	b.mu.Unlock()
 
 	if cmd == nil {
-		return nil
+		return b.removeProfileDirectory(userDataDir)
 	}
 
 	cancel()
@@ -1397,7 +1415,21 @@ func (b *Backend) Detach(ctx context.Context) (resultErr error) {
 		trace.Event("chromium_process", "killed")
 	}
 
-	return os.RemoveAll(userDataDir)
+	return b.removeProfileDirectory(userDataDir)
+}
+
+// Called under opMu, including retries after the browser process has exited.
+func (b *Backend) removeProfileDirectory(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.RemoveAll(path); err != nil {
+		b.mu.Lock()
+		b.userDataDir = path
+		b.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func killProcessGroup(process *os.Process) error {
@@ -3927,33 +3959,16 @@ func waitForHydration(ctx context.Context, timeout time.Duration) error {
 
 func waitForNavigation(ctx context.Context, timeout time.Duration) error {
 	var initialURL string
-	if err := chromedp.Run(ctx, chromedp.Location(&initialURL)); err != nil {
-		return err
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
+	initialized := false
+	return pollBrowserWait(ctx, timeout, func(waitCtx context.Context) (bool, error) {
 		var currentURL string
-		err := chromedp.Run(ctx, chromedp.Location(&currentURL))
-		if err == nil && currentURL != "" && currentURL != initialURL {
-			return nil
+		err := chromedp.Run(waitCtx, chromedp.Location(&currentURL))
+		if err == nil && !initialized {
+			initialURL, initialized = currentURL, true
+			return false, nil
 		}
-		if err != nil && !isRetryableWaitError(err) {
-			return err
-		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("wait timed out after %s", timeout)
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
+		return err == nil && currentURL != "" && currentURL != initialURL, err
+	})
 }
 
 func waitForFunction(ctx context.Context, source string, timeout time.Duration) error {
@@ -3961,27 +3976,42 @@ func waitForFunction(ctx context.Context, source string, timeout time.Duration) 
 }
 
 func waitForExpression(ctx context.Context, expression string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
+	return pollBrowserWait(ctx, timeout, func(waitCtx context.Context) (bool, error) {
 		var ready bool
-		err := chromedp.Run(ctx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue, awaitPromise))
+		err := chromedp.Run(waitCtx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue, awaitPromise))
+		return ready, err
+	})
+}
+
+func pollBrowserWait(ctx context.Context, timeout time.Duration, check func(context.Context) (bool, error)) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	timeoutError := func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("wait timed out after %s: %w", timeout, waitCtx.Err())
+	}
+	for {
+		if waitCtx.Err() != nil {
+			return timeoutError()
+		}
+		ready, err := check(waitCtx)
+		if waitCtx.Err() != nil {
+			return timeoutError()
+		}
 		if err == nil && ready {
 			return nil
 		}
 		if err != nil && !isRetryableWaitError(err) {
 			return err
 		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("wait timed out after %s", timeout)
-		}
-
+		timer := time.NewTimer(100 * time.Millisecond)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-waitCtx.Done():
+			timer.Stop()
+			return timeoutError()
+		case <-timer.C:
 		}
 	}
 }
@@ -4604,6 +4634,7 @@ type rawNode struct {
 	Name           string                  `json:"name"`
 	Text           string                  `json:"text"`
 	Value          string                  `json:"value"`
+	States         map[string]string       `json:"states"`
 	Styles         map[string]string       `json:"styles"`
 	LayoutContext  []api.LayoutContextNode `json:"layout_context"`
 	Bounds         api.Rect                `json:"bounds"`
@@ -4644,6 +4675,7 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			Name:           strings.TrimSpace(node.Name),
 			Text:           strings.TrimSpace(node.Text),
 			Value:          strings.TrimSpace(node.Value),
+			States:         node.States,
 			Styles:         node.Styles,
 			LayoutContext:  normalizeLayoutContext(node.LayoutContext),
 			Bounds:         node.Bounds,

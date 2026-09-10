@@ -204,7 +204,13 @@ func compareHistogramNodeMatchesWithSets(oldNodes []compareSnapshotNode, newNode
 		})
 	}
 
+	// Decisions can cross automatic anchors. Keep every accepted pair, but use
+	// only a monotone subset as boundaries so regions cannot overlap.
+	anchors = compareHistogramLongestIncreasingAnchors(oldNodes, newNodes, anchors)
+	compareSortHistogramAnchors(oldNodes, newNodes, anchors)
 	for regionIndex, region := range compareHistogramRegions(oldNodes, newNodes, anchors, unmatchedOld, unmatchedNew) {
+		region.OldIndices = compareRemainingRegionIndices(region.OldIndices, unmatchedOld)
+		region.NewIndices = compareRemainingRegionIndices(region.NewIndices, unmatchedNew)
 		exact := compareExactNodeMatches(oldNodes, newNodes, region.OldIndices, region.NewIndices, "histogram:fingerprint", []string{"fingerprint", "anchor-region"})
 		compareHistogramApplyMatches(exact.Matches, unmatchedOld, unmatchedNew)
 		matches = append(matches, exact.Matches...)
@@ -1010,7 +1016,22 @@ func compareNodeSequenceBefore(nodes []compareSnapshotNode, left int, right int)
 	if leftOriginal != rightOriginal {
 		return leftOriginal < rightOriginal
 	}
+	// Reports written before original_index was serialized still carry IDs
+	// assigned in DOM order by the browser observation.
+	if nodes[left].ID > 0 && nodes[right].ID > 0 && nodes[left].ID != nodes[right].ID {
+		return nodes[left].ID < nodes[right].ID
+	}
 	return left < right
+}
+
+func compareRemainingRegionIndices(indices []int, remaining map[int]struct{}) []int {
+	result := make([]int, 0, len(indices))
+	for _, index := range indices {
+		if _, ok := remaining[index]; ok {
+			result = append(result, index)
+		}
+	}
+	return result
 }
 
 func compareCloneNodeIndexSet(values map[int]struct{}) map[int]struct{} {
