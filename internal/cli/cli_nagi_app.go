@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	nagicli "github.com/mayahiro/nagicli-go"
@@ -597,8 +598,18 @@ func nagiInspectLocatorParser() nagicli.ValueParser {
 	})
 }
 
+type nagiChoiceValueParser struct {
+	nagicli.ValueParser
+	choices []string
+}
+
+func (p nagiChoiceValueParser) PossibleValues() []string {
+	return slices.Clone(p.choices)
+}
+
 func nagiChoiceParser(metavar string, choices ...string) nagicli.ValueParser {
-	return nagicli.CustomParser(metavar, func(raw string) (string, error) {
+	choices = slices.Clone(choices)
+	parser := nagicli.CustomParser(metavar, func(raw string) (string, error) {
 		for _, choice := range choices {
 			if raw == choice {
 				return raw, nil
@@ -606,6 +617,7 @@ func nagiChoiceParser(metavar string, choices ...string) nagicli.ValueParser {
 		}
 		return "", fmt.Errorf("must be one of %s", strings.Join(choices, ", "))
 	})
+	return nagiChoiceValueParser{ValueParser: parser, choices: choices}
 }
 
 func nagiNonEmptyParser(metavar string) nagicli.ValueParser {

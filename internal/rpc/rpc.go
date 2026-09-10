@@ -96,51 +96,41 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Ping(ctx context.Context) (api.PingResponse, error) {
-	var res api.PingResponse
-	err := c.call(ctx, "ping", api.PingRequest{ProtocolVersion: api.ProtocolVersion}, &res)
-	return res, err
+	return c.callFor[api.PingResponse](ctx, "ping", api.PingRequest{ProtocolVersion: api.ProtocolVersion})
 }
 
 func (c *Client) AttachSession(ctx context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
-	var res api.AttachSessionResponse
-	err := c.call(ctx, "attach_session", req, &res)
-	return res, err
+	return c.callFor[api.AttachSessionResponse](ctx, "attach_session", req)
 }
 
 func (c *Client) ListSessions(ctx context.Context) (api.ListSessionsResponse, error) {
-	var res api.ListSessionsResponse
-	err := c.call(ctx, "list_sessions", api.ListSessionsRequest{}, &res)
-	return res, err
+	return c.callFor[api.ListSessionsResponse](ctx, "list_sessions", api.ListSessionsRequest{})
 }
 
 func (c *Client) DetachSession(ctx context.Context, req api.DetachSessionRequest) (api.DetachSessionResponse, error) {
-	var res api.DetachSessionResponse
-	err := c.call(ctx, "detach_session", req, &res)
-	return res, err
+	return c.callFor[api.DetachSessionResponse](ctx, "detach_session", req)
 }
 
 func (c *Client) StopDaemon(ctx context.Context) (api.StopDaemonResponse, error) {
-	var res api.StopDaemonResponse
-	err := c.call(ctx, "stop_daemon", api.StopDaemonRequest{}, &res)
-	return res, err
+	return c.callFor[api.StopDaemonResponse](ctx, "stop_daemon", api.StopDaemonRequest{})
 }
 
 func (c *Client) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
-	var res api.ObserveSessionResponse
-	err := c.call(ctx, "observe_session", req, &res)
-	return res, err
+	return c.callFor[api.ObserveSessionResponse](ctx, "observe_session", req)
 }
 
 // InspectStyles requests one targeted style inspection from the daemon.
 func (c *Client) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
-	var res api.InspectStylesResponse
-	err := c.call(ctx, "inspect_styles", req, &res)
-	return res, err
+	return c.callFor[api.InspectStylesResponse](ctx, "inspect_styles", req)
 }
 
 func (c *Client) ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
-	var res api.ActSessionResponse
-	err := c.call(ctx, "act_session", req, &res)
+	return c.callFor[api.ActSessionResponse](ctx, "act_session", req)
+}
+
+func (c *Client) callFor[T any](ctx context.Context, method string, params any) (T, error) {
+	var res T
+	err := c.call(ctx, method, params, &res)
 	return res, err
 }
 
@@ -303,16 +293,14 @@ func Serve(ctx context.Context, listener net.Listener, handler Handler, opts Ser
 		connectionsMu.Lock()
 		connections[conn] = struct{}{}
 		connectionsMu.Unlock()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() {
 				connectionsMu.Lock()
 				delete(connections, conn)
 				connectionsMu.Unlock()
 			}()
 			serveConn(ctx, conn, handler, opts)
-		}()
+		})
 	}
 
 	wg.Wait()

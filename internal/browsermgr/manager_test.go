@@ -23,7 +23,6 @@ func TestSetupAndStatus(t *testing.T) {
 	}
 
 	server := newBrowserTestServer(t)
-	defer server.Close()
 
 	paths := testPaths(t)
 	manager := New(paths)
@@ -84,7 +83,6 @@ func TestUpdateReplacesVersions(t *testing.T) {
 		chromiumVersion: "1.0.0",
 	}
 	server := newBrowserUpdateServer(t, state)
-	defer server.Close()
 
 	paths := testPaths(t)
 	manager := New(paths)
@@ -136,7 +134,6 @@ func TestUninstall(t *testing.T) {
 	}
 
 	server := newBrowserTestServer(t)
-	defer server.Close()
 
 	paths := testPaths(t)
 	manager := New(paths)
@@ -201,7 +198,7 @@ func newBrowserUpdateServer(t *testing.T, state *testServerState) *httptest.Serv
 		writeZip(t, w, state.chromiumVersion)
 	})
 
-	return httptest.NewServer(handler)
+	return httptest.NewTestServer(t, handler)
 }
 
 func writeZip(t *testing.T, w http.ResponseWriter, version string) {

@@ -62,6 +62,42 @@ func TestNagiApplicationSchema(t *testing.T) {
 	}
 }
 
+func TestNagiChoiceCompletion(t *testing.T) {
+	engine, err := nagicli.NewCompletionEngine(newNagiApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		args     []string
+		prefix   string
+		expected []string
+	}{
+		{name: "open backend", args: []string{"open", "--backend"}, expected: []string{"chromium"}},
+		{name: "attach backend", args: []string{"attach", "browser", "--backend"}, expected: []string{"chromium"}},
+		{name: "browser name", args: []string{"browser", "uninstall", "--name"}, expected: []string{"chromium"}},
+		{name: "eval world", args: []string{"eval", "--world"}, expected: []string{"main", "persistent"}},
+		{name: "wait state", args: []string{"wait", "selector", ".ready", "--state"}, expected: []string{"attached", "detached", "visible", "hidden"}},
+		{name: "scroll direction", args: []string{"scroll"}, prefix: "u", expected: []string{"up"}},
+		{name: "wait target", args: []string{"wait"}, prefix: "hyd", expected: []string{"hydrated"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := engine.Complete(t.Context(), nagicli.NewCompletionInput(test.args, test.prefix))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values []string
+			for _, candidate := range result.Candidates() {
+				values = append(values, candidate.Value())
+			}
+			if !reflect.DeepEqual(values, test.expected) {
+				t.Fatalf("unexpected choice completion: got %v, want %v", values, test.expected)
+			}
+		})
+	}
+}
+
 func TestNagiApplicationRepresentativeInvocations(t *testing.T) {
 	application := newNagiApplication()
 	tests := []struct {

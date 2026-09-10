@@ -1,6 +1,6 @@
 module github.com/mayahiro/nexus
 
-go 1.26.5
+go 1.27.1
 
 require (
 	github.com/chromedp/cdproto v0.0.0-20260804232424-e85f50dbfd32

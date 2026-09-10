@@ -1,3 +1,7 @@
+[tasks.docs]
+description = "Generate CLI reference from the command graph"
+run = "go run ./internal/cmd/clidocs"
+
 [tasks.format]
 description = "Format and Import Optimization"
 run = [

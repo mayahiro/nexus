@@ -7,23 +7,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
 func TestWaitTimeoutBoundsIndividualCheck(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	started := time.Now()
-	err := pollBrowserWait(ctx, 25*time.Millisecond, func(checkCtx context.Context) (bool, error) {
-		<-checkCtx.Done()
-		return false, checkCtx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		done := make(chan error, 1)
+		started := time.Now()
+		go func() {
+			done <- pollBrowserWait(context.Background(), 25*time.Millisecond, func(checkCtx context.Context) (bool, error) {
+				<-checkCtx.Done()
+				return false, checkCtx.Err()
+			})
+		}()
+
+		synctest.Sleep(24 * time.Millisecond)
+		select {
+		case err := <-done:
+			t.Fatalf("wait completed early: %v", err)
+		default:
+		}
+
+		synctest.Sleep(time.Millisecond)
+		select {
+		case err := <-done:
+			if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait timed out after 25ms") {
+				t.Fatalf("unexpected wait error: %v", err)
+			}
+		default:
+			t.Fatal("wait did not complete at its deadline")
+		}
+		if elapsed := time.Since(started); elapsed != 25*time.Millisecond {
+			t.Fatalf("unexpected wait duration: %v", elapsed)
+		}
 	})
-	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "wait timed out after 25ms") {
-		t.Fatalf("unexpected wait error: %v", err)
-	}
-	if time.Since(started) > time.Second {
-		t.Fatal("check exceeded the wait deadline")
-	}
 }
 
 func TestWaitUsesEarlierCallerDeadlineAndReturnsEvaluationError(t *testing.T) {

@@ -1272,15 +1272,12 @@ func (b *Backend) Attach(ctx context.Context, cfg spec.SessionConfig) (resultErr
 	b.mu.Unlock()
 
 	var outputWait sync.WaitGroup
-	outputWait.Add(2)
-	go func() {
-		defer outputWait.Done()
+	outputWait.Go(func() {
 		readStartupOutput(stdout, "stdout", startedCh, processDiagnostics.output)
-	}()
-	go func() {
-		defer outputWait.Done()
+	})
+	outputWait.Go(func() {
 		readStartupOutput(stderr, "stderr", startedCh, processDiagnostics.output)
-	}()
+	})
 	go func() {
 		waitErr := cmd.Wait()
 		outputWait.Wait()

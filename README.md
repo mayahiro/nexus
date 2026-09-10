@@ -16,8 +16,8 @@ Nexus is currently in an early usable stage.
 
 Prerequisites:
 
-- macOS
-- Go 1.26.5
+- macOS 13 Ventura or later, as required by [Go 1.27](https://go.dev/doc/go1.27#darwin)
+- Go 1.27.1 or later
 - `$(go env GOPATH)/bin` or `~/go/bin` on `PATH`
 
 Install:
@@ -209,6 +209,7 @@ Run `nxctl help <command> [subcommand]` for command-specific usage.
 Run `nxctl --help` or `nxctl -h` for the top-level command list and documentation links.
 
 The `nxctl` command surface is defined by one Nagi command graph. Parsing, validation diagnostics, nested help, and command execution use that same schema, so generated help is the canonical reference for accepted arguments and options.
+Help lists possible values for finite choices declared in the graph. The [CLI reference](docs/cli-reference.md) is generated from the same graph; use the installed command's help when working with a different version.
 Usage errors are rendered as structured messages such as `error[missing-required]: ...` followed by the relevant generated usage line.
 
 Most command flags can be placed before or after positional arguments.
@@ -310,6 +311,8 @@ Fallbacks:
 
 ## Documentation
 
+- CLI reference: [`docs/cli-reference.md`](docs/cli-reference.md)
+- CLI reference (Japanese guide): [`docs/cli-reference_ja.md`](docs/cli-reference_ja.md)
 - AI guide: [`docs/ai/usage.md`](docs/ai/usage.md)
 - AI inspect guide: [`docs/ai/inspect.md`](docs/ai/inspect.md)
 - AI inspect guide (Japanese): [`docs/ai/inspect_ja.md`](docs/ai/inspect_ja.md)
