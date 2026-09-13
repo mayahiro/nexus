@@ -29,6 +29,10 @@
 - [nxctl compare audit-decisions](#nxctl-compare-audit-decisions)
 - [nxctl close](#nxctl-close)
 - [nxctl dblclick](#nxctl-dblclick)
+- [nxctl dialog](#nxctl-dialog)
+- [nxctl dialog get](#nxctl-dialog-get)
+- [nxctl dialog accept](#nxctl-dialog-accept)
+- [nxctl dialog dismiss](#nxctl-dialog-dismiss)
 - [nxctl eval](#nxctl-eval)
 - [nxctl fill](#nxctl-fill)
 - [nxctl find](#nxctl-find)
@@ -81,6 +85,7 @@ Control managed browser sessions and compare interfaces
 - **compare**: Compare browser interfaces and manage matching decisions
 - **close**: Close one or all sessions
 - **dblclick**: Double\-click one observed node
+- **dialog**: Inspect and handle JavaScript dialogs
 - **eval**: Evaluate JavaScript in one session
 - **fill**: Replace the value of one observed node
 - **find**: Find observed nodes and optionally act on one
@@ -511,6 +516,81 @@ Double\-click one observed node
 ### Arguments
 
 - **\<NODE\>**: Observed node index or \@eN ref
+
+### Options
+
+- **\-\-session \<ID\>**: Session identifier \[default\: default\]
+- **\-\-json**: Print JSON
+- **\-h\, \-\-help**: Print help
+
+## nxctl dialog
+
+Inspect and handle JavaScript dialogs
+
+### Usage
+
+    nxctl dialog get [--session <ID>] [--json]
+
+    nxctl dialog accept [--text <TEXT>] [--session <ID>] [--json]
+
+    nxctl dialog dismiss [--session <ID>] [--json]
+
+### Commands
+
+- **get**: Show the currently open JavaScript dialog
+- **accept**: Accept the current JavaScript dialog
+- **dismiss**: Dismiss the current JavaScript dialog
+
+### Options
+
+- **\-h\, \-\-help**: Print help
+
+### Notes
+
+Supports alert\, confirm\, prompt\, and beforeunload in the selected session
+
+Page operations blocked by a dialog return an error\; handle the dialog before continuing
+
+## nxctl dialog get
+
+Show the currently open JavaScript dialog
+
+### Usage
+
+    nxctl dialog get [--session <ID>] [--json]
+
+### Options
+
+- **\-\-session \<ID\>**: Session identifier \[default\: default\]
+- **\-\-json**: Print JSON
+- **\-h\, \-\-help**: Print help
+
+## nxctl dialog accept
+
+Accept the current JavaScript dialog
+
+### Usage
+
+    nxctl dialog accept [--text <TEXT>] [--session <ID>] [--json]
+
+### Options
+
+- **\-\-session \<ID\>**: Session identifier \[default\: default\]
+- **\-\-json**: Print JSON
+- **\-\-text \<TEXT\>**: Prompt response\, including an empty string\; defaults to the prompt\'s initial value
+- **\-h\, \-\-help**: Print help
+
+### Notes
+
+\-\-text is valid only for prompt dialogs\; accepting beforeunload allows navigation
+
+## nxctl dialog dismiss
+
+Dismiss the current JavaScript dialog
+
+### Usage
+
+    nxctl dialog dismiss [--session <ID>] [--json]
 
 ### Options
 

@@ -33,6 +33,7 @@ func newNagiApplication() *nagicli.Command {
 		Subcommand(comparecmd.NewNagiCommand(connectClient)).
 		Subcommand(newNagiCloseCommand()).
 		Subcommand(newNagiNodeActionCommand("dblclick", "Double-click one observed node", runDblclickInvocation)).
+		Subcommand(newNagiDialogCommand()).
 		Subcommand(newNagiEvalCommand()).
 		Subcommand(newNagiFillCommand()).
 		Subcommand(newNagiFindCommand()).

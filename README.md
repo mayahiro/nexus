@@ -71,6 +71,8 @@ Use `fill` to replace a node value, `input` to type into a specific node, and `t
 See the [AI usage guide](docs/ai/usage.md#choosing-fill-input-or-type) for the controlled-form decision matrix.
 `batch` runs commands in order and stops at the first non-zero exit status unless `--keep-going` is set.
 
+Use `dialog get`, `dialog accept`, or `dialog dismiss` for JavaScript `alert`, `confirm`, `prompt`, and `beforeunload` dialogs. `dialog accept --text "Alice"` submits a prompt response; omitting `--text` preserves its initial value, and `--text ""` submits an empty string. Page operations interrupted by a dialog return an explicit error while keeping the session available for handling. The triggering action may already have partially executed; inspect the page after handling before repeating it. See the [dialog guide](docs/ai/dialogs.md) ([Japanese](docs/ai/dialogs_ja.md)), including how to capture dialogs during initial page load.
+
 When you want a meaning-based locator instead of a ref, use `find`:
 
 - `find role button click --name "Submit"`
@@ -199,7 +201,7 @@ Available command groups include:
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
 - navigation: `open`, `navigate`, `back`, `scroll`
 - inspection: `state`, `observe`, `get`, `screenshot`, `inspect`
-- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
+- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`, `dialog get|accept|dismiss`
 - migration diff: `compare`
 - scenario flow: `flow run`
 - automation flow: `batch`

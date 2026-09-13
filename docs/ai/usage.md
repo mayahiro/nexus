@@ -12,6 +12,7 @@ This is the main entry point for AI agents that use Nexus.
 
 - Compare guide: [docs/ai/compare.md](compare.md)
 - Inspect guide: [docs/ai/inspect.md](inspect.md)
+- JavaScript dialogs: [docs/ai/dialogs.md](dialogs.md) ([Japanese](dialogs_ja.md))
 - Flow guide: [docs/ai/flow.md](flow.md)
 - Playbooks: [docs/ai/playbooks/README.md](playbooks/README.md)
 - Migration playbook: [docs/ai/playbooks/migration.md](playbooks/migration.md)
@@ -60,6 +61,7 @@ nxctl help flow
 - Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional, because page changes can stale later refs
 - Use `batch --keep-going` only when later diagnostic steps remain useful after an earlier command fails
 - Add `wait` after actions that trigger async UI updates
+- Use `dialog get`, `dialog accept [--text <TEXT>]`, or `dialog dismiss` when a JavaScript dialog blocks a page operation; see the [dialog guide](dialogs.md) before repeating the triggering action
 - Move to `inspect` when one element needs computed styles or matched declaration sources
 
 Nexus serializes operations within one session. A queued operation still honors its own context deadline, so parallel callers fail by timeout instead of starting concurrent CDP work on the same tab.
@@ -135,7 +137,7 @@ Rules:
 - add `--verbose` to `screenshot` or `observe` to emit those stages for a successful request as well
 - `--recover-target` is not supported together with `--locator`
 - full-page captures are rejected above 16384 px width, 50000 px height, or 120 million pixels
-- an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout
+- an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout; handle it with `dialog accept` or `dialog dismiss` in the same session before retrying
 - refresh the locator from a recent `state` output if the page changed after navigation or interaction
 - in flow manifests, use `{"action":"screenshot","path":"...","locator":"..."}` for the same targeted capture behavior
 

@@ -1144,9 +1144,9 @@ type Backend struct {
 	persistentContextID runtime.ExecutionContextID
 	persistentLoaderID  string
 	persistentWorldName string
-	dialogOpen          bool
-	dialogType          string
-	dialogMessage       string
+	dialog              api.DialogState
+	dialogSequence      uint64
+	dialogInterrupt     func(api.DialogState)
 	activateBeforeOp    bool
 	processDiagnostics  *chromiumProcessDiagnostics
 }
@@ -1380,9 +1380,7 @@ func (b *Backend) Detach(ctx context.Context) (resultErr error) {
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.processDiagnostics = nil
 	b.mu.Unlock()
 
@@ -1466,7 +1464,13 @@ func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (result 
 		return nil, errors.New("chromium backend is not attached")
 	}
 
-	return b.observeViaCDP(ctx, url, opts)
+	operation := "observe"
+	if opts.WithScreenshot {
+		operation = "screenshot"
+	}
+	return runWithDialogGuard(b, ctx, operation, func(ctx context.Context) (*api.Observation, error) {
+		return b.observeViaCDP(ctx, url, opts)
+	})
 }
 
 // InspectStyles returns computed styles and best-effort authored declarations
@@ -1495,12 +1499,14 @@ func (b *Backend) InspectStyles(ctx context.Context, req api.InspectStylesReques
 		return nil, errors.New("chromium backend is not attached")
 	}
 
-	return withBackendPageTargetContext(b, ctx, url, func(targetCtx context.Context, _ pageTargetInfo) (*api.StyleInspection, error) {
-		selector, err := b.resolveNodeReferenceInContext(targetCtx, req.NodeRef)
-		if err != nil {
-			return nil, err
-		}
-		return inspectTargetStyles(targetCtx, selector, req.CSSProperties)
+	return runWithDialogGuard(b, ctx, "inspect", func(ctx context.Context) (*api.StyleInspection, error) {
+		return withBackendPageTargetContext(b, ctx, url, func(targetCtx context.Context, _ pageTargetInfo) (*api.StyleInspection, error) {
+			selector, err := b.resolveNodeReferenceInContext(targetCtx, req.NodeRef)
+			if err != nil {
+				return nil, err
+			}
+			return inspectTargetStyles(targetCtx, selector, req.CSSProperties)
+		})
 	})
 }
 
@@ -1528,6 +1534,15 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (result *api.Actio
 		return nil, errors.New("chromium backend is not attached")
 	}
 
+	if action.Kind == "dialog" {
+		return b.dialogViaCDP(ctx, url, action)
+	}
+	return runWithDialogGuard(b, ctx, action.Kind, func(ctx context.Context) (*api.ActionResult, error) {
+		return b.actViaCDP(ctx, url, action)
+	})
+}
+
+func (b *Backend) actViaCDP(ctx context.Context, url string, action api.Action) (*api.ActionResult, error) {
 	if strings.TrimSpace(action.NodeRef) != "" {
 		selector, err := b.resolveNodeReference(ctx, url, action.NodeRef)
 		if err != nil {
@@ -1615,9 +1630,7 @@ func (b *Backend) cleanupAfterExit() {
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.processDiagnostics = nil
 	b.mu.Unlock()
 
@@ -1862,9 +1875,7 @@ func (b *Backend) closeRemoteContexts() {
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.mu.Unlock()
 
 	if targetCancel != nil {
@@ -1884,13 +1895,19 @@ func (b *Backend) trackDialogEvent(targetID string, event any) {
 	}
 	switch value := event.(type) {
 	case *page.EventJavascriptDialogOpening:
-		b.dialogOpen = true
-		b.dialogType = string(value.Type)
-		b.dialogMessage = strings.TrimSpace(value.Message)
+		b.dialogSequence++
+		b.dialog = api.DialogState{
+			Open:          true,
+			Type:          string(value.Type),
+			Message:       value.Message,
+			URL:           value.URL,
+			DefaultPrompt: value.DefaultPrompt,
+		}
+		if b.dialogInterrupt != nil {
+			b.dialogInterrupt(b.dialog)
+		}
 	case *page.EventJavascriptDialogClosed:
-		b.dialogOpen = false
-		b.dialogType = ""
-		b.dialogMessage = ""
+		b.dialog = api.DialogState{}
 	}
 }
 
@@ -1898,18 +1915,10 @@ func (b *Backend) javascriptDialogError() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if !b.dialogOpen {
+	if !b.dialog.Open {
 		return nil
 	}
-	dialogType := b.dialogType
-	if dialogType == "" {
-		dialogType = "unknown"
-	}
-	message := b.dialogMessage
-	if message == "" {
-		message = "(empty message)"
-	}
-	return fmt.Errorf("screenshot is blocked by an open %s JavaScript dialog: %s", dialogType, message)
+	return &javascriptDialogBlockedError{operation: "screenshot", dialog: b.dialog}
 }
 
 func operationContext(targetCtx context.Context, requestCtx context.Context) (context.Context, func()) {
@@ -3199,9 +3208,7 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	b.targetCancel = targetCancel
 	b.targetInfo = targetInfo
 	b.clearObservationReferences()
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.mu.Unlock()
 	traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, ""))
 

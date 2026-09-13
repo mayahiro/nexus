@@ -257,6 +257,17 @@ type ActionResult struct {
 	Meta       map[string]string `json:"meta,omitempty"`
 }
 
+// DialogState describes the currently open JavaScript dialog in one browser
+// session. Type is alert, confirm, prompt, or beforeunload when Open is true.
+// Message and DefaultPrompt preserve the text supplied by the page.
+type DialogState struct {
+	Open          bool   `json:"open"`
+	Type          string `json:"type,omitempty"`
+	Message       string `json:"message,omitempty"`
+	URL           string `json:"url,omitempty"`
+	DefaultPrompt string `json:"default_prompt,omitempty"`
+}
+
 type Rect struct {
 	X int `json:"x"`
 	Y int `json:"y"`
