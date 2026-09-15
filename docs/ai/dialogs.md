@@ -38,6 +38,41 @@ The triggering operation may have partially executed. Handling the dialog lets t
 
 This changes dialog-blocked operations from generic timeouts to explicit errors. Normal operations retain their existing output. A default `batch` stops on that error; separate commands allow the agent to inspect the dialog and decide how to respond. A script can open another dialog immediately after one closes, so check `dialog get` again when needed.
 
+## In flows
+
+Use `{"action":"dialog","target":"get|accept|dismiss"}` as a flow step, choosing one target. `side` can be `old`, `new`, or `both` (the default). Set `text` only with `target: "accept"` for a prompt; omitting it preserves the initial value, while `"text": ""` sends an empty string. Dialog text supports variable substitution and preserves whitespace and Unicode.
+
+Add `"expect_dialog": true` to the `click`, `fill`, or `navigate` step that opens the dialog. This opt-in requires a new dialog to open before the step can complete, including dialogs opened asynchronously after the action's CDP response. An already-open dialog, an unrelated action error, or expiry of the wait remains a failure. Without this field, the existing error behavior is unchanged.
+
+For example, this scenario handles a prompt on both existing sessions:
+
+```json
+{
+  "scenarios": [{
+    "name": "name-prompt",
+    "old": { "session": "old" },
+    "new": { "session": "new" },
+    "steps": [
+      { "action": "click", "locator": "testid=rename", "expect_dialog": true, "timeout": 5000 },
+      { "action": "dialog", "target": "get" },
+      { "action": "dialog", "target": "accept", "text": "Alice" },
+      { "action": "wait", "target": "text", "value": "Alice" },
+      { "action": "compare" }
+    ]
+  }]
+}
+```
+
+Replace `accept` with `dismiss` to cancel, and omit `text` for a confirm or alert. Expected-dialog steps and dialog steps accept a positive `timeout` in milliseconds, defaulting to 30000 per side. For expected-dialog steps this bounds locator resolution, the action, and waiting for the dialog. A `get` step reports the current state immediately; it does not wait for a future dialog.
+
+The flow handles `old` and then `new` in each `both` step. A completed expected-dialog step means the dialog appeared; the page action may still be suspended. Place the handling step before further page observation or interaction, then use `wait` to verify the resulting page. `continue_on_error` is unnecessary for an expected dialog and still applies to actual failures as before. If a later side fails, earlier side results remain in the report.
+
+JSON step reports add `dialogs.old` and/or `dialogs.new`, each containing an action result. Expected-dialog results expose the open state in `dialog`; `get` exposes it in `value`; handling results expose `value.type` and `value.accepted`. Text reports include the per-side result messages. Existing manifests and ordinary step output keep their current behavior.
+
+For a dialog during page load in a fresh flow session, use endpoint `url: "about:blank"`, a `dialog` / `get` step, then a `navigate` step with `expect_dialog: true`.
+
+`beforeunload` still depends on Chrome's user-activation conditions. Flow's locator clicks run through JavaScript and do not establish that activation. Reuse sessions that have received a real user interaction, such as `nxctl click <X> <Y> --session <ID>`, before running a flow that expects a leave confirmation.
+
 ## Dialogs during page load
 
 Dialog tracking uses events from the session's CDP connection, which starts with the first page operation. To capture dialogs that appear during initial page load, establish the connection on a blank page before navigation:

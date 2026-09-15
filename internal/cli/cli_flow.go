@@ -79,7 +79,8 @@ type flowStep struct {
 	Action           string   `json:"action,omitempty"`
 	Locator          string   `json:"locator,omitempty"`
 	Nth              int      `json:"nth,omitempty"`
-	Text             string   `json:"text,omitempty"`
+	Text             *string  `json:"text,omitempty"`
+	ExpectDialog     bool     `json:"expect_dialog,omitempty"`
 	Target           string   `json:"target,omitempty"`
 	Value            string   `json:"value,omitempty"`
 	Path             string   `json:"path,omitempty"`
@@ -151,13 +152,14 @@ type flowScenarioReport struct {
 }
 
 type flowStepReport struct {
-	Name        string            `json:"name,omitempty"`
-	Action      string            `json:"action"`
-	Side        string            `json:"side,omitempty"`
-	Status      string            `json:"status"`
-	Error       string            `json:"error,omitempty"`
-	Compare     json.RawMessage   `json:"compare,omitempty"`
-	Screenshots map[string]string `json:"screenshots,omitempty"`
+	Name        string                      `json:"name,omitempty"`
+	Action      string                      `json:"action"`
+	Side        string                      `json:"side,omitempty"`
+	Status      string                      `json:"status"`
+	Error       string                      `json:"error,omitempty"`
+	Compare     json.RawMessage             `json:"compare,omitempty"`
+	Screenshots map[string]string           `json:"screenshots,omitempty"`
+	Dialogs     map[string]api.ActionResult `json:"dialogs,omitempty"`
 }
 
 type flowCompareSummary struct {
@@ -463,9 +465,16 @@ func resolveFlowStep(step flowStep, vars map[string]string) (flowStep, error) {
 	if err != nil {
 		return flowStep{}, err
 	}
-	step.Text, err = expandFlowString(step.Text, vars)
-	if err != nil {
-		return flowStep{}, err
+	if step.Text != nil {
+		text := *step.Text
+		if strings.TrimSpace(step.Action) != "dialog" {
+			text = strings.TrimSpace(text)
+		}
+		text, err = expandFlowRawString(text, vars)
+		if err != nil {
+			return flowStep{}, err
+		}
+		step.Text = &text
 	}
 	step.Target, err = expandFlowString(step.Target, vars)
 	if err != nil {
@@ -495,11 +504,17 @@ func resolveFlowStep(step flowStep, vars map[string]string) (flowStep, error) {
 	if err != nil {
 		return flowStep{}, err
 	}
+	if err := validateFlowDialogStep(step); err != nil {
+		return flowStep{}, err
+	}
 	return step, nil
 }
 
 func expandFlowString(value string, vars map[string]string) (string, error) {
-	value = strings.TrimSpace(value)
+	return expandFlowRawString(strings.TrimSpace(value), vars)
+}
+
+func expandFlowRawString(value string, vars map[string]string) (string, error) {
 	for {
 		start := strings.Index(value, "{{")
 		if start < 0 {
@@ -627,6 +642,18 @@ func executeFlowStep(ctx context.Context, client *rpc.Client, state flowExecutio
 		Side:   flowStepSide(step),
 		Status: "completed",
 	}
+	if step.ExpectDialog || strings.TrimSpace(step.Action) == "dialog" {
+		var err error
+		report.Dialogs, err = executeFlowDialogStep(ctx, client, state, step)
+		if err != nil {
+			report.Status = "failed"
+			report.Error = err.Error()
+			if step.ContinueOnError {
+				return report, nil
+			}
+		}
+		return report, err
+	}
 
 	switch strings.TrimSpace(step.Action) {
 	case "wait":
@@ -753,7 +780,7 @@ func executeFlowNodeStep(ctx context.Context, client *rpc.Client, state flowExec
 	if step.Nth < 0 {
 		return errors.New("nth must be a positive integer")
 	}
-	if actionKind == "fill" && step.Text == "" {
+	if actionKind == "fill" && (step.Text == nil || *step.Text == "") {
 		return errors.New("fill step requires text")
 	}
 
@@ -767,7 +794,9 @@ func executeFlowNodeStep(ctx context.Context, client *rpc.Client, state flowExec
 			NodeID:   &node.ID,
 			NodeRef:  node.Ref,
 			Selector: node.Selector,
-			Text:     step.Text,
+		}
+		if step.Text != nil {
+			action.Text = *step.Text
 		}
 		res, err := client.ActSession(ctx, api.ActSessionRequest{
 			SessionID: sessionID,
@@ -1211,6 +1240,11 @@ func printFlowReport(w io.Writer, report flowReport) {
 		}
 		for _, step := range scenario.Steps {
 			fmt.Fprintf(w, "- %s %s (%s)\n", step.Action, step.Name, step.Status)
+			for _, side := range []string{"old", "new"} {
+				if result, ok := step.Dialogs[side]; ok {
+					fmt.Fprintf(w, "  dialog[%s]: %s\n", side, result.Message)
+				}
+			}
 			if step.Error != "" {
 				fmt.Fprintf(w, "  error: %s\n", step.Error)
 			}

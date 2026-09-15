@@ -246,6 +246,10 @@ type Action struct {
 	Dir      string            `json:"dir,omitempty"`
 	Keys     []string          `json:"keys,omitempty"`
 	Args     map[string]string `json:"args,omitempty"`
+
+	// ExpectDialog waits for a new JavaScript dialog during invoke, fill, or
+	// navigate. Args["timeout_ms"] bounds the wait, defaulting to 30000 ms.
+	ExpectDialog bool `json:"expect_dialog,omitempty"`
 }
 
 type ActionResult struct {
@@ -255,6 +259,10 @@ type ActionResult struct {
 	Screenshot string            `json:"screenshot,omitempty"`
 	Value      interface{}       `json:"value"`
 	Meta       map[string]string `json:"meta,omitempty"`
+
+	// Dialog identifies the dialog that suspended an expected-dialog action.
+	// OK means the expected dialog opened, not that the page operation completed.
+	Dialog *DialogState `json:"dialog,omitempty"`
 }
 
 // DialogState describes the currently open JavaScript dialog in one browser

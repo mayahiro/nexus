@@ -1534,6 +1534,9 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (result *api.Actio
 		return nil, errors.New("chromium backend is not attached")
 	}
 
+	if action.ExpectDialog {
+		return b.actExpectingDialog(ctx, url, action)
+	}
 	if action.Kind == "dialog" {
 		return b.dialogViaCDP(ctx, url, action)
 	}

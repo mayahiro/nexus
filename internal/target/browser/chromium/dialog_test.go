@@ -173,6 +173,24 @@ func TestDialogGuard(t *testing.T) {
 	}
 }
 
+func TestExpectedDialogValidation(t *testing.T) {
+	backend := New()
+	for _, action := range []api.Action{
+		{Kind: "eval", ExpectDialog: true},
+		{Kind: "invoke", Args: map[string]string{"timeout_ms": "0"}},
+		{Kind: "navigate", Args: map[string]string{"timeout_ms": "invalid"}},
+		{Kind: "fill", Args: map[string]string{"timeout_ms": "9223372036854775807"}},
+	} {
+		if _, err := backend.actExpectingDialog(t.Context(), "", action); err == nil {
+			t.Fatalf("expected validation error for %+v", action)
+		}
+	}
+	backend.dialog = api.DialogState{Open: true, Type: "alert"}
+	if result, err := backend.actExpectingDialog(t.Context(), "", api.Action{Kind: "invoke"}); err == nil || result != nil {
+		t.Fatalf("already-open dialog was treated as a new dialog: %+v, %v", result, err)
+	}
+}
+
 func TestDialogChromiumE2E(t *testing.T) {
 	if os.Getenv("NEXUS_E2E") != "1" {
 		t.Skip("set NEXUS_E2E=1 to run real chromium e2e")
@@ -296,7 +314,15 @@ func TestDialogChromiumE2E(t *testing.T) {
 	// A real mouse event gives beforeunload the sticky user activation it needs.
 	mustAct(t, api.Action{Kind: "invoke", Args: map[string]string{"x": "150", "y": "18"}})
 	for _, operation := range []string{"dismiss", "accept"} {
-		assertBlocked(t, api.Action{Kind: "navigate", Args: map[string]string{"url": server.URL + "/next"}})
+		navigation := api.Action{Kind: "navigate", Args: map[string]string{"url": server.URL + "/next"}}
+		if operation == "accept" {
+			navigation.ExpectDialog = true
+			if result := mustAct(t, navigation); result.Dialog == nil || result.Dialog.Type != "beforeunload" {
+				t.Fatalf("expected beforeunload result: %+v", result)
+			}
+		} else {
+			assertBlocked(t, navigation)
+		}
 		if state := mustAct(t, dialogAction("get")).Value.(api.DialogState); state.Type != "beforeunload" {
 			t.Fatalf("expected beforeunload: %+v", state)
 		}
@@ -324,4 +350,14 @@ func TestDialogChromiumE2E(t *testing.T) {
 	if got := mustAct(t, api.Action{Kind: "eval", Text: "window.loadResult"}).Value; got != "loaded" {
 		t.Fatalf("page-load script did not resume: %v", got)
 	}
+	_, err = act(api.Action{Kind: "navigate", ExpectDialog: true, Args: map[string]string{"url": server.URL, "timeout_ms": "150"}})
+	if err == nil || !strings.Contains(err.Error(), "expected JavaScript dialog") {
+		t.Fatalf("missing dialog did not time out: %v", err)
+	}
+	mustAct(t, api.Action{Kind: "wait", Args: map[string]string{"target": "selector", "value": "#alert", "state": "visible"}})
+	_, err = act(api.Action{Kind: "invoke", ExpectDialog: true, Selector: "#missing"})
+	if err == nil || errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ordinary action error was swallowed: %v", err)
+	}
+	mustAct(t, dialogAction("get"))
 }

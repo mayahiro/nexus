@@ -57,6 +57,7 @@ The currently implemented flow actions are:
 - `navigate`
 - `click`
 - `fill`
+- `dialog`
 - `viewport`
 - `screenshot`
 - `compare`
@@ -65,10 +66,12 @@ Useful step fields:
 
 - `side`: `old`, `new`, or `both`
 - `continue_on_error`
-- `timeout` for `wait` and `screenshot`, in milliseconds
+- `timeout` for `wait`, `screenshot`, `dialog`, and steps with `expect_dialog`, in milliseconds
 - `locator` for `click`, `fill`, and targeted `screenshot`
 - `nth` for repeated locator matches
-- `text` for `fill`
+- `text` for `fill` and prompt acceptance with `dialog`
+- `target`: `get`, `accept`, or `dismiss` for `dialog`
+- `expect_dialog: true` on `click`, `fill`, or `navigate` to wait for a new JavaScript dialog and continue to its handling step
 - `value` for `wait`, `navigate`, and `viewport`
 - `path`, `full`, and `annotate` for `screenshot`
 
@@ -82,6 +85,8 @@ For a generic post-load stabilization barrier, use a wait step with `"target": "
 `compare` supports step-level overrides such as `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 `all_css_properties` and `css_property` are alternative modes. Do not set both in the same defaults or step object; the manifest is rejected. A step-level `css_property` list overrides an inherited exhaustive mode.
 Set step-level `compare_css` to false without another step-level CSS mode to disable inherited CSS comparison.
+
+For JavaScript dialogs, place a `dialog` handling step after the step with `expect_dialog: true`, then verify the page with `wait`. Expected-dialog and dialog steps default to a 30000 ms timeout per side. A missing dialog or unrelated action error still fails the step. `dialog` / `get` reports the current state without waiting for a future dialog. See the [flow dialog examples and result format](dialogs.md#in-flows) ([Japanese](dialogs_ja.md#flow-内での操作)).
 
 ## Why `navigate` Matters
 

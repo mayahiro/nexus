@@ -912,6 +912,10 @@ Run a flow manifest
 - **\-\-json**: Print JSON
 - **\-h\, \-\-help**: Print help
 
+### Notes
+
+Use expect\_dialog on click\, fill\, or navigate before a dialog get\, accept\, or dismiss step
+
 ## nxctl get
 
 Read values from one browser session

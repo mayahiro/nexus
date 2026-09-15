@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
@@ -15,6 +17,57 @@ import (
 type javascriptDialogBlockedError struct {
 	operation string
 	dialog    api.DialogState
+}
+
+// Called under opMu. Keep the event guard active after an action's CDP response
+// so dialogs opened by a timer are also observed before releasing the session.
+func (b *Backend) actExpectingDialog(ctx context.Context, url string, action api.Action) (*api.ActionResult, error) {
+	switch action.Kind {
+	case "invoke", "fill", "navigate":
+	default:
+		return nil, errors.New("expect_dialog is only supported for invoke, fill, or navigate")
+	}
+	timeout := 30 * time.Second
+	if raw, ok := action.Args["timeout_ms"]; ok {
+		ms, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || ms <= 0 || ms > int64((1<<63-1)/time.Millisecond) {
+			return nil, errors.New("dialog timeout_ms must be a positive duration in milliseconds")
+		}
+		timeout = time.Duration(ms) * time.Millisecond
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var actionErr error
+	ran := false
+	_, err := runWithDialogGuard(b, ctx, action.Kind, func(guardCtx context.Context) (*api.ActionResult, error) {
+		ran = true
+		result, err := b.actViaCDP(guardCtx, url, action)
+		actionErr = err
+		if err != nil {
+			return nil, err
+		}
+		if result == nil || !result.OK {
+			actionErr = fmt.Errorf("%s failed before the expected dialog opened", action.Kind)
+			return nil, actionErr
+		}
+		<-guardCtx.Done()
+		return nil, guardCtx.Err()
+	})
+	var blocked *javascriptDialogBlockedError
+	if ran && errors.As(err, &blocked) && (actionErr == nil || errors.Is(actionErr, context.Canceled)) {
+		return &api.ActionResult{
+			OK: true, Changed: true, Dialog: &blocked.dialog,
+			Message: fmt.Sprintf("%s paused for expected %s dialog", action.Kind, blocked.dialog.Type),
+		}, nil
+	}
+	if actionErr != nil && !errors.Is(actionErr, context.Canceled) {
+		return nil, actionErr
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return nil, fmt.Errorf("waiting for expected JavaScript dialog: %w", err)
+	}
+	return nil, err
 }
 
 func (e *javascriptDialogBlockedError) Error() string {

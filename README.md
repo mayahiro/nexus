@@ -260,7 +260,8 @@ Use `get bbox --selector <css>` when you need the viewport-relative bounds for a
 Use `get text|value|attributes|bbox --refs <@eN,@eN,...>` when you need read-only values for several recent refs in one command.
 Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional; Nexus stops at the first failed click.
 
-`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.
+`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `dialog`, `viewport`, `screenshot`, and `compare` steps.
+Set `expect_dialog: true` on a `click`, `fill`, or `navigate` step that opens a JavaScript dialog, then handle it with an `action: "dialog"` step and `target: "get"`, `"accept"`, or `"dismiss"`. Prompt acceptance supports `text`, including an empty string. See the [flow dialog guide](docs/ai/dialogs.md#in-flows).
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.

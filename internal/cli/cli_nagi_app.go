@@ -249,6 +249,7 @@ func newNagiFlowCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("run").
 				About("Run a flow manifest").
+				Note("Use expect_dialog on click, fill, or navigate before a dialog get, accept, or dismiss step").
 				UsageVariant("default", "--manifest <FILE> [--scenario <NAME>] [--matrix <NAME>] [--continue-on-error] [--output-json <FILE>] [--json]").
 				Option(nagiRequiredValueOption("manifest", "FILE", "Flow manifest JSON")).
 				Option(nagiValueOption("scenario", "NAME", "Scenario name")).
