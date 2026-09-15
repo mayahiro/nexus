@@ -20,13 +20,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/css"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
+	"github.com/chromedp/chromedp"
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
 	"github.com/mayahiro/nexus/internal/browsermgr"
 	"github.com/mayahiro/nexus/internal/config"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
@@ -49,17 +54,6 @@ func TestAttachAndDetach(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	logs, err := backend.Logs(context.Background(), api.LogOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) == 0 {
-		t.Fatal("expected logs")
-	}
-	if !strings.Contains(logs[0].Message, "DevTools listening on ws://127.0.0.1:9222/") {
-		t.Fatalf("unexpected logs: %+v", logs)
-	}
-
 	argsData, err := os.ReadFile(argsPath)
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +74,150 @@ func TestAttachAndDetach(t *testing.T) {
 
 func TestCapabilities(t *testing.T) {
 	capabilities := New().Capabilities()
-	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.Logs || !capabilities.LayoutContext {
+	if !capabilities.Observe || !capabilities.Act || !capabilities.Screenshot || !capabilities.LayoutContext || !capabilities.StyleInspection {
 		t.Fatalf("unexpected capabilities: %+v", capabilities)
+	}
+}
+
+func TestPopulateStyleDeclarations(t *testing.T) {
+	const styleSheetID cdp.StyleSheetID = "sheet-1"
+	properties := emptyStylePropertyInspections([]string{"width", "margin-left", "color", "--Brand"})
+	snapshot := matchedStyleSnapshot{
+		MatchedRules: []*css.RuleMatch{
+			{
+				Rule: &css.Rule{
+					StyleSheetID: styleSheetID,
+					SelectorList: &css.SelectorList{
+						Text: ".card, .link-list",
+						Selectors: []*css.Value{
+							{Text: ".card"},
+							{Text: ".link-list"},
+						},
+					},
+					Origin: css.StyleSheetOriginRegular,
+					Style: &css.Style{
+						StyleSheetID: styleSheetID,
+						Range:        &css.SourceRange{StartLine: 0, StartColumn: 15},
+						CSSProperties: []*css.Property{
+							{
+								Name:      "width",
+								Value:     "11em",
+								Text:      "width: 11em;",
+								Important: true,
+								Range:     &css.SourceRange{StartLine: 0, StartColumn: 6},
+							},
+							{
+								Name:  "width",
+								Value: "11em",
+								Text:  "width: 11em;",
+							},
+							{
+								Name:  "margin",
+								Value: "1px 2px 3px 12px",
+								LonghandProperties: []*css.Property{
+									{Name: "margin-left", Value: "12px"},
+								},
+								Range: &css.SourceRange{StartLine: 2, StartColumn: 4},
+							},
+							{
+								Name:  "--Brand",
+								Value: "navy",
+								Range: &css.SourceRange{StartLine: 3, StartColumn: 4},
+							},
+						},
+					},
+				},
+				MatchingSelectors: []int64{1},
+			},
+		},
+		Inherited: []*css.InheritedStyleEntry{
+			{
+				InlineStyle: &css.Style{CSSProperties: []*css.Property{{
+					Name:  "color",
+					Value: "red",
+				}}},
+			},
+		},
+		Headers: map[cdp.StyleSheetID]*css.StyleSheetHeader{
+			styleSheetID: {
+				StyleSheetID: styleSheetID,
+				SourceURL:    "https://example.com/handbooks.css",
+				SourceMapURL: "handbooks.css.map",
+				StartLine:    10,
+				StartColumn:  4,
+			},
+		},
+	}
+
+	if partial := populateStyleDeclarations(properties, snapshot); partial {
+		t.Fatal("complete stylesheet metadata was reported as partial")
+	}
+
+	width := properties[0].Declarations
+	if len(width) != 1 {
+		t.Fatalf("unexpected width declarations: %+v", width)
+	}
+	if width[0].Property != "width" || width[0].Value != "11em" || width[0].Relation != "direct" || !width[0].Important {
+		t.Fatalf("unexpected width declaration: %+v", width[0])
+	}
+	if width[0].Selector != ".card, .link-list" || len(width[0].MatchingSelectors) != 1 || width[0].MatchingSelectors[0] != ".link-list" {
+		t.Fatalf("unexpected matched selector metadata: %+v", width[0])
+	}
+	if width[0].SourceURL != "https://example.com/handbooks.css" || width[0].SourceMapURL != "handbooks.css.map" || width[0].Line != 11 || width[0].Column != 11 {
+		t.Fatalf("unexpected width source location: %+v", width[0])
+	}
+
+	margin := properties[1].Declarations
+	if len(margin) != 1 || margin[0].Property != "margin" || margin[0].Relation != "shorthand" || margin[0].ResolvedValue != "12px" {
+		t.Fatalf("unexpected shorthand declaration: %+v", margin)
+	}
+	if margin[0].Line != 13 || margin[0].Column != 5 {
+		t.Fatalf("unexpected shorthand source location: %+v", margin[0])
+	}
+
+	color := properties[2].Declarations
+	if len(color) != 1 || !color[0].Inline || !color[0].Inherited || color[0].AncestorDepth != 1 {
+		t.Fatalf("unexpected inherited declaration: %+v", color)
+	}
+	custom := properties[3].Declarations
+	if len(custom) != 1 || custom[0].Property != "--Brand" {
+		t.Fatalf("unexpected custom property declaration: %+v", custom)
+	}
+}
+
+func TestPopulateStyleDeclarationsReportsMissingSourceMetadata(t *testing.T) {
+	properties := emptyStylePropertyInspections([]string{"width"})
+	snapshot := matchedStyleSnapshot{
+		MatchedRules: []*css.RuleMatch{{
+			Rule: &css.Rule{
+				StyleSheetID: "missing",
+				Style: &css.Style{CSSProperties: []*css.Property{{
+					Name:  "width",
+					Value: "11em",
+				}}},
+			},
+		}},
+		Headers: map[cdp.StyleSheetID]*css.StyleSheetHeader{},
+	}
+
+	if partial := populateStyleDeclarations(properties, snapshot); !partial {
+		t.Fatal("missing stylesheet metadata was not reported as partial")
+	}
+	if len(properties[0].Declarations) != 1 || properties[0].Declarations[0].SourceURL != "" {
+		t.Fatalf("unexpected partial declaration: %+v", properties[0].Declarations)
+	}
+}
+
+func TestNormalizeRequestedStylePropertiesPreservesCustomPropertyCase(t *testing.T) {
+	got := normalizeRequestedStyleProperties([]string{" color ", "COLOR", "--Brand", "--brand", ""})
+	want := []string{"color", "--Brand", "--brand"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected normalized properties: %#v", got)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("unexpected normalized properties: got=%#v want=%#v", got, want)
+		}
 	}
 }
 
@@ -145,6 +281,106 @@ func TestCurrentPageTarget(t *testing.T) {
 
 	if target.ID != "page1" {
 		t.Fatalf("unexpected target: %+v", target)
+	}
+}
+
+func TestTracePageTargetSnapshotReportsExpectedTargetPresence(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/list" {
+			http.NotFound(w, r)
+			return
+		}
+		targets := []pageTargetInfo{
+			{ID: "worker1", Type: "worker", URL: "https://private.example/worker.js"},
+		}
+		for index := 1; index <= maxPageTargetSnapshotIDs+1; index++ {
+			targets = append(targets, pageTargetInfo{
+				ID:   fmt.Sprintf("page%d", index),
+				Type: "page",
+				URL:  fmt.Sprintf("https://private.example/page/%d", index),
+			})
+		}
+		json.NewEncoder(w).Encode(targets)
+	}))
+	defer server.Close()
+
+	runCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := &Backend{
+		runCtx:     runCtx,
+		targetInfo: pageTargetInfo{ID: "page1"},
+	}
+	var entries []string
+	trace := diagnostic.New("observe_session", false, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx := diagnostic.WithTrace(context.Background(), trace)
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	backend.tracePageTargetSnapshot(ctx, wsURL, "")
+	trace.Finish(errors.New("capture screenshot failed"))
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`stage="page_target_snapshot" event="finish"`,
+		`expected_target="page1"`,
+		`expected_target_present=true`,
+		`page_target_count=17`,
+		`page_target_ids="page1,page2`,
+		`page_target_ids_truncated=true`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("target snapshot does not contain %q:\n%s", expected, joined)
+		}
+	}
+	if strings.Contains(joined, "private.example") {
+		t.Fatalf("target snapshot exposed a target URL:\n%s", joined)
+	}
+	if strings.Contains(joined, "page17") {
+		t.Fatalf("target snapshot did not limit listed target IDs:\n%s", joined)
+	}
+}
+
+func TestTracePageTargetSnapshotRespectsRequestCancellation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Second):
+			json.NewEncoder(w).Encode([]pageTargetInfo{{ID: "page1", Type: "page"}})
+		}
+	}))
+	defer server.Close()
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	backend := &Backend{runCtx: runCtx, targetInfo: pageTargetInfo{ID: "page1"}}
+	var entries []string
+	trace := diagnostic.New("observe_session", false, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx, cancel := context.WithCancel(diagnostic.WithTrace(context.Background(), trace))
+	cancel()
+
+	wsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	backend.tracePageTargetSnapshot(ctx, wsURL, "page1")
+	trace.Finish(errors.New("capture screenshot failed"))
+	if joined := strings.Join(entries, "\n"); !strings.Contains(joined, "context canceled") {
+		t.Fatalf("target snapshot did not report request cancellation:\n%s", joined)
+	}
+}
+
+func TestShouldTracePageTargetSnapshot(t *testing.T) {
+	for _, message := range []string{
+		"capture screenshot failed: context deadline exceeded",
+		"No target with given id found (-32602)",
+		"page target changed during reattach",
+		"target crashed",
+	} {
+		if !shouldTracePageTargetSnapshot(errors.New(message)) {
+			t.Fatalf("expected target snapshot for %q", message)
+		}
+	}
+	if shouldTracePageTargetSnapshot(errors.New("selector not found")) {
+		t.Fatal("ordinary page errors should not trigger a target snapshot")
 	}
 }
 
@@ -254,6 +490,106 @@ func TestPageTargetContextKeepsPersistentContextAcrossOperations(t *testing.T) {
 	}
 }
 
+func TestDetachRemoteTargetContextDoesNotRequestTargetClose(t *testing.T) {
+	allocCtx, allocCancel := chromedp.NewRemoteAllocator(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/test",
+		chromedp.NoModifyURL,
+	)
+	targetCtx, targetCancel := chromedp.NewContext(allocCtx, chromedp.WithTargetID(target.ID("page1")))
+	chromedpContext := chromedp.FromContext(targetCtx)
+	if chromedpContext == nil {
+		t.Fatal("expected chromedp context")
+	}
+	chromedpContext.Target = &chromedp.Target{TargetID: target.ID("page1")}
+
+	var targetIDAtCancel target.ID
+	detachRemoteTargetContext(targetCtx, func() {
+		targetIDAtCancel = chromedpContext.Target.TargetID
+		targetCancel()
+	}, allocCancel)
+
+	if targetIDAtCancel != "" {
+		t.Fatalf("target context cancellation would close the existing target: %s", targetIDAtCancel)
+	}
+	if err := targetCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("target context was not canceled: %v", err)
+	}
+}
+
+func TestDetachRemoteTargetContextAcceptsMissingContext(t *testing.T) {
+	targetCanceled := false
+	allocatorCanceled := false
+	detachRemoteTargetContext(
+		nil,
+		func() { targetCanceled = true },
+		func() { allocatorCanceled = true },
+	)
+	if !targetCanceled || !allocatorCanceled {
+		t.Fatalf("cancel functions were not called: target=%t allocator=%t", targetCanceled, allocatorCanceled)
+	}
+}
+
+func TestCommitReattachedPageTargetDetachesPreviousConnectionWithoutClosingTarget(t *testing.T) {
+	oldAllocCtx, oldAllocCancel := chromedp.NewRemoteAllocator(
+		context.Background(),
+		"ws://127.0.0.1:9222/devtools/browser/old",
+		chromedp.NoModifyURL,
+	)
+	oldTargetCtx, oldTargetCancel := chromedp.NewContext(oldAllocCtx, chromedp.WithTargetID(target.ID("page1")))
+	oldChromedpContext := chromedp.FromContext(oldTargetCtx)
+	if oldChromedpContext == nil {
+		t.Fatal("expected old chromedp context")
+	}
+	oldChromedpContext.Target = &chromedp.Target{TargetID: target.ID("page1")}
+
+	var targetIDAtCancel target.ID
+	backend := &Backend{
+		allocCtx:    oldAllocCtx,
+		allocCancel: oldAllocCancel,
+		targetCtx:   oldTargetCtx,
+		targetCancel: func() {
+			targetIDAtCancel = oldChromedpContext.Target.TargetID
+			oldTargetCancel()
+		},
+		targetInfo: pageTargetInfo{ID: "page1", Type: "page"},
+	}
+	newAllocCtx, newAllocCancel := context.WithCancel(context.Background())
+	newTargetCtx, newTargetCancel := context.WithCancel(context.Background())
+	var messages []string
+	err := backend.commitReattachedPageTarget(
+		pageTargetInfo{ID: "page1", Type: "page"},
+		newAllocCtx,
+		newAllocCancel,
+		newTargetCtx,
+		newTargetCancel,
+		func(message string) {
+			messages = append(messages, message)
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(backend.closeRemoteContexts)
+
+	if targetIDAtCancel != "" {
+		t.Fatalf("previous connection cancellation would close the page target: %s", targetIDAtCancel)
+	}
+	if err := oldTargetCtx.Err(); !errors.Is(err, context.Canceled) {
+		t.Fatalf("old target context was not canceled: %v", err)
+	}
+	backend.mu.Lock()
+	storedTargetCtx := backend.targetCtx
+	storedTargetID := backend.targetInfo.ID
+	backend.mu.Unlock()
+	if storedTargetCtx != newTargetCtx || storedTargetID != "page1" {
+		t.Fatalf("reattached target was not committed: context=%v target=%q", storedTargetCtx, storedTargetID)
+	}
+	if !strings.Contains(strings.Join(messages, "\n"), "stage=reattach_detach_previous event=finish") {
+		t.Fatalf("previous connection detach was not traced: %v", messages)
+	}
+}
+
 func TestDebugHTTPBaseURL(t *testing.T) {
 	baseURL, err := debugHTTPBaseURL("ws://127.0.0.1:9222/devtools/browser/test")
 	if err != nil {
@@ -262,6 +598,27 @@ func TestDebugHTTPBaseURL(t *testing.T) {
 
 	if baseURL != "http://127.0.0.1:9222" {
 		t.Fatalf("unexpected base url: %s", baseURL)
+	}
+}
+
+func TestReadBrowserVersionHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/json/version" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"Browser":"Chrome/151.0.0.0","Protocol-Version":"1.3","WebKit-Version":"537.36@test"}`)
+	}))
+	defer server.Close()
+
+	devtoolsURL := strings.Replace(server.URL, "http://", "ws://", 1) + "/devtools/browser/test"
+	protocolVersion, product, revision, err := readBrowserVersionHTTP(context.Background(), devtoolsURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if protocolVersion != "1.3" || product != "Chrome/151.0.0.0" || revision != "537.36@test" {
+		t.Fatalf("unexpected browser version: protocol=%q product=%q revision=%q", protocolVersion, product, revision)
 	}
 }
 
@@ -490,6 +847,11 @@ func TestObserveCandidateSelectorNodeScopes(t *testing.T) {
 	}
 
 	semantic := observeCandidateSelector("semantic")
+	for _, selector := range strings.Split(actionable, ",") {
+		if !slices.Contains(strings.Split(semantic, ","), selector) {
+			t.Fatalf("semantic omits actionable selector %q", selector)
+		}
+	}
 	if !strings.Contains(semantic, "h1") || !strings.Contains(semantic, `[role="status"]`) || !strings.Contains(semantic, "[data-testid]") {
 		t.Fatalf("unexpected semantic selector: %s", semantic)
 	}
@@ -614,18 +976,6 @@ func TestClearMarkedTypeTargetExpression(t *testing.T) {
 	}
 }
 
-func TestKeyProbeExpressions(t *testing.T) {
-	install := installKeyProbeExpression("token-1")
-	finish := finishKeyProbeExpression("token-1")
-
-	if !strings.Contains(install, "addEventListener('keydown'") || !strings.Contains(install, "token-1") {
-		t.Fatalf("unexpected key probe install script: %s", install)
-	}
-	if !strings.Contains(finish, "removeEventListener('keydown'") || !strings.Contains(finish, "return state.count") {
-		t.Fatalf("unexpected key probe finish script: %s", finish)
-	}
-}
-
 func TestStructurePathToSelector(t *testing.T) {
 	selector := structurePathToSelector("html:1>body:1>main:2>button:3")
 	if selector != "html:nth-of-type(1) > body:nth-of-type(1) > main:nth-of-type(2) > button:nth-of-type(3)" {
@@ -723,171 +1073,123 @@ func TestScreenshotAttemptContextPreservesShortRequestDeadline(t *testing.T) {
 	}
 }
 
-func TestCaptureScreenshotOnceFallsBackAfterReadinessTimeout(t *testing.T) {
-	var readinessCtx context.Context
-	captureCalled := false
-	var traceMessages []string
-	trace := screenshotTrace(func(message string) {
-		traceMessages = append(traceMessages, message)
-	})
-
-	result, err := captureScreenshotOnceWithDependencies(
-		context.Background(),
-		false,
-		trace,
-		screenshotAttemptDependencies{
-			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
-				readinessCtx = ctx
-				return screenshotReadiness{
-					ReadyState:       "loading",
-					VisibilityState:  "hidden",
-					WasDiscarded:     true,
-					SnapshotCaptured: true,
-				}, context.DeadlineExceeded
-			},
-			capture: func(ctx context.Context, full bool, _ screenshotTrace) ([]byte, int64, int64, error) {
-				captureCalled = true
-				if readinessCtx.Err() == nil {
-					return nil, 0, 0, errors.New("readiness context remained active")
-				}
-				if ctx.Err() != nil {
-					return nil, 0, 0, fmt.Errorf("fresh capture context is canceled: %w", ctx.Err())
-				}
-				if full {
-					return nil, 0, 0, errors.New("unexpected full screenshot")
-				}
-				return []byte("png"), 800, 600, nil
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !captureCalled || string(result.data) != "png" {
-		t.Fatalf("capture did not run after readiness timeout: %+v", result)
-	}
-	if !result.readiness.Fallback || !result.readiness.TimedOut {
-		t.Fatalf("unexpected readiness fallback: %+v", result.readiness)
-	}
-
-	meta := map[string]string{}
-	applyScreenshotReadinessMeta(meta, result.readiness)
-	if meta["screenshot_readiness"] != "timed_out" ||
-		meta["screenshot_ready_state"] != "loading" ||
-		meta["screenshot_visibility_state"] != "hidden" ||
-		meta["screenshot_was_discarded"] != "true" ||
-		meta["screenshot_readiness_warning"] == "" {
-		t.Fatalf("unexpected readiness metadata: %+v", meta)
-	}
-	if !slices.ContainsFunc(traceMessages, func(message string) bool {
-		return strings.Contains(message, "stage=paint_barrier event=fallback")
-	}) {
-		t.Fatalf("fallback trace was not emitted: %+v", traceMessages)
-	}
-}
-
-func TestCaptureScreenshotOnceStopsWhenAttemptIsCanceled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	captureCalled := false
-
-	_, err := captureScreenshotOnceWithDependencies(
-		ctx,
-		false,
-		nil,
-		screenshotAttemptDependencies{
-			waitForReadiness: func(ctx context.Context, _ screenshotTrace, _ string) (screenshotReadiness, error) {
-				return screenshotReadiness{}, ctx.Err()
-			},
-			capture: func(context.Context, bool, screenshotTrace) ([]byte, int64, int64, error) {
-				captureCalled = true
-				return nil, 0, 0, nil
-			},
-		},
-	)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("unexpected canceled attempt error: %v", err)
-	}
-	if captureCalled {
-		t.Fatal("capture ran after the attempt was canceled")
-	}
-}
-
-func TestScreenshotPaintBarrierExpressionContract(t *testing.T) {
-	expression := screenshotPaintBarrierExpression()
-	for _, expected := range []string{
-		"setTimeout(() => finish('timed_out'), 750)",
-		"requestAnimationFrame",
-		"cancelAnimationFrame",
-		"removeEventListener",
-		"finish('confirmed')",
-	} {
-		if !strings.Contains(expression, expected) {
-			t.Fatalf("paint barrier expression does not contain %q", expected)
-		}
-	}
-}
-
-func TestScreenshotReadinessExpressionContract(t *testing.T) {
-	for _, expected := range []string{"document.readyState", "document.visibilityState", "document.wasDiscarded"} {
-		if !strings.Contains(screenshotReadinessExpression, expected) {
-			t.Fatalf("readiness expression does not contain %q", expected)
-		}
-	}
-}
-
-func TestScreenshotReadinessMetaKeepsUnavailableSnapshotUnknown(t *testing.T) {
-	meta := map[string]string{}
-	applyScreenshotReadinessMeta(meta, screenshotReadiness{
-		Fallback: true,
-		Err:      errors.New("snapshot unavailable"),
-	})
-
-	if meta["screenshot_ready_state"] != "unknown" ||
-		meta["screenshot_visibility_state"] != "unknown" ||
-		meta["screenshot_was_discarded"] != "unknown" ||
-		!strings.Contains(meta["screenshot_readiness_warning"], "was_discarded=unknown") {
-		t.Fatalf("unexpected unavailable snapshot metadata: %+v", meta)
-	}
-}
-
-func TestReattachPageTargetIsBounded(t *testing.T) {
-	backend := New()
-	backend.runCtx = context.Background()
-	backend.reattachAttempted = true
-	_, _, _, err := backend.reattachPageTarget(context.Background(), pageTargetInfo{ID: "page1"}, nil)
-	if err == nil || !strings.Contains(err.Error(), "reattach was already attempted") {
-		t.Fatalf("unexpected bounded reattach error: %v", err)
-	}
-}
-
 func TestScreenshotTraceIncludesCorrelationFields(t *testing.T) {
-	backend := New()
-	trace := backend.newScreenshotTrace(true, "capture-1", "page-1", 2)
+	var entries []string
+	requestTrace := diagnostic.New("observe_session", true, func(entry string) {
+		entries = append(entries, entry)
+	})
+	trace := newScreenshotTrace(requestTrace, "capture-1", "page-1", 2)
 	trace("stage=capture_action event=start")
-
-	logs, err := backend.Logs(context.Background(), api.LogOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(logs) != 1 {
-		t.Fatalf("unexpected trace count: %d", len(logs))
-	}
+	requestTrace.Finish(nil)
+	joined := strings.Join(entries, "\n")
 	for _, expected := range []string{
-		"capture_id=capture-1",
-		"target=page-1",
+		`component="screenshot"`,
+		`capture_id="capture-1"`,
+		`target="page-1"`,
 		"attempt=2",
 		"stage=capture_action",
 		"event=start",
 	} {
-		if !strings.Contains(logs[0].Message, expected) {
-			t.Fatalf("trace does not contain %q: %s", expected, logs[0].Message)
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("trace does not contain %q: %s", expected, joined)
 		}
 	}
 }
 
+func TestBrowserOutputBufferIsBoundedAndRedactsPaths(t *testing.T) {
+	buffer := newBrowserOutputBuffer("/private/tmp/profile")
+	for index := 0; index < maxBrowserOutputLines+3; index++ {
+		buffer.add("stderr", fmt.Sprintf("line %d /private/tmp/profile", index))
+	}
+
+	lines, dropped := buffer.snapshot()
+	if len(lines) != maxBrowserOutputLines {
+		t.Fatalf("unexpected output line count: %d", len(lines))
+	}
+	if dropped != 3 {
+		t.Fatalf("unexpected dropped line count: %d", dropped)
+	}
+	for _, line := range lines {
+		if strings.Contains(line.message, "/private/tmp/profile") {
+			t.Fatalf("browser output retained redacted path: %s", line.message)
+		}
+		if !strings.Contains(line.message, "<redacted-path>") {
+			t.Fatalf("browser output does not contain redaction marker: %s", line.message)
+		}
+	}
+}
+
+func TestReadStartupOutputSeparatesDevToolsURLFromDiagnostics(t *testing.T) {
+	startedCh := make(chan string, 1)
+	buffer := newBrowserOutputBuffer()
+	readStartupOutput(
+		strings.NewReader("warning before startup\nDevTools listening on ws://127.0.0.1:9222/devtools/browser/private\n"),
+		"stderr",
+		startedCh,
+		buffer,
+	)
+
+	select {
+	case devtoolsURL := <-startedCh:
+		if devtoolsURL != "ws://127.0.0.1:9222/devtools/browser/private" {
+			t.Fatalf("unexpected DevTools URL: %s", devtoolsURL)
+		}
+	default:
+		t.Fatal("DevTools URL was not detected")
+	}
+	lines, dropped := buffer.snapshot()
+	if dropped != 0 || len(lines) != 1 || lines[0].message != "warning before startup" {
+		t.Fatalf("unexpected diagnostic output: lines=%v dropped=%d", lines, dropped)
+	}
+}
+
+func TestUnexpectedChromiumExitFlushesEnvironmentAndOutput(t *testing.T) {
+	var entries []string
+	processDiagnostics := newChromiumProcessDiagnostics("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/private/tmp/profile")
+	processDiagnostics.pid = 4321
+	processDiagnostics.product = "Chrome/151.0.0.0"
+	processDiagnostics.protocolVersion = "1.3"
+	processDiagnostics.output.add("stderr", "fatal error in /private/tmp/profile")
+	processDiagnostics.emit = func(entry string) {
+		entries = append(entries, entry)
+	}
+
+	processDiagnostics.logUnexpectedExit(errors.New("signal: killed"))
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`request="chromium_process" event="failure"`,
+		`browser_executable="Google Chrome"`,
+		`browser_pid=4321`,
+		`browser_product="Chrome/151.0.0.0"`,
+		`browser_protocol_version="1.3"`,
+		`os_version=`,
+		`stage="chromium_process" event="unexpected_exit"`,
+		`stage="browser_output" event="line"`,
+		`message="fatal error in <redacted-path>"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("unexpected process diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
+func TestExpectedChromiumExitDoesNotLog(t *testing.T) {
+	var entries []string
+	processDiagnostics := newChromiumProcessDiagnostics("chromium", "")
+	processDiagnostics.emit = func(entry string) {
+		entries = append(entries, entry)
+	}
+	processDiagnostics.markExpectedExit()
+
+	processDiagnostics.logUnexpectedExit(errors.New("signal: killed"))
+	if len(entries) != 0 {
+		t.Fatalf("expected process exit emitted diagnostics: %v", entries)
+	}
+}
+
 func TestHydrationBarrierWaitsForDOMQuiet(t *testing.T) {
-	for _, expected := range []string{"DOMContentLoaded", "MutationObserver", "setTimeout", "requestAnimationFrame"} {
+	for _, expected := range []string{"DOMContentLoaded", "MutationObserver", "setTimeout(finish, 250)", "requestAnimationFrame", "cancelAnimationFrame"} {
 		if !strings.Contains(hydrationBarrierExpression, expected) {
 			t.Fatalf("expected hydration barrier contract %q", expected)
 		}
@@ -1114,6 +1416,105 @@ func waitForProcessExit(t *testing.T, pid int) {
 	}
 }
 
+func TestInspectStylesChromiumE2E(t *testing.T) {
+	if os.Getenv("NEXUS_E2E") != "1" {
+		t.Skip("set NEXUS_E2E=1 to run real chromium e2e")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("chromium e2e is only supported on darwin")
+	}
+
+	executable := resolveChromiumForE2E(t)
+	if executable == "" {
+		t.Skip("chromium executable not available for e2e")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			fmt.Fprint(w, `<!doctype html><html><head><link rel="stylesheet" href="/styles.css"></head><body><button id="style-target">Target</button></body></html>`)
+		case "/styles.css":
+			w.Header().Set("Content-Type", "text/css")
+			fmt.Fprint(w, `#style-target { width: 120px; background: rgb(0, 0, 255); }
+/*# sourceMappingURL=styles.css.map */`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	backend := New()
+	if err := backend.Attach(context.Background(), spec.SessionConfig{
+		SessionID: "style-e2e",
+		TargetRef: executable,
+		Options: map[string]string{
+			"initial_url": server.URL,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Detach(context.Background())
+
+	operationCtx, operationCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if _, err := backend.Act(operationCtx, api.Action{Kind: "wait", Args: map[string]string{"target": "selector", "value": "#style-target", "state": "visible", "timeout_ms": "10000"}}); err != nil {
+		operationCancel()
+		t.Fatal(err)
+	}
+	operationCancel()
+
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	obs, err := backend.Observe(operationCtx, api.ObserveOptions{WithTree: true})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	styleTarget := requireNodeByAttrNode(t, obs.Tree, "id", "style-target")
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	inspection, err := backend.InspectStyles(operationCtx, api.InspectStylesRequest{
+		NodeRef:       styleTarget.Ref,
+		CSSProperties: []string{"width", "background-color"},
+	})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Computed["width"] != "120px" || inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected targeted style inspection: %+v", inspection)
+	}
+	if len(inspection.Properties) != 2 || len(inspection.Properties[0].Declarations) != 1 {
+		t.Fatalf("unexpected targeted style declarations: %+v", inspection.Properties)
+	}
+	widthDeclaration := inspection.Properties[0].Declarations[0]
+	if widthDeclaration.Property != "width" || widthDeclaration.Value != "120px" || widthDeclaration.Selector != "#style-target" {
+		t.Fatalf("unexpected targeted width declaration: %+v", widthDeclaration)
+	}
+	if widthDeclaration.SourceURL != server.URL+"/styles.css" || widthDeclaration.SourceMapURL != "styles.css.map" || widthDeclaration.Line != 1 || widthDeclaration.Column <= 0 {
+		t.Fatalf("unexpected targeted width source: %+v", widthDeclaration)
+	}
+	regularBackgrounds := 0
+	for _, declaration := range inspection.Properties[1].Declarations {
+		if declaration.SourceURL != server.URL+"/styles.css" {
+			continue
+		}
+		regularBackgrounds++
+		if declaration.Property != "background" || declaration.Relation != "shorthand" || declaration.ResolvedValue != "rgb(0, 0, 255)" {
+			t.Fatalf("unexpected targeted background declaration: %+v", declaration)
+		}
+	}
+	if regularBackgrounds != 1 {
+		t.Fatalf("unexpected authored background declarations: %+v", inspection.Properties[1].Declarations)
+	}
+	operationCtx, operationCancel = context.WithTimeout(context.Background(), 10*time.Second)
+	evalResult, err := backend.Act(operationCtx, api.Action{Kind: "eval", Text: `document.getElementById("style-target").textContent`})
+	operationCancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := evalResult.Value.(string); !ok || value != "Target" {
+		t.Fatalf("unexpected post-inspection eval result: %#v", evalResult.Value)
+	}
+}
+
 func TestChromiumE2E(t *testing.T) {
 	if os.Getenv("NEXUS_E2E") != "1" {
 		t.Skip("set NEXUS_E2E=1 to run real chromium e2e")
@@ -1147,9 +1548,9 @@ func TestChromiumE2E(t *testing.T) {
   <div id="message"></div>
   <div id="hover-target" tabindex="0" onmouseenter="document.getElementById('hover-status').textContent='hovered'">Hover</div>
   <div id="hover-status"></div>
-  <div id="dbl-target" ondblclick="document.getElementById('dbl-status').textContent='double clicked'">Double</div>
+  <div id="dbl-target" tabindex="0" ondblclick="document.getElementById('dbl-status').textContent='double clicked'">Double</div>
   <div id="dbl-status"></div>
-  <div id="ctx-target" oncontextmenu="event.preventDefault(); document.getElementById('ctx-status').textContent='context menu'">Context</div>
+  <div id="ctx-target" tabindex="0" oncontextmenu="event.preventDefault(); document.getElementById('ctx-status').textContent='context menu'">Context</div>
   <div id="ctx-status"></div>
   <div id="key-status"></div>
   <div id="fill-status"></div>
@@ -1280,8 +1681,8 @@ func TestChromiumE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value, ok := typeResult.Value.(map[string]interface{}); !ok || value["delivery_verified"] != true {
-		t.Fatalf("type delivery was not verified: %#v", typeResult.Value)
+	if value, ok := typeResult.Value.(map[string]interface{}); !ok || value["method"] != "key_events" {
+		t.Fatalf("unexpected type result: %#v", typeResult.Value)
 	}
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "type", NodeID: &emailID, Text: "user@example.com"}); err != nil {
 		t.Fatal(err)
@@ -1307,7 +1708,7 @@ func TestChromiumE2E(t *testing.T) {
 		t.Fatalf("unexpected message value: %#v", res.Value)
 	}
 
-	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Args: map[string]string{"target": "value", "selector": "#email"}})
+	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Selector: "#email", Args: map[string]string{"target": "value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1315,7 +1716,7 @@ func TestChromiumE2E(t *testing.T) {
 		t.Fatalf("unexpected email value: %#v", res.Value)
 	}
 
-	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Args: map[string]string{"target": "value", "selector": "#replace"}})
+	res, err = backend.Act(context.Background(), api.Action{Kind: "get", Selector: "#replace", Args: map[string]string{"target": "value"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1351,17 +1752,24 @@ func TestChromiumE2E(t *testing.T) {
 	if _, err := backend.Act(context.Background(), api.Action{Kind: "wait", Args: map[string]string{"target": "text", "value": "hovered", "timeout_ms": "5000"}}); err != nil {
 		t.Fatal(err)
 	}
+	hoverObservation, err := backend.Observe(context.Background(), api.ObserveOptions{WithTree: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hoverNode = requireNodeByAttrNode(t, hoverObservation.Tree, "id", "hover-target")
+	hoverID = hoverNode.ID
+
 	hoverScreenshot, err := backend.Observe(context.Background(), api.ObserveOptions{WithScreenshot: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := png.Decode(bytes.NewReader(hoverScreenshot.ScreenshotData))
+	screenshotImage, err := png.Decode(bytes.NewReader(hoverScreenshot.ScreenshotData))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sample := color.RGBAModel.Convert(image.At(int(hoverNode.Bounds.X)+5, int(hoverNode.Bounds.Y)+5)).(color.RGBA)
+	sample := color.RGBAModel.Convert(screenshotImage.At(int(hoverNode.Bounds.X)+5, int(hoverNode.Bounds.Y)+5)).(color.RGBA)
 	if sample.R < 200 || sample.G > 80 || sample.B > 80 {
-		t.Fatalf("hover style was not preserved in screenshot: %+v", sample)
+		t.Fatalf("hover style was not preserved in screenshot: sample=%+v node=%+v image=%v", sample, hoverNode.Bounds, screenshotImage.Bounds())
 	}
 	if _, err := backend.Act(context.Background(), api.Action{
 		Kind:    "get",

@@ -41,7 +41,7 @@ Each scenario usually includes:
 Each `old` and `new` endpoint supports:
 
 - `url` or `session`
-- `backend`
+- `backend` (`chromium`)
 - `target_ref`
 - `viewport`
 
@@ -57,6 +57,7 @@ The currently implemented flow actions are:
 - `navigate`
 - `click`
 - `fill`
+- `dialog`
 - `viewport`
 - `screenshot`
 - `compare`
@@ -65,10 +66,12 @@ Useful step fields:
 
 - `side`: `old`, `new`, or `both`
 - `continue_on_error`
-- `timeout` for `wait` and `screenshot`, in milliseconds
+- `timeout` for `wait`, `screenshot`, `dialog`, and steps with `expect_dialog`, in milliseconds
 - `locator` for `click`, `fill`, and targeted `screenshot`
 - `nth` for repeated locator matches
-- `text` for `fill`
+- `text` for `fill` and prompt acceptance with `dialog`
+- `target`: `get`, `accept`, or `dismiss` for `dialog`
+- `expect_dialog: true` on `click`, `fill`, or `navigate` to wait for a new JavaScript dialog and continue to its handling step
 - `value` for `wait`, `navigate`, and `viewport`
 - `path`, `full`, and `annotate` for `screenshot`
 
@@ -76,12 +79,14 @@ Useful step fields:
 With `side: both`, Nexus automatically writes `-old` and `-new` suffixed files.
 When `locator` is present, `screenshot` captures just the matched element instead of the whole viewport.
 Use `nth` when multiple nodes intentionally share the same locator.
-Screenshot capture times out after 30000 ms by default. Each capture attempt, including its readiness check, is capped at 10000 ms. The paint-readiness barrier is best-effort for at most 1000 ms; when fallback capture is used, the step report keeps a side-specific entry in `warnings`. Use an explicit `wait` step before the screenshot when final visual readiness is part of the assertion. Set `timeout` on the step to budget enough time for same-target reconnect; it does not extend one capture attempt beyond 10000 ms. Flow screenshot steps do not opt into destructive tab replacement.
+Screenshot capture times out after 30000 ms by default. Each capture attempt is capped at 10000 ms and does not add an implicit rendering delay. Use an explicit `wait` step before the screenshot when final visual readiness is part of the assertion. Set `timeout` on the step to budget enough time for same-target reconnect; it does not extend one capture attempt beyond 10000 ms. Flow screenshot steps do not opt into destructive tab replacement.
 `full` is not supported together with `locator`.
 For a generic post-load stabilization barrier, use a wait step with `"target": "hydrated"` and no `value`. It is a DOM-quiet rendering heuristic; use `"target": "function"` with an application expression when a stronger readiness signal exists.
 `compare` supports step-level overrides such as `match_mode`, `node_scope`, `matching_debug`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `css_property`, `ignore_text_regex`, `ignore_selector`, and `mask_selector`.
 `all_css_properties` and `css_property` are alternative modes. Do not set both in the same defaults or step object; the manifest is rejected. A step-level `css_property` list overrides an inherited exhaustive mode.
 Set step-level `compare_css` to false without another step-level CSS mode to disable inherited CSS comparison.
+
+For JavaScript dialogs, place a `dialog` handling step after the step with `expect_dialog: true`, then verify the page with `wait`. Expected-dialog and dialog steps default to a 30000 ms timeout per side. A missing dialog or unrelated action error still fails the step. `dialog` / `get` reports the current state without waiting for a future dialog. See the [flow dialog examples and result format](dialogs.md#in-flows) ([Japanese](dialogs_ja.md#flow-内での操作)).
 
 ## Why `navigate` Matters
 

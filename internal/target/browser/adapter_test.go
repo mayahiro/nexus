@@ -13,7 +13,10 @@ type testBackend struct {
 	name         spec.BackendName
 	capabilities spec.Capabilities
 	observe      *api.Observation
+	inspection   *api.StyleInspection
 }
+
+const adapterTestBackendName spec.BackendName = "test"
 
 func (b testBackend) Name() spec.BackendName {
 	return b.name
@@ -39,17 +42,13 @@ func (b testBackend) Act(context.Context, api.Action) (*api.ActionResult, error)
 	return &api.ActionResult{OK: true}, nil
 }
 
-func (b testBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (b testBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
+func (b testBackend) InspectStyles(context.Context, api.InspectStylesRequest) (*api.StyleInspection, error) {
+	return b.inspection, nil
 }
 
 func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -65,7 +64,7 @@ func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 		t.Fatalf("unexpected target type: %s", obs.TargetType)
 	}
 
-	if obs.Meta["browser_backend"] != "lightpanda" {
+	if obs.Meta["browser_backend"] != "test" {
 		t.Fatalf("unexpected backend meta: %v", obs.Meta)
 	}
 
@@ -76,7 +75,7 @@ func TestObserveAddsBackendMetaAndCapabilities(t *testing.T) {
 
 func TestActReturnsUnsupportedForObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -90,7 +89,7 @@ func TestActReturnsUnsupportedForObserveOnlyBackend(t *testing.T) {
 
 func TestObserveReturnsUnsupportedForScreenshotOnObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
@@ -104,13 +103,44 @@ func TestObserveReturnsUnsupportedForScreenshotOnObserveOnlyBackend(t *testing.T
 
 func TestObserveReturnsUnsupportedForLayoutContextOnObserveOnlyBackend(t *testing.T) {
 	adapter := NewAdapter(testBackend{
-		name: spec.BackendLightpanda,
+		name: adapterTestBackendName,
 		capabilities: spec.Capabilities{
 			Observe: true,
 		},
 	})
 
 	_, err := adapter.Observe(context.Background(), api.ObserveOptions{WithLayoutContext: true})
+	if !errors.Is(err, spec.ErrUnsupported) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestInspectStylesUsesOptionalBackendCapability(t *testing.T) {
+	inspection := &api.StyleInspection{
+		Computed:           map[string]string{"width": "154px"},
+		StyleSourcesStatus: api.StyleSourcesStatusComplete,
+	}
+	adapter := NewAdapter(testBackend{
+		name: adapterTestBackendName,
+		capabilities: spec.Capabilities{
+			StyleInspection: true,
+		},
+		inspection: inspection,
+	})
+
+	got, err := adapter.InspectStyles(context.Background(), api.InspectStylesRequest{NodeRef: "@e1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != inspection {
+		t.Fatalf("unexpected style inspection: %+v", got)
+	}
+}
+
+func TestInspectStylesReturnsUnsupportedWithoutCapability(t *testing.T) {
+	adapter := NewAdapter(testBackend{name: adapterTestBackendName})
+
+	_, err := adapter.InspectStyles(context.Background(), api.InspectStylesRequest{NodeRef: "@e1"})
 	if !errors.Is(err, spec.ErrUnsupported) {
 		t.Fatalf("unexpected error: %v", err)
 	}

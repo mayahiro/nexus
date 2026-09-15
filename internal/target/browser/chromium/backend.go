@@ -1,12 +1,12 @@
 package chromium
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/css"
+	"github.com/chromedp/cdproto/dom"
 	"github.com/chromedp/cdproto/input"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/runtime"
@@ -27,17 +29,18 @@ import (
 	"github.com/chromedp/chromedp/kb"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
 const startupTimeout = 5 * time.Second
 const shutdownTimeout = 5 * time.Second
-const maxLogEntries = 200
 const defaultViewportWidth = 1920
 const defaultViewportHeight = 1080
 const screenshotAttemptTimeout = 10 * time.Second
-const screenshotReadinessTimeout = time.Second
-const screenshotReadinessBarrierTimeout = 750 * time.Millisecond
+const browserVersionTimeout = time.Second
+const pageTargetSnapshotTimeout = 500 * time.Millisecond
+const maxPageTargetSnapshotIDs = 16
 const maxFullScreenshotWidth = 16384
 const maxFullScreenshotHeight = 50000
 const maxFullScreenshotPixels = 120_000_000
@@ -238,6 +241,22 @@ func observeTreeExpressionWithSelector(cssProperties []string, scopeSelector str
 
   const textFor = (el) => {
     return (el.innerText || el.textContent || '').trim();
+  };
+
+  const statesFor = (el) => {
+    const states = {};
+    if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+      states.checked = String(el.checked);
+      if (el.type === 'checkbox') states.indeterminate = String(el.indeterminate);
+    }
+    if (el.tagName === 'OPTION') states.selected = String(el.selected);
+    if (el.tagName === 'SELECT') {
+      states.selected_indices = JSON.stringify(Array.from(el.options).flatMap((option, index) => option.selected ? [index] : []));
+    }
+    for (const name of ['aria-checked', 'aria-selected', 'aria-expanded', 'aria-pressed', 'aria-current', 'aria-invalid', 'aria-busy', 'aria-disabled', 'aria-readonly', 'aria-required']) {
+      if (el.hasAttribute(name)) states[name] = el.getAttribute(name);
+    }
+    return states;
   };
 
   const attrsFor = (el) => {
@@ -478,6 +497,7 @@ func observeTreeExpressionWithSelector(cssProperties []string, scopeSelector str
       name: name,
       text: textFor(el),
       value: valueFor(el),
+      states: statesFor(el),
       styles: styles,
       layout_context: layoutContextFor(el),
       bounds: {
@@ -526,20 +546,21 @@ func observeCandidateSelector(nodeScope string) string {
 		"[onclick]",
 		"[tabindex]",
 	}
+	actionable := append(append([]string(nil), current...),
+		`[role="switch"]`,
+		`[role="menuitem"]`,
+		`[role="menuitemcheckbox"]`,
+		`[role="menuitemradio"]`,
+		`[role="option"]`,
+		`[role="slider"]`,
+		`[role="spinbutton"]`,
+		`[role="searchbox"]`,
+	)
 	switch strings.ToLower(strings.TrimSpace(nodeScope)) {
 	case "actionable":
-		return strings.Join(append(current,
-			`[role="switch"]`,
-			`[role="menuitem"]`,
-			`[role="menuitemcheckbox"]`,
-			`[role="menuitemradio"]`,
-			`[role="option"]`,
-			`[role="slider"]`,
-			`[role="spinbutton"]`,
-			`[role="searchbox"]`,
-		), ",")
+		return strings.Join(actionable, ",")
 	case "semantic":
-		return strings.Join(append(current,
+		return strings.Join(append(actionable,
 			"h1",
 			"h2",
 			"h3",
@@ -1045,30 +1066,6 @@ const clearMarkedTypeTargetJS = `(function (token) {
   return true;
 })($TOKEN$)`
 
-const installKeyProbeJS = `(function (token) {
-  const probes = globalThis.__nexusKeyProbes || (globalThis.__nexusKeyProbes = {});
-  const existing = probes[token];
-  if (existing) {
-    window.removeEventListener('keydown', existing.handler, true);
-  }
-  const state = {count: 0};
-  state.handler = () => {
-    state.count++;
-  };
-  probes[token] = state;
-  window.addEventListener('keydown', state.handler, true);
-  return true;
-})($TOKEN$)`
-
-const finishKeyProbeJS = `(function (token) {
-  const probes = globalThis.__nexusKeyProbes || {};
-  const state = probes[token];
-  if (!state) return -1;
-  window.removeEventListener('keydown', state.handler, true);
-  delete probes[token];
-  return state.count;
-})($TOKEN$)`
-
 const nodePointJS = `(function (nodeID) {
   const selector = [
     'button',
@@ -1135,14 +1132,11 @@ type Backend struct {
 	waitCh              chan error
 	userDataDir         string
 	devtoolsURL         string
-	logs                []api.LogEntry
 	allocCtx            context.Context
 	allocCancel         context.CancelFunc
 	targetCtx           context.Context
 	targetCancel        context.CancelFunc
 	targetInfo          pageTargetInfo
-	staleContexts       []remoteContext
-	reattachAttempted   bool
 	allocatorOptions    []chromedp.RemoteAllocatorOption
 	refLoaderID         string
 	refURL              string
@@ -1150,24 +1144,19 @@ type Backend struct {
 	persistentContextID runtime.ExecutionContextID
 	persistentLoaderID  string
 	persistentWorldName string
-	dialogOpen          bool
-	dialogType          string
-	dialogMessage       string
+	dialog              api.DialogState
+	dialogSequence      uint64
+	dialogInterrupt     func(api.DialogState)
 	activateBeforeOp    bool
+	processDiagnostics  *chromiumProcessDiagnostics
 }
 
 var errPageTargetNotFound = errors.New("page target not found")
 var errFullScreenshotTooLarge = errors.New("full screenshot exceeds capture limits")
-var errScreenshotReadinessTimedOut = errors.New("screenshot paint readiness timed out")
 
 type nodeReference struct {
 	Selector string
 	Identity string
-}
-
-type remoteContext struct {
-	targetCancel context.CancelFunc
-	allocCancel  context.CancelFunc
 }
 
 func New() *Backend {
@@ -1180,15 +1169,28 @@ func (*Backend) Name() spec.BackendName {
 
 func (*Backend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{
-		Observe:       true,
-		Act:           true,
-		Screenshot:    true,
-		Logs:          true,
-		LayoutContext: true,
+		Observe:         true,
+		Act:             true,
+		Screenshot:      true,
+		LayoutContext:   true,
+		StyleInspection: true,
 	}
 }
 
-func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
+func (b *Backend) Attach(ctx context.Context, cfg spec.SessionConfig) (resultErr error) {
+	processDiagnostics := newChromiumProcessDiagnostics(cfg.TargetRef, "")
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_attach",
+		"chromium_attach",
+		false,
+		processDiagnostics,
+		diagnostic.Value("session", cfg.SessionID),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_attach", startedAt, processDiagnostics, resultErr)
+	}()
+
 	if cfg.TargetRef == "" {
 		return errors.New("chromium executable path is required")
 	}
@@ -1208,6 +1210,11 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 	if err != nil {
 		return err
 	}
+	outputRedactions := []string{userDataDir, cfg.TargetRef}
+	if startURL := initialURL(cfg.Options); startURL != "about:blank" {
+		outputRedactions = append(outputRedactions, startURL)
+	}
+	processDiagnostics.output = newBrowserOutputBuffer(outputRedactions...)
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	args := []string{
@@ -1243,6 +1250,13 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 		os.RemoveAll(userDataDir)
 		return err
 	}
+	processDiagnostics.setPID(cmd.Process.Pid)
+	trace.SetEnvironment(processDiagnostics.environment()...)
+	trace.Event("chromium_process", "started",
+		diagnostic.Value("browser_pid", cmd.Process.Pid),
+		diagnostic.Value("viewport_width", viewportWidth(cfg.Options)),
+		diagnostic.Value("viewport_height", viewportHeight(cfg.Options)),
+	)
 
 	waitCh := make(chan error, 1)
 	startedCh := make(chan string, 1)
@@ -1254,13 +1268,21 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 	b.waitCh = waitCh
 	b.userDataDir = userDataDir
 	b.devtoolsURL = ""
-	b.logs = nil
+	b.processDiagnostics = processDiagnostics
 	b.mu.Unlock()
 
-	go b.captureLogs(stdout, startedCh)
-	go b.captureLogs(stderr, startedCh)
+	var outputWait sync.WaitGroup
+	outputWait.Go(func() {
+		readStartupOutput(stdout, "stdout", startedCh, processDiagnostics.output)
+	})
+	outputWait.Go(func() {
+		readStartupOutput(stderr, "stderr", startedCh, processDiagnostics.output)
+	})
 	go func() {
-		waitCh <- cmd.Wait()
+		waitErr := cmd.Wait()
+		outputWait.Wait()
+		processDiagnostics.logUnexpectedExit(waitErr)
+		waitCh <- waitErr
 		close(waitCh)
 	}()
 
@@ -1272,31 +1294,73 @@ func (b *Backend) Attach(_ context.Context, cfg spec.SessionConfig) error {
 		b.mu.Lock()
 		b.devtoolsURL = url
 		b.mu.Unlock()
+		trace.Event("chromium_devtools", "ready")
+		if processDiagnostics.beginVersionLookup() {
+			versionCtx, versionCancel := context.WithTimeout(ctx, browserVersionTimeout)
+			trace.Event("browser_version", "start", diagnostic.Value("source", "devtools_http"))
+			protocolVersion, product, revision, versionErr := readBrowserVersionHTTP(versionCtx, url)
+			versionCancel()
+			processDiagnostics.setVersion(protocolVersion, product, revision, versionErr)
+			if versionErr != nil {
+				processDiagnostics.allowVersionRetry()
+			}
+			trace.SetEnvironment(processDiagnostics.environment()...)
+			versionFields := []diagnostic.Field{
+				diagnostic.Value("source", "devtools_http"),
+				diagnostic.Value("browser_product", fallbackDiagnosticValue(product)),
+				diagnostic.Value("browser_protocol_version", fallbackDiagnosticValue(protocolVersion)),
+				diagnostic.Value("browser_revision", fallbackDiagnosticValue(revision)),
+			}
+			if versionErr != nil {
+				versionFields = append(versionFields, diagnostic.Value("error", versionErr))
+			}
+			trace.Event("browser_version", "finish", versionFields...)
+		}
 		return nil
 	case err := <-waitCh:
+		trace.Event("chromium_devtools", "process_exit", diagnostic.Value("error", err))
 		b.cleanupAfterExit()
 		if err == nil {
 			return errors.New("chromium exited before startup completed")
 		}
 		return err
 	case <-timer.C:
+		timeoutErr := errors.New("chromium startup timed out")
+		trace.Event("chromium_devtools", "timeout", diagnostic.Value("error", timeoutErr))
 		if err := b.Detach(context.Background()); err != nil {
 			return err
 		}
-		return errors.New("chromium startup timed out")
+		return timeoutErr
 	}
 }
 
-func (b *Backend) Detach(_ context.Context) error {
+func (b *Backend) Detach(ctx context.Context) (resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
+
+	b.mu.Lock()
+	processDiagnostics := b.processDiagnostics
+	b.mu.Unlock()
+	_, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_detach",
+		"chromium_detach",
+		false,
+		processDiagnostics,
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_detach", startedAt, processDiagnostics, resultErr)
+	}()
+
+	if processDiagnostics != nil {
+		processDiagnostics.markExpectedExit()
+	}
 
 	b.mu.Lock()
 	cmd := b.cmd
 	cancel := b.cancel
 	allocCancel := b.allocCancel
 	targetCancel := b.targetCancel
-	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	waitCh := b.waitCh
 	userDataDir := b.userDataDir
 	b.cmd = nil
@@ -1310,43 +1374,57 @@ func (b *Backend) Detach(_ context.Context) error {
 	b.targetCtx = nil
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
-	b.staleContexts = nil
-	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
+	b.processDiagnostics = nil
 	b.mu.Unlock()
 
 	if cmd == nil {
-		return nil
+		return b.removeProfileDirectory(userDataDir)
 	}
 
 	cancel()
+	trace.Event("chromium_process", "stop_requested")
 	if targetCancel != nil {
 		targetCancel()
 	}
 	if allocCancel != nil {
 		allocCancel()
 	}
-	cancelRemoteContexts(staleContexts)
 
 	timer := time.NewTimer(shutdownTimeout)
 	defer timer.Stop()
 
 	select {
 	case <-waitCh:
+		trace.Event("chromium_process", "stopped")
 	case <-timer.C:
+		trace.Event("chromium_process", "kill_requested")
 		killProcessGroup(cmd.Process)
 		<-waitCh
+		trace.Event("chromium_process", "killed")
 	}
 
-	return os.RemoveAll(userDataDir)
+	return b.removeProfileDirectory(userDataDir)
+}
+
+// Called under opMu, including retries after the browser process has exited.
+func (b *Backend) removeProfileDirectory(path string) error {
+	if path == "" {
+		return nil
+	}
+	if err := os.RemoveAll(path); err != nil {
+		b.mu.Lock()
+		b.userDataDir = path
+		b.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func killProcessGroup(process *os.Process) error {
@@ -1360,33 +1438,114 @@ func killProcessGroup(process *os.Process) error {
 	return err
 }
 
-func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error) {
+func (b *Backend) Observe(ctx context.Context, opts api.ObserveOptions) (result *api.Observation, resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
 
 	b.mu.Lock()
 	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
 	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_observe",
+		"chromium_observe",
+		opts.Verbose,
+		processDiagnostics,
+		diagnostic.Value("screenshot", opts.WithScreenshot),
+		diagnostic.Value("full", opts.FullScreenshot),
+		diagnostic.Value("recover", opts.RecoverScreenshot),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_observe", startedAt, processDiagnostics, resultErr)
+	}()
 
 	if url == "" {
 		return nil, errors.New("chromium backend is not attached")
 	}
 
-	return b.observeViaCDP(ctx, url, opts)
+	operation := "observe"
+	if opts.WithScreenshot {
+		operation = "screenshot"
+	}
+	return runWithDialogGuard(b, ctx, operation, func(ctx context.Context) (*api.Observation, error) {
+		return b.observeViaCDP(ctx, url, opts)
+	})
 }
 
-func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult, error) {
+// InspectStyles returns computed styles and best-effort authored declarations
+// for one recently observed node.
+func (b *Backend) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (result *api.StyleInspection, resultErr error) {
 	b.opMu.Lock()
 	defer b.opMu.Unlock()
 
 	b.mu.Lock()
 	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
 	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_inspect_styles",
+		"chromium_inspect_styles",
+		false,
+		processDiagnostics,
+		diagnostic.Value("node_ref", req.NodeRef),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_inspect_styles", startedAt, processDiagnostics, resultErr)
+	}()
 
 	if url == "" {
 		return nil, errors.New("chromium backend is not attached")
 	}
 
+	return runWithDialogGuard(b, ctx, "inspect", func(ctx context.Context) (*api.StyleInspection, error) {
+		return withBackendPageTargetContext(b, ctx, url, func(targetCtx context.Context, _ pageTargetInfo) (*api.StyleInspection, error) {
+			selector, err := b.resolveNodeReferenceInContext(targetCtx, req.NodeRef)
+			if err != nil {
+				return nil, err
+			}
+			return inspectTargetStyles(targetCtx, selector, req.CSSProperties)
+		})
+	})
+}
+
+func (b *Backend) Act(ctx context.Context, action api.Action) (result *api.ActionResult, resultErr error) {
+	b.opMu.Lock()
+	defer b.opMu.Unlock()
+
+	b.mu.Lock()
+	url := b.devtoolsURL
+	processDiagnostics := b.processDiagnostics
+	b.mu.Unlock()
+	ctx, trace, ownedTrace, startedAt := beginBrowserOperation(
+		ctx,
+		"chromium_act",
+		"chromium_act",
+		false,
+		processDiagnostics,
+		diagnostic.Value("action", action.Kind),
+	)
+	defer func() {
+		finishBrowserOperation(trace, ownedTrace, "chromium_act", startedAt, processDiagnostics, resultErr)
+	}()
+
+	if url == "" {
+		return nil, errors.New("chromium backend is not attached")
+	}
+
+	if action.ExpectDialog {
+		return b.actExpectingDialog(ctx, url, action)
+	}
+	if action.Kind == "dialog" {
+		return b.dialogViaCDP(ctx, url, action)
+	}
+	return runWithDialogGuard(b, ctx, action.Kind, func(ctx context.Context) (*api.ActionResult, error) {
+		return b.actViaCDP(ctx, url, action)
+	})
+}
+
+func (b *Backend) actViaCDP(ctx context.Context, url string, action api.Action) (*api.ActionResult, error) {
 	if strings.TrimSpace(action.NodeRef) != "" {
 		selector, err := b.resolveNodeReference(ctx, url, action.NodeRef)
 		if err != nil {
@@ -1433,78 +1592,22 @@ func (b *Backend) Act(ctx context.Context, action api.Action) (*api.ActionResult
 	}
 }
 
-func (*Backend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (b *Backend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if len(b.logs) == 0 {
-		return nil, nil
-	}
-
-	logs := append([]api.LogEntry(nil), b.logs...)
-	return logs, nil
-}
-
-func (b *Backend) captureLogs(reader io.Reader, startedCh chan<- string) {
-	buf := make([]byte, 0, 4096)
-	chunk := make([]byte, 1024)
-
-	for {
-		n, err := reader.Read(chunk)
-		if n > 0 {
-			buf = append(buf, chunk[:n]...)
-			for {
-				index := strings.IndexByte(string(buf), '\n')
-				if index < 0 {
-					break
-				}
-				line := strings.TrimSpace(string(buf[:index]))
-				buf = buf[index+1:]
-				if line != "" {
-					b.appendLog(line)
-					if url, ok := strings.CutPrefix(line, "DevTools listening on "); ok {
-						select {
-						case startedCh <- url:
-						default:
-						}
-					}
-				}
+func readStartupOutput(reader io.Reader, stream string, startedCh chan<- string, output *browserOutputBuffer) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 4096), 1<<20)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if url, ok := strings.CutPrefix(line, "DevTools listening on "); ok {
+			select {
+			case startedCh <- url:
+			default:
 			}
+			continue
 		}
-
-		if err != nil {
-			if len(buf) > 0 {
-				line := strings.TrimSpace(string(buf))
-				if line != "" {
-					b.appendLog(line)
-					if url, ok := strings.CutPrefix(line, "DevTools listening on "); ok {
-						select {
-						case startedCh <- url:
-						default:
-						}
-					}
-				}
-			}
-			return
-		}
+		output.add(stream, line)
 	}
-}
-
-func (b *Backend) appendLog(message string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	b.logs = append(b.logs, api.LogEntry{
-		Time:    time.Now(),
-		Level:   "info",
-		Message: message,
-	})
-	if len(b.logs) > maxLogEntries {
-		b.logs = append([]api.LogEntry(nil), b.logs[len(b.logs)-maxLogEntries:]...)
+	if err := scanner.Err(); err != nil {
+		output.add(stream, "read browser output: "+err.Error())
 	}
 }
 
@@ -1513,7 +1616,6 @@ func (b *Backend) cleanupAfterExit() {
 	userDataDir := b.userDataDir
 	allocCancel := b.allocCancel
 	targetCancel := b.targetCancel
-	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	b.cmd = nil
 	b.runCtx = nil
 	b.cancel = nil
@@ -1525,17 +1627,14 @@ func (b *Backend) cleanupAfterExit() {
 	b.targetCtx = nil
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
-	b.staleContexts = nil
-	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
+	b.processDiagnostics = nil
 	b.mu.Unlock()
 
 	if targetCancel != nil {
@@ -1544,7 +1643,6 @@ func (b *Backend) cleanupAfterExit() {
 	if allocCancel != nil {
 		allocCancel()
 	}
-	cancelRemoteContexts(staleContexts)
 	if userDataDir != "" {
 		os.RemoveAll(userDataDir)
 	}
@@ -1597,15 +1695,33 @@ type pageTargetInfo struct {
 
 func withBackendPageTargetContext[T any](b *Backend, ctx context.Context, devtoolsURL string, fn func(context.Context, pageTargetInfo) (T, error)) (T, error) {
 	var zero T
+	trace := diagnostic.FromContext(ctx)
+	startedAt := time.Now()
+	trace.Event("page_target", "start")
 
 	targetCtx, targetInfo, release, err := b.pageTargetContext(ctx, devtoolsURL)
 	if err != nil {
+		if shouldTracePageTargetSnapshot(err) {
+			b.tracePageTargetSnapshot(ctx, devtoolsURL, "")
+		}
+		trace.Event("page_target", "finish",
+			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+			diagnostic.Value("error", err),
+		)
 		return zero, err
 	}
 	defer release()
+	b.ensureBrowserVersion(targetCtx)
+	trace.Event("page_target", "finish",
+		diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+		diagnostic.Value("target", targetInfo.ID),
+	)
 
 	result, err := fn(targetCtx, targetInfo)
 	if err != nil {
+		if shouldTracePageTargetSnapshot(err) {
+			b.tracePageTargetSnapshot(ctx, devtoolsURL, targetInfo.ID)
+		}
 		return zero, err
 	}
 	return result, nil
@@ -1647,8 +1763,7 @@ func (b *Backend) pageTargetContextWithDependencies(
 			b.trackDialogEvent(targetInfo.ID, event)
 		})
 		if err := initializeTarget(ctx, targetCtx); err != nil {
-			targetCancel()
-			allocCancel()
+			detachRemoteTargetContext(targetCtx, targetCancel, allocCancel)
 			return nil, pageTargetInfo{}, nil, err
 		}
 
@@ -1658,7 +1773,6 @@ func (b *Backend) pageTargetContextWithDependencies(
 		b.targetCtx = targetCtx
 		b.targetCancel = targetCancel
 		b.targetInfo = targetInfo
-		b.reattachAttempted = false
 		b.mu.Unlock()
 	}
 
@@ -1721,9 +1835,10 @@ func NewRemote(ctx context.Context, devtoolsURL string, allocatorOptions ...chro
 	runCtx, cancel := context.WithCancel(ctx)
 	return &Remote{
 		backend: &Backend{
-			runCtx:           runCtx,
-			devtoolsURL:      devtoolsURL,
-			allocatorOptions: append([]chromedp.RemoteAllocatorOption(nil), allocatorOptions...),
+			runCtx:             runCtx,
+			devtoolsURL:        devtoolsURL,
+			allocatorOptions:   append([]chromedp.RemoteAllocatorOption(nil), allocatorOptions...),
+			processDiagnostics: newChromiumProcessDiagnostics("remote", ""),
 		},
 		cancel: cancel,
 	}
@@ -1752,23 +1867,18 @@ func (b *Backend) closeRemoteContexts() {
 	b.mu.Lock()
 	targetCancel := b.targetCancel
 	allocCancel := b.allocCancel
-	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	b.allocCtx = nil
 	b.allocCancel = nil
 	b.targetCtx = nil
 	b.targetCancel = nil
 	b.targetInfo = pageTargetInfo{}
-	b.staleContexts = nil
-	b.reattachAttempted = false
 	b.refLoaderID = ""
 	b.refURL = ""
 	b.refs = nil
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.mu.Unlock()
 
 	if targetCancel != nil {
@@ -1776,18 +1886,6 @@ func (b *Backend) closeRemoteContexts() {
 	}
 	if allocCancel != nil {
 		allocCancel()
-	}
-	cancelRemoteContexts(staleContexts)
-}
-
-func cancelRemoteContexts(contexts []remoteContext) {
-	for _, current := range contexts {
-		if current.targetCancel != nil {
-			current.targetCancel()
-		}
-		if current.allocCancel != nil {
-			current.allocCancel()
-		}
 	}
 }
 
@@ -1800,13 +1898,19 @@ func (b *Backend) trackDialogEvent(targetID string, event any) {
 	}
 	switch value := event.(type) {
 	case *page.EventJavascriptDialogOpening:
-		b.dialogOpen = true
-		b.dialogType = string(value.Type)
-		b.dialogMessage = strings.TrimSpace(value.Message)
+		b.dialogSequence++
+		b.dialog = api.DialogState{
+			Open:          true,
+			Type:          string(value.Type),
+			Message:       value.Message,
+			URL:           value.URL,
+			DefaultPrompt: value.DefaultPrompt,
+		}
+		if b.dialogInterrupt != nil {
+			b.dialogInterrupt(b.dialog)
+		}
 	case *page.EventJavascriptDialogClosed:
-		b.dialogOpen = false
-		b.dialogType = ""
-		b.dialogMessage = ""
+		b.dialog = api.DialogState{}
 	}
 }
 
@@ -1814,18 +1918,10 @@ func (b *Backend) javascriptDialogError() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if !b.dialogOpen {
+	if !b.dialog.Open {
 		return nil
 	}
-	dialogType := b.dialogType
-	if dialogType == "" {
-		dialogType = "unknown"
-	}
-	message := b.dialogMessage
-	if message == "" {
-		message = "(empty message)"
-	}
-	return fmt.Errorf("screenshot is blocked by an open %s JavaScript dialog: %s", dialogType, message)
+	return &javascriptDialogBlockedError{operation: "screenshot", dialog: b.dialog}
 }
 
 func operationContext(targetCtx context.Context, requestCtx context.Context) (context.Context, func()) {
@@ -1836,6 +1932,7 @@ func operationContext(targetCtx context.Context, requestCtx context.Context) (co
 	} else {
 		operationCtx, cancel = context.WithCancel(targetCtx)
 	}
+	operationCtx = diagnostic.WithTrace(operationCtx, diagnostic.FromContext(requestCtx))
 	stop := context.AfterFunc(requestCtx, cancel)
 	return operationCtx, func() {
 		stop()
@@ -1845,6 +1942,405 @@ func operationContext(targetCtx context.Context, requestCtx context.Context) (co
 
 func awaitPromise(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 	return p.WithAwaitPromise(true)
+}
+
+type matchedStyleSnapshot struct {
+	InlineStyle     *css.Style
+	AttributesStyle *css.Style
+	MatchedRules    []*css.RuleMatch
+	Inherited       []*css.InheritedStyleEntry
+	Headers         map[cdp.StyleSheetID]*css.StyleSheetHeader
+}
+
+type styleDeclarationContext struct {
+	Selector          string
+	MatchingSelectors []string
+	Origin            string
+	Inline            bool
+	Attribute         bool
+	Inherited         bool
+	AncestorDepth     int
+	StyleSheetID      cdp.StyleSheetID
+}
+
+type stylePropertyTarget struct {
+	Index         int
+	Relation      string
+	ResolvedValue string
+}
+
+func inspectTargetStyles(ctx context.Context, selector string, requested []string) (*api.StyleInspection, error) {
+	properties := normalizeRequestedStyleProperties(requested)
+	computed := map[string]string{}
+	if err := chromedp.Run(ctx, chromedp.Evaluate(inspectComputedStylesExpression(selector, properties), &computed)); err != nil {
+		return nil, err
+	}
+
+	inspection := &api.StyleInspection{
+		Computed:   normalizeStringMap(computed),
+		Properties: emptyStylePropertyInspections(properties),
+	}
+
+	snapshot, err := captureMatchedStyleSnapshot(ctx, selector)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		inspection.StyleSourcesStatus = api.StyleSourcesStatusUnavailable
+		inspection.StyleSourcesError = strings.TrimSpace(err.Error())
+		return inspection, nil
+	}
+
+	partial := populateStyleDeclarations(inspection.Properties, snapshot)
+	inspection.StyleSourcesStatus = api.StyleSourcesStatusComplete
+	if partial {
+		inspection.StyleSourcesStatus = api.StyleSourcesStatusPartial
+	}
+	return inspection, nil
+}
+
+func normalizeRequestedStyleProperties(values []string) []string {
+	properties := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		duplicate := false
+		for _, property := range properties {
+			if stylePropertyNamesEqual(property, trimmed) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			properties = append(properties, trimmed)
+		}
+	}
+	return properties
+}
+
+func emptyStylePropertyInspections(properties []string) []api.StylePropertyInspection {
+	out := make([]api.StylePropertyInspection, 0, len(properties))
+	for _, property := range properties {
+		out = append(out, api.StylePropertyInspection{
+			Name:         property,
+			Declarations: []api.StyleDeclaration{},
+		})
+	}
+	return out
+}
+
+func captureMatchedStyleSnapshot(ctx context.Context, selector string) (matchedStyleSnapshot, error) {
+	snapshot := matchedStyleSnapshot{}
+	headers := map[cdp.StyleSheetID]*css.StyleSheetHeader{}
+	var headerMu sync.Mutex
+	listenerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	chromedp.ListenTarget(listenerCtx, func(event any) {
+		added, ok := event.(*css.EventStyleSheetAdded)
+		if !ok || added.Header == nil {
+			return
+		}
+		header := *added.Header
+		headerMu.Lock()
+		headers[header.StyleSheetID] = &header
+		headerMu.Unlock()
+	})
+
+	err := chromedp.Run(ctx, chromedp.ActionFunc(func(runCtx context.Context) error {
+		_ = css.Disable().Do(runCtx)
+		if err := css.Enable().Do(runCtx); err != nil {
+			return err
+		}
+		defer func() {
+			_ = css.Disable().Do(runCtx)
+		}()
+
+		root, err := dom.GetDocument().Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if root == nil {
+			return errors.New("style inspection document root is unavailable")
+		}
+		nodeID, err := dom.QuerySelector(root.NodeID, selector).Do(runCtx)
+		if err != nil {
+			return err
+		}
+		if nodeID == 0 {
+			return errors.New("style inspection target is no longer available")
+		}
+
+		var matched css.GetMatchedStylesForNodeReturns
+		if err := cdp.Execute(runCtx, css.CommandGetMatchedStylesForNode, css.GetMatchedStylesForNode(nodeID), &matched); err != nil {
+			return err
+		}
+		snapshot.InlineStyle = matched.InlineStyle
+		snapshot.AttributesStyle = matched.AttributesStyle
+		snapshot.MatchedRules = matched.MatchedCSSRules
+		snapshot.Inherited = matched.Inherited
+		return nil
+	}))
+	if err != nil {
+		return matchedStyleSnapshot{}, err
+	}
+
+	cancel()
+	headerMu.Lock()
+	headerSnapshot := make(map[cdp.StyleSheetID]*css.StyleSheetHeader, len(headers))
+	for id, header := range headers {
+		headerSnapshot[id] = header
+	}
+	headerMu.Unlock()
+	snapshot.Headers = headerSnapshot
+	return snapshot, nil
+}
+
+func populateStyleDeclarations(properties []api.StylePropertyInspection, snapshot matchedStyleSnapshot) bool {
+	partial := false
+	if snapshot.InlineStyle != nil {
+		partial = appendStyleDeclarations(properties, snapshot.InlineStyle, styleDeclarationContext{
+			Origin: "regular",
+			Inline: true,
+		}, snapshot.Headers) || partial
+	}
+	if snapshot.AttributesStyle != nil {
+		partial = appendStyleDeclarations(properties, snapshot.AttributesStyle, styleDeclarationContext{
+			Origin:    "regular",
+			Attribute: true,
+		}, snapshot.Headers) || partial
+	}
+	for _, match := range snapshot.MatchedRules {
+		partial = appendRuleMatchDeclarations(properties, match, false, 0, snapshot.Headers) || partial
+	}
+	for index, inherited := range snapshot.Inherited {
+		if inherited == nil {
+			continue
+		}
+		depth := index + 1
+		if inherited.InlineStyle != nil {
+			partial = appendStyleDeclarations(properties, inherited.InlineStyle, styleDeclarationContext{
+				Origin:        "regular",
+				Inline:        true,
+				Inherited:     true,
+				AncestorDepth: depth,
+			}, snapshot.Headers) || partial
+		}
+		for _, match := range inherited.MatchedCSSRules {
+			partial = appendRuleMatchDeclarations(properties, match, true, depth, snapshot.Headers) || partial
+		}
+	}
+	return partial
+}
+
+func appendRuleMatchDeclarations(properties []api.StylePropertyInspection, match *css.RuleMatch, inherited bool, depth int, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) bool {
+	if match == nil || match.Rule == nil || match.Rule.Style == nil {
+		return false
+	}
+	rule := match.Rule
+	selector := ""
+	matchingSelectors := []string(nil)
+	if rule.SelectorList != nil {
+		selector = strings.TrimSpace(rule.SelectorList.Text)
+		for _, index := range match.MatchingSelectors {
+			if index < 0 || index >= int64(len(rule.SelectorList.Selectors)) {
+				continue
+			}
+			value := rule.SelectorList.Selectors[index]
+			if value != nil && strings.TrimSpace(value.Text) != "" {
+				matchingSelectors = append(matchingSelectors, strings.TrimSpace(value.Text))
+			}
+		}
+	}
+	styleSheetID := rule.StyleSheetID
+	if styleSheetID == "" {
+		styleSheetID = rule.Style.StyleSheetID
+	}
+	return appendStyleDeclarations(properties, rule.Style, styleDeclarationContext{
+		Selector:          selector,
+		MatchingSelectors: matchingSelectors,
+		Origin:            rule.Origin.String(),
+		Inherited:         inherited,
+		AncestorDepth:     depth,
+		StyleSheetID:      styleSheetID,
+	}, headers)
+}
+
+func appendStyleDeclarations(properties []api.StylePropertyInspection, style *css.Style, declarationContext styleDeclarationContext, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) bool {
+	if style == nil {
+		return false
+	}
+	if declarationContext.StyleSheetID == "" {
+		declarationContext.StyleSheetID = style.StyleSheetID
+	}
+	partial := false
+	for _, property := range style.CSSProperties {
+		if property == nil || strings.TrimSpace(property.Name) == "" {
+			continue
+		}
+		if declarationContext.StyleSheetID != "" && style.Range != nil && property.Range == nil {
+			continue
+		}
+		for _, target := range stylePropertyTargets(properties, property) {
+			declaration, sourcePartial := buildStyleDeclaration(style, property, target, declarationContext, headers)
+			properties[target.Index].Declarations = append(properties[target.Index].Declarations, declaration)
+			partial = partial || sourcePartial
+		}
+	}
+	return partial
+}
+
+func stylePropertyTargets(properties []api.StylePropertyInspection, property *css.Property) []stylePropertyTarget {
+	targets := make([]stylePropertyTarget, 0, 1)
+	seen := map[int]struct{}{}
+	for index := range properties {
+		if stylePropertyNamesEqual(properties[index].Name, property.Name) {
+			targets = append(targets, stylePropertyTarget{Index: index, Relation: "direct"})
+			seen[index] = struct{}{}
+		}
+	}
+	for _, longhand := range property.LonghandProperties {
+		if longhand == nil {
+			continue
+		}
+		for index := range properties {
+			if _, ok := seen[index]; ok || !stylePropertyNamesEqual(properties[index].Name, longhand.Name) {
+				continue
+			}
+			targets = append(targets, stylePropertyTarget{
+				Index:         index,
+				Relation:      "shorthand",
+				ResolvedValue: strings.TrimSpace(longhand.Value),
+			})
+			seen[index] = struct{}{}
+		}
+	}
+	return targets
+}
+
+func stylePropertyNamesEqual(left string, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if strings.HasPrefix(left, "--") || strings.HasPrefix(right, "--") {
+		return left == right
+	}
+	return strings.EqualFold(left, right)
+}
+
+func buildStyleDeclaration(style *css.Style, property *css.Property, target stylePropertyTarget, declarationContext styleDeclarationContext, headers map[cdp.StyleSheetID]*css.StyleSheetHeader) (api.StyleDeclaration, bool) {
+	declaration := api.StyleDeclaration{
+		Property:          strings.TrimSpace(property.Name),
+		Value:             strings.TrimSpace(property.Value),
+		ResolvedValue:     target.ResolvedValue,
+		Text:              strings.TrimSpace(property.Text),
+		Selector:          declarationContext.Selector,
+		MatchingSelectors: append([]string(nil), declarationContext.MatchingSelectors...),
+		Origin:            declarationContext.Origin,
+		Relation:          target.Relation,
+		Important:         property.Important,
+		Disabled:          property.Disabled,
+		Implicit:          property.Implicit,
+		Inline:            declarationContext.Inline,
+		Attribute:         declarationContext.Attribute,
+		Inherited:         declarationContext.Inherited,
+		AncestorDepth:     declarationContext.AncestorDepth,
+	}
+	if declaration.Text == "" && !property.Implicit {
+		declaration.Text = declaration.Property + ": " + declaration.Value
+		if declaration.Important {
+			declaration.Text += " !important"
+		}
+		declaration.Text += ";"
+	}
+
+	styleSheetID := declarationContext.StyleSheetID
+	if styleSheetID == "" {
+		styleSheetID = style.StyleSheetID
+	}
+	if styleSheetID == "" {
+		return declaration, false
+	}
+	header := headers[styleSheetID]
+	if header == nil {
+		return declaration, true
+	}
+	declaration.SourceURL = strings.TrimSpace(header.SourceURL)
+	declaration.SourceMapURL = strings.TrimSpace(header.SourceMapURL)
+	rangeValue := property.Range
+	if rangeValue == nil {
+		rangeValue = style.Range
+	}
+	if rangeValue == nil {
+		return declaration, true
+	}
+	declaration.Line = int(header.StartLine) + int(rangeValue.StartLine) + 1
+	declaration.Column = int(rangeValue.StartColumn) + 1
+	if rangeValue.StartLine == 0 {
+		declaration.Column += int(header.StartColumn)
+	}
+	return declaration, false
+}
+
+func inspectComputedStylesExpression(selector string, properties []string) string {
+	selectorJSON, _ := json.Marshal(strings.TrimSpace(selector))
+	propertiesJSON, _ := json.Marshal(properties)
+	return `(function () {
+  const selector = ` + string(selectorJSON) + `;
+  const properties = ` + string(propertiesJSON) + `;
+  const el = document.querySelector(selector);
+  if (!el) throw new Error('style inspection target is no longer available');
+
+  const colorPropertyPattern = /(^|-)color$/;
+  const colorPropertyNames = new Set(['fill', 'stroke']);
+  const colorProbe = document.createElement('span');
+  const colorCanvas = document.createElement('canvas');
+  colorCanvas.width = 1;
+  colorCanvas.height = 1;
+  const colorContext = colorCanvas.getContext('2d', { colorSpace: 'srgb', willReadFrequently: true });
+  const isColorProperty = (property) => colorPropertyPattern.test(property) || colorPropertyNames.has(property);
+  const formatColorNumber = (value) => {
+    const rounded = Math.round(value * 10000) / 10000;
+    if (Math.abs(rounded) < 0.00005) return '0';
+    return rounded.toFixed(4).replace(/\.?0+$/, '');
+  };
+  const normalizeColorValue = (value) => {
+    if (!colorContext || !value) return value;
+    colorProbe.style.color = '';
+    colorProbe.style.color = value;
+    if (!colorProbe.style.color) return value;
+    colorContext.clearRect(0, 0, 1, 1);
+    colorContext.globalCompositeOperation = 'copy';
+    colorContext.fillStyle = value;
+    colorContext.fillRect(0, 0, 1, 1);
+    try {
+      const imageData = colorContext.getImageData(0, 0, 1, 1, { colorSpace: 'srgb', pixelFormat: 'rgba-float16' });
+      if (imageData && imageData.pixelFormat === 'rgba-float16' && imageData.data.length >= 4) {
+        const red = Math.min(Math.max(imageData.data[0] * 255, 0), 255);
+        const green = Math.min(Math.max(imageData.data[1] * 255, 0), 255);
+        const blue = Math.min(Math.max(imageData.data[2] * 255, 0), 255);
+        const alpha = Math.min(Math.max(imageData.data[3], 0), 1);
+        if (alpha >= 0.99995) return 'rgb(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ')';
+        return 'rgba(' + formatColorNumber(red) + ', ' + formatColorNumber(green) + ', ' + formatColorNumber(blue) + ', ' + formatColorNumber(alpha) + ')';
+      }
+    } catch (error) {
+    }
+    const imageData = colorContext.getImageData(0, 0, 1, 1);
+    if (!imageData || imageData.data.length < 4) return value;
+    const alpha = imageData.data[3] / 255;
+    if (imageData.data[3] === 255) return 'rgb(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ')';
+    return 'rgba(' + imageData.data[0] + ', ' + imageData.data[1] + ', ' + imageData.data[2] + ', ' + formatColorNumber(alpha) + ')';
+  };
+
+  const style = window.getComputedStyle(el);
+  const selected = properties.includes('*') ? Array.from(style) : properties;
+  const values = {};
+  for (const property of selected) {
+    const value = style.getPropertyValue(property).trim();
+    values[property] = isColorProperty(property) ? normalizeColorValue(value) : value;
+  }
+  return values;
+})()`
 }
 
 func observeTarget(ctx context.Context, devtoolsURL string, targetInfo pageTargetInfo, opts api.ObserveOptions) (*api.Observation, error) {
@@ -1946,10 +2442,26 @@ func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts ap
 		}
 
 		startedAt := time.Now()
+		trace := diagnostic.FromContext(targetCtx)
+		trace.Event("observe_target", "start",
+			diagnostic.Value("target", targetInfo.ID),
+			diagnostic.Value("with_text", opts.WithText),
+			diagnostic.Value("with_tree", opts.WithTree),
+			diagnostic.Value("with_screenshot", opts.WithScreenshot),
+		)
 		observation, err := observeTarget(targetCtx, devtoolsURL, targetInfo, opts)
 		if err != nil {
+			trace.Event("observe_target", "finish",
+				diagnostic.Value("target", targetInfo.ID),
+				diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+				diagnostic.Value("error", err),
+			)
 			return nil, err
 		}
+		trace.Event("observe_target", "finish",
+			diagnostic.Value("target", targetInfo.ID),
+			diagnostic.Value("duration_ms", time.Since(startedAt).Milliseconds()),
+		)
 		observation.Meta["observe_duration_ms"] = strconv.FormatInt(time.Since(startedAt).Milliseconds(), 10)
 		if !opts.WithScreenshot {
 			if opts.WithTree {
@@ -1971,11 +2483,24 @@ func (b *Backend) observeViaCDP(ctx context.Context, devtoolsURL string, opts ap
 			if err != nil {
 				return nil, err
 			}
+			recoveredStartedAt := time.Now()
+			trace.Event("observe_recovered_target", "start",
+				diagnostic.Value("target", recoveredTarget.ID),
+			)
 			recoveredObservation, err := observeTarget(recoveredCtx, devtoolsURL, recoveredTarget, opts)
 			release()
 			if err != nil {
+				trace.Event("observe_recovered_target", "finish",
+					diagnostic.Value("target", recoveredTarget.ID),
+					diagnostic.Value("duration_ms", time.Since(recoveredStartedAt).Milliseconds()),
+					diagnostic.Value("error", err),
+				)
 				return nil, err
 			}
+			trace.Event("observe_recovered_target", "finish",
+				diagnostic.Value("target", recoveredTarget.ID),
+				diagnostic.Value("duration_ms", time.Since(recoveredStartedAt).Milliseconds()),
+			)
 			recoveredObservation.ScreenshotData = screenshot
 			for key, value := range screenshotMeta {
 				recoveredObservation.Meta[key] = value
@@ -2132,13 +2657,11 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	if opts.FullScreenshot {
 		meta["screenshot_full"] = "true"
 	}
-	if err := b.javascriptDialogError(); err != nil {
-		return nil, nil, err
-	}
 
 	totalStartedAt := time.Now()
 	captureID := strconv.FormatInt(totalStartedAt.UnixNano(), 10)
-	requestTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	diagnosticTrace := diagnostic.FromContext(requestCtx)
+	requestTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	requestTrace(fmt.Sprintf(
 		"stage=request event=start full=%t recover=%t remaining_ms=%d",
 		opts.FullScreenshot,
@@ -2152,31 +2675,19 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 			errorMessage(resultErr),
 		))
 	}()
+	if err := b.javascriptDialogError(); err != nil {
+		return nil, nil, err
+	}
 
-	attemptCtx, cancel := screenshotAttemptContext(targetCtx)
-	attemptStartedAt := time.Now()
-	attemptTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 1)
-	attemptTrace(fmt.Sprintf(
-		"stage=capture event=start full=%t remaining_ms=%d",
+	data, width, height, lastErr := b.captureScreenshotAttempt(
+		targetCtx,
 		opts.FullScreenshot,
-		contextRemainingMilliseconds(attemptCtx),
-	))
-	attemptResult, lastErr := captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
-	data := attemptResult.data
-	width := attemptResult.width
-	height := attemptResult.height
-	attemptContextErr := attemptCtx.Err()
-	cancel()
-	attemptTrace(fmt.Sprintf(
-		"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
-		time.Since(attemptStartedAt).Milliseconds(),
-		len(data),
-		errorMessage(attemptContextErr),
-		errorMessage(lastErr),
-	))
-	b.logScreenshotAttempt(targetInfo.ID, "capture", 1, attemptStartedAt, data, lastErr)
+		diagnosticTrace,
+		captureID,
+		targetInfo.ID,
+		1,
+	)
 	if lastErr == nil {
-		applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 		return screenshotResult(data, width, height, 1, totalStartedAt, meta)
 	}
 	if errors.Is(lastErr, errFullScreenshotTooLarge) {
@@ -2190,7 +2701,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	reattachStartedAt := time.Now()
-	reattachTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	reattachTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	reattachTrace(fmt.Sprintf(
 		"stage=reattach event=start remaining_ms=%d",
 		contextRemainingMilliseconds(requestCtx),
@@ -2201,42 +2712,21 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		time.Since(reattachStartedAt).Milliseconds(),
 		errorMessage(reattachErr),
 	))
-	b.appendLog(fmt.Sprintf(
-		"nexus screenshot target=%s phase=reattach duration_ms=%d error=%q",
-		targetInfo.ID,
-		time.Since(reattachStartedAt).Milliseconds(),
-		errorMessage(reattachErr),
-	))
 	if reattachErr == nil {
 		defer releaseReattached()
 		targetCtx = reattachedCtx
 		targetInfo = reattachedTarget
 		meta["screenshot_recovery"] = "target_reattached"
 
-		attemptCtx, cancel = screenshotAttemptContext(targetCtx)
-		attemptStartedAt = time.Now()
-		attemptTrace = b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 2)
-		attemptTrace(fmt.Sprintf(
-			"stage=capture event=start full=%t remaining_ms=%d",
+		data, width, height, lastErr = b.captureScreenshotAttempt(
+			targetCtx,
 			opts.FullScreenshot,
-			contextRemainingMilliseconds(attemptCtx),
-		))
-		attemptResult, lastErr = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
-		data = attemptResult.data
-		width = attemptResult.width
-		height = attemptResult.height
-		attemptContextErr = attemptCtx.Err()
-		cancel()
-		attemptTrace(fmt.Sprintf(
-			"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
-			time.Since(attemptStartedAt).Milliseconds(),
-			len(data),
-			errorMessage(attemptContextErr),
-			errorMessage(lastErr),
-		))
-		b.logScreenshotAttempt(targetInfo.ID, "capture", 2, attemptStartedAt, data, lastErr)
+			diagnosticTrace,
+			captureID,
+			targetInfo.ID,
+			2,
+		)
 		if lastErr == nil {
-			applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 			return screenshotResult(data, width, height, 2, totalStartedAt, meta)
 		}
 		if errors.Is(lastErr, errFullScreenshotTooLarge) {
@@ -2257,7 +2747,7 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	}
 
 	recoveryStartedAt := time.Now()
-	recoveryTrace := b.newScreenshotTrace(opts.Verbose, captureID, targetInfo.ID, 0)
+	recoveryTrace := newScreenshotTrace(diagnosticTrace, captureID, targetInfo.ID, 0)
 	recoveryTrace(fmt.Sprintf(
 		"stage=replace_target event=start remaining_ms=%d",
 		contextRemainingMilliseconds(requestCtx),
@@ -2288,34 +2778,14 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 		"",
 	))
 
-	attemptCtx, cancel = screenshotAttemptContext(recoveryCtx)
-	attemptStartedAt = time.Now()
-	attemptTrace = b.newScreenshotTrace(opts.Verbose, captureID, recoveredTarget.ID, 3)
-	attemptTrace(fmt.Sprintf(
-		"stage=capture event=start full=%t remaining_ms=%d",
+	data, width, height, err = b.captureScreenshotAttempt(
+		recoveryCtx,
 		opts.FullScreenshot,
-		contextRemainingMilliseconds(attemptCtx),
-	))
-	attemptResult, err = captureScreenshotOnce(attemptCtx, opts.FullScreenshot, attemptTrace)
-	data = attemptResult.data
-	width = attemptResult.width
-	height = attemptResult.height
-	attemptContextErr = attemptCtx.Err()
-	cancel()
-	attemptTrace(fmt.Sprintf(
-		"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
-		time.Since(attemptStartedAt).Milliseconds(),
-		len(data),
-		errorMessage(attemptContextErr),
-		errorMessage(err),
-	))
-	b.appendLog(fmt.Sprintf(
-		"nexus screenshot target=%s phase=recovery duration_ms=%d bytes=%d error=%q",
+		diagnosticTrace,
+		captureID,
 		recoveredTarget.ID,
-		time.Since(recoveryStartedAt).Milliseconds(),
-		len(data),
-		errorMessage(err),
-	))
+		3,
+	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("capture screenshot failed after replacing target %s with %s: %w", targetInfo.ID, recoveredTarget.ID, err)
 	}
@@ -2323,16 +2793,52 @@ func (b *Backend) captureScreenshot(requestCtx context.Context, targetCtx contex
 	meta["page_target_id"] = recoveredTarget.ID
 	meta["screenshot_recovery"] = "target_replaced"
 	meta["screenshot_recovery_warning"] = "the unresponsive tab was replaced and transient page state was lost"
-	applyScreenshotReadinessMeta(meta, attemptResult.readiness)
 	return screenshotResult(data, width, height, 3, totalStartedAt, meta)
 }
 
 type screenshotTrace func(string)
 
-func (b *Backend) newScreenshotTrace(verbose bool, captureID string, targetID string, attempt int) screenshotTrace {
-	if !verbose {
+func (b *Backend) captureScreenshotAttempt(targetCtx context.Context, full bool, diagnosticTrace *diagnostic.Trace, captureID string, targetID string, attempt int) ([]byte, int64, int64, error) {
+	attemptCtx, cancel := screenshotAttemptContext(targetCtx)
+	startedAt := time.Now()
+	trace := newScreenshotTrace(diagnosticTrace, captureID, targetID, attempt)
+	trace(fmt.Sprintf(
+		"stage=capture event=start full=%t remaining_ms=%d",
+		full,
+		contextRemainingMilliseconds(attemptCtx),
+	))
+
+	data, width, height, err := captureScreenshotData(attemptCtx, full, trace)
+	contextErr := attemptCtx.Err()
+	cancel()
+	trace(fmt.Sprintf(
+		"stage=capture event=finish duration_ms=%d bytes=%d context_error=%q error=%q",
+		time.Since(startedAt).Milliseconds(),
+		len(data),
+		errorMessage(contextErr),
+		errorMessage(err),
+	))
+	return data, width, height, err
+}
+
+func newScreenshotTrace(diagnosticTrace *diagnostic.Trace, captureID string, targetID string, attempt int) screenshotTrace {
+	if diagnosticTrace == nil {
 		return func(string) {}
 	}
+	return func(message string) {
+		fields := []diagnostic.Field{
+			diagnostic.Value("component", "screenshot"),
+			diagnostic.Value("capture_id", captureID),
+			diagnostic.Value("target", targetID),
+		}
+		if attempt > 0 {
+			fields = append(fields, diagnostic.Value("attempt", attempt))
+		}
+		diagnosticTrace.Message(message, fields...)
+	}
+}
+
+func screenshotTracePrefix(captureID string, targetID string, attempt int) string {
 	prefix := fmt.Sprintf(
 		"nexus screenshot capture_id=%s target=%s",
 		captureID,
@@ -2341,23 +2847,7 @@ func (b *Backend) newScreenshotTrace(verbose bool, captureID string, targetID st
 	if attempt > 0 {
 		prefix += fmt.Sprintf(" attempt=%d", attempt)
 	}
-	return func(message string) {
-		entry := strings.TrimSpace(prefix + " " + message)
-		b.appendLog(entry)
-		log.Print(entry)
-	}
-}
-
-func (b *Backend) logScreenshotAttempt(targetID string, phase string, attempt int, startedAt time.Time, data []byte, err error) {
-	b.appendLog(fmt.Sprintf(
-		"nexus screenshot target=%s phase=%s attempt=%d duration_ms=%d bytes=%d error=%q",
-		targetID,
-		phase,
-		attempt,
-		time.Since(startedAt).Milliseconds(),
-		len(data),
-		errorMessage(err),
-	))
+	return prefix
 }
 
 func screenshotResult(data []byte, width int64, height int64, attempts int, startedAt time.Time, meta map[string]string) ([]byte, map[string]string, error) {
@@ -2370,189 +2860,6 @@ func screenshotResult(data []byte, width int64, height int64, attempts int, star
 		meta["screenshot_height"] = strconv.FormatInt(height, 10)
 	}
 	return data, meta, nil
-}
-
-type screenshotReadiness struct {
-	ReadyState       string        `json:"readyState"`
-	VisibilityState  string        `json:"visibilityState"`
-	WasDiscarded     bool          `json:"wasDiscarded"`
-	SnapshotCaptured bool          `json:"-"`
-	Fallback         bool          `json:"-"`
-	TimedOut         bool          `json:"-"`
-	Duration         time.Duration `json:"-"`
-	Err              error         `json:"-"`
-}
-
-type screenshotAttemptResult struct {
-	data      []byte
-	width     int64
-	height    int64
-	readiness screenshotReadiness
-}
-
-type screenshotAttemptDependencies struct {
-	waitForReadiness func(context.Context, screenshotTrace, string) (screenshotReadiness, error)
-	capture          func(context.Context, bool, screenshotTrace) ([]byte, int64, int64, error)
-}
-
-func captureScreenshotOnce(ctx context.Context, full bool, trace screenshotTrace) (screenshotAttemptResult, error) {
-	return captureScreenshotOnceWithDependencies(ctx, full, trace, screenshotAttemptDependencies{
-		waitForReadiness: waitForScreenshotReadiness,
-		capture:          captureScreenshotData,
-	})
-}
-
-func captureScreenshotOnceWithDependencies(ctx context.Context, full bool, trace screenshotTrace, dependencies screenshotAttemptDependencies) (screenshotAttemptResult, error) {
-	result := screenshotAttemptResult{}
-	readinessStartedAt := time.Now()
-	readinessCtx, readinessCancel := screenshotReadinessContext(ctx)
-	readiness, readinessErr := dependencies.waitForReadiness(readinessCtx, trace, "")
-	readinessContextErr := readinessCtx.Err()
-	readinessCancel()
-	readiness.Duration = time.Since(readinessStartedAt)
-	readiness.Err = readinessErr
-	if readinessErr != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		markScreenshotReadinessFallback(&readiness, readinessErr, readinessContextErr, trace, "paint_barrier")
-	}
-	result.readiness = readiness
-
-	captureCtx, captureCancel := context.WithCancel(ctx)
-	data, width, height, err := dependencies.capture(captureCtx, full, trace)
-	captureCancel()
-	result.data = data
-	result.width = width
-	result.height = height
-	return result, err
-}
-
-func waitForScreenshotReadiness(ctx context.Context, trace screenshotTrace, stagePrefix string) (screenshotReadiness, error) {
-	readiness := screenshotReadiness{}
-	snapshotStage := stagePrefix + "readiness_snapshot"
-	barrierStage := stagePrefix + "paint_barrier"
-
-	traceScreenshot(trace, "stage="+snapshotStage+" event=start")
-	snapshotStartedAt := time.Now()
-	err := chromedp.Run(ctx, chromedp.Evaluate(screenshotReadinessExpression, &readiness))
-	traceScreenshot(trace, fmt.Sprintf(
-		"stage=%s event=finish duration_ms=%d ready_state=%q visibility_state=%q was_discarded=%t context_error=%q error=%q",
-		snapshotStage,
-		time.Since(snapshotStartedAt).Milliseconds(),
-		readiness.ReadyState,
-		readiness.VisibilityState,
-		readiness.WasDiscarded,
-		errorMessage(ctx.Err()),
-		errorMessage(err),
-	))
-	if err != nil {
-		return readiness, err
-	}
-	readiness.SnapshotCaptured = true
-
-	traceScreenshot(trace, "stage="+barrierStage+" event=start")
-	barrierStartedAt := time.Now()
-	var barrierStatus string
-	err = chromedp.Run(
-		ctx,
-		chromedp.Evaluate(
-			screenshotPaintBarrierExpression(),
-			&barrierStatus,
-			awaitPromise,
-		),
-	)
-	if err == nil && barrierStatus != "confirmed" {
-		err = fmt.Errorf("%w: %s", errScreenshotReadinessTimedOut, screenshotReadinessValue(barrierStatus))
-	}
-	traceScreenshot(trace, fmt.Sprintf(
-		"stage=%s event=finish duration_ms=%d barrier_status=%q context_error=%q error=%q",
-		barrierStage,
-		time.Since(barrierStartedAt).Milliseconds(),
-		barrierStatus,
-		errorMessage(ctx.Err()),
-		errorMessage(err),
-	))
-	return readiness, err
-}
-
-func screenshotReadinessContext(parent context.Context) (context.Context, context.CancelFunc) {
-	timeout := screenshotReadinessTimeout
-	if deadline, ok := parent.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining < timeout {
-			timeout = remaining
-		}
-	}
-	if timeout <= 0 {
-		return context.WithCancel(parent)
-	}
-	return context.WithTimeout(parent, timeout)
-}
-
-func screenshotReadinessTimedOut(err error, contextErr error) bool {
-	if errors.Is(err, errScreenshotReadinessTimedOut) ||
-		errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(contextErr, context.DeadlineExceeded) {
-		return true
-	}
-	message := strings.ToLower(errorMessage(err))
-	return strings.Contains(message, "timed out") ||
-		strings.Contains(message, "timeout") ||
-		strings.Contains(message, "execution was terminated")
-}
-
-func markScreenshotReadinessFallback(readiness *screenshotReadiness, err error, contextErr error, trace screenshotTrace, stage string) {
-	readiness.Fallback = true
-	readiness.TimedOut = screenshotReadinessTimedOut(err, contextErr)
-	readiness.Err = err
-	traceScreenshot(trace, fmt.Sprintf(
-		"stage=%s event=fallback duration_ms=%d context_error=%q error=%q",
-		stage,
-		readiness.Duration.Milliseconds(),
-		errorMessage(contextErr),
-		errorMessage(err),
-	))
-}
-
-func applyScreenshotReadinessMeta(meta map[string]string, readiness screenshotReadiness) {
-	status := "confirmed"
-	if readiness.Fallback {
-		status = "failed"
-		if readiness.TimedOut {
-			status = "timed_out"
-		}
-	}
-	meta["screenshot_readiness"] = status
-	meta["screenshot_readiness_duration_ms"] = strconv.FormatInt(readiness.Duration.Milliseconds(), 10)
-	meta["screenshot_ready_state"] = screenshotReadinessValue(readiness.ReadyState)
-	meta["screenshot_visibility_state"] = screenshotReadinessValue(readiness.VisibilityState)
-	meta["screenshot_was_discarded"] = screenshotWasDiscardedValue(readiness)
-	if readiness.Err == nil {
-		return
-	}
-	meta["screenshot_readiness_error"] = readiness.Err.Error()
-	meta["screenshot_readiness_warning"] = fmt.Sprintf(
-		"paint readiness barrier did not complete; screenshot captured without readiness confirmation (ready_state=%s visibility_state=%s was_discarded=%s)",
-		screenshotReadinessValue(readiness.ReadyState),
-		screenshotReadinessValue(readiness.VisibilityState),
-		screenshotWasDiscardedValue(readiness),
-	)
-}
-
-func screenshotReadinessValue(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "unknown"
-	}
-	return value
-}
-
-func screenshotWasDiscardedValue(readiness screenshotReadiness) string {
-	if !readiness.SnapshotCaptured {
-		return "unknown"
-	}
-	return strconv.FormatBool(readiness.WasDiscarded)
 }
 
 func captureScreenshotData(ctx context.Context, full bool, trace screenshotTrace) ([]byte, int64, int64, error) {
@@ -2669,16 +2976,9 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	b.mu.Lock()
 	runCtx := b.runCtx
 	devtoolsURL := b.devtoolsURL
-	alreadyAttempted := b.reattachAttempted
-	if runCtx != nil && !alreadyAttempted {
-		b.reattachAttempted = true
-	}
 	b.mu.Unlock()
 	if runCtx == nil {
 		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
-	}
-	if alreadyAttempted {
-		return nil, pageTargetInfo{}, nil, errors.New("target reattach was already attempted; use recover-target to replace it")
 	}
 	traceScreenshot(trace, "stage=reattach_activate_http event=start")
 	if err := b.activatePageTargetBeforeAttach(requestCtx, devtoolsURL, targetInfo.ID); err != nil {
@@ -2696,8 +2996,7 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	traceScreenshot(trace, "stage=reattach_initialize event=start")
 	if err := initializePageTargetContext(requestCtx, persistentTargetCtx); err != nil {
 		traceScreenshot(trace, fmt.Sprintf("stage=reattach_initialize event=finish error=%q", errorMessage(err)))
-		targetCancel()
-		allocCancel()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
 		return nil, pageTargetInfo{}, nil, err
 	}
 	traceScreenshot(trace, "stage=reattach_initialize event=finish error=\"\"")
@@ -2706,42 +3005,75 @@ func (b *Backend) reattachPageTarget(requestCtx context.Context, targetInfo page
 	if err := b.activatePageTarget(operationCtx, targetInfo.ID); err != nil {
 		traceScreenshot(trace, fmt.Sprintf("stage=reattach_activate_cdp event=finish error=%q", errorMessage(err)))
 		release()
-		b.mu.Lock()
-		b.staleContexts = append(b.staleContexts, remoteContext{
-			targetCancel: targetCancel,
-			allocCancel:  allocCancel,
-		})
-		b.mu.Unlock()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
 		return nil, pageTargetInfo{}, nil, err
 	}
 	traceScreenshot(trace, "stage=reattach_activate_cdp event=finish error=\"\"")
 
+	if err := b.commitReattachedPageTarget(
+		targetInfo,
+		allocCtx,
+		allocCancel,
+		persistentTargetCtx,
+		targetCancel,
+		trace,
+	); err != nil {
+		release()
+		detachRemoteTargetContext(persistentTargetCtx, targetCancel, allocCancel)
+		return nil, pageTargetInfo{}, nil, err
+	}
+
+	return operationCtx, targetInfo, release, nil
+}
+
+func (b *Backend) commitReattachedPageTarget(
+	targetInfo pageTargetInfo,
+	allocCtx context.Context,
+	allocCancel context.CancelFunc,
+	targetCtx context.Context,
+	targetCancel context.CancelFunc,
+	trace screenshotTrace,
+) error {
 	b.mu.Lock()
 	if b.targetInfo.ID != targetInfo.ID {
-		b.staleContexts = append(b.staleContexts, remoteContext{
-			targetCancel: targetCancel,
-			allocCancel:  allocCancel,
-		})
 		b.mu.Unlock()
-		release()
-		return nil, pageTargetInfo{}, nil, errors.New("page target changed during reattach")
+		return errors.New("page target changed during reattach")
 	}
-	b.staleContexts = append(b.staleContexts, remoteContext{
-		targetCancel: b.targetCancel,
-		allocCancel:  b.allocCancel,
-	})
+	oldTargetCtx := b.targetCtx
+	oldTargetCancel := b.targetCancel
+	oldAllocCancel := b.allocCancel
 	b.allocCtx = allocCtx
 	b.allocCancel = allocCancel
-	b.targetCtx = persistentTargetCtx
+	b.targetCtx = targetCtx
 	b.targetCancel = targetCancel
 	b.targetInfo = targetInfo
 	b.persistentContextID = 0
 	b.persistentLoaderID = ""
 	b.persistentWorldName = ""
 	b.mu.Unlock()
+	traceScreenshot(trace, "stage=reattach_detach_previous event=start")
+	detachRemoteTargetContext(oldTargetCtx, oldTargetCancel, oldAllocCancel)
+	traceScreenshot(trace, "stage=reattach_detach_previous event=finish")
 	traceScreenshot(trace, "stage=reattach_context event=finish error=\"\"")
+	return nil
+}
 
-	return operationCtx, targetInfo, release, nil
+// detachRemoteTargetContext releases a RemoteAllocator connection without closing its existing page target
+//
+// chromedp closes TargetID when a target context is canceled, even when WithTargetID attached to an existing tab
+// Clearing the stored target ID keeps chromedp's session detach cleanup while preventing Target.closeTarget
+func detachRemoteTargetContext(targetCtx context.Context, targetCancel context.CancelFunc, allocCancel context.CancelFunc) {
+	if targetCtx != nil {
+		if chromedpContext := chromedp.FromContext(targetCtx); chromedpContext != nil && chromedpContext.Target != nil {
+			chromedpContext.Target.TargetID = ""
+		}
+	}
+	if targetCancel != nil {
+		targetCancel()
+	}
+	if allocCancel != nil {
+		allocCancel()
+	}
 }
 
 func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx context.Context, currentURL string, viewportWidth int, viewportHeight int, scrollX int, scrollY int, trace screenshotTrace) (context.Context, pageTargetInfo, func(), error) {
@@ -2769,7 +3101,6 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	devtoolsURL := b.devtoolsURL
 	oldTargetCancel := b.targetCancel
 	oldAllocCancel := b.allocCancel
-	staleContexts := append([]remoteContext(nil), b.staleContexts...)
 	b.mu.Unlock()
 	if runCtx == nil {
 		return nil, pageTargetInfo{}, nil, errors.New("chromium backend is not attached")
@@ -2838,29 +3169,11 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 		return nil, pageTargetInfo{}, nil, err
 	}
 
-	replacementTrace := screenshotTrace(func(message string) {
-		traceScreenshot(trace, fmt.Sprintf("%s replacement_target=%s", message, newTargetID))
-	})
-	readinessStartedAt := time.Now()
-	readinessCtx, readinessCancel := screenshotReadinessContext(operationCtx)
-	readiness, readinessErr := waitForScreenshotReadiness(readinessCtx, replacementTrace, "restore_")
-	readinessContextErr := readinessCtx.Err()
-	readinessCancel()
-	readiness.Duration = time.Since(readinessStartedAt)
 	if operationCtx.Err() != nil {
 		release()
 		targetCancel()
 		allocCancel()
 		return nil, pageTargetInfo{}, nil, operationCtx.Err()
-	}
-	if readinessErr != nil {
-		markScreenshotReadinessFallback(
-			&readiness,
-			readinessErr,
-			readinessContextErr,
-			replacementTrace,
-			"restore_paint_barrier",
-		)
 	}
 
 	if scrollX != 0 || scrollY != 0 {
@@ -2897,12 +3210,8 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	b.targetCtx = persistentTargetCtx
 	b.targetCancel = targetCancel
 	b.targetInfo = targetInfo
-	b.staleContexts = nil
-	b.reattachAttempted = false
 	b.clearObservationReferences()
-	b.dialogOpen = false
-	b.dialogType = ""
-	b.dialogMessage = ""
+	b.dialog = api.DialogState{}
 	b.mu.Unlock()
 	traceScreenshot(trace, fmt.Sprintf("stage=attach_replacement event=finish replacement_target=%s error=%q", newTargetID, ""))
 
@@ -2912,7 +3221,6 @@ func (b *Backend) replacePageTarget(requestCtx context.Context, currentTargetCtx
 	if oldAllocCancel != nil {
 		oldAllocCancel()
 	}
-	cancelRemoteContexts(staleContexts)
 
 	return operationCtx, targetInfo, release, nil
 }
@@ -2929,73 +3237,33 @@ func errorMessage(err error) string {
 	return err.Error()
 }
 
-const screenshotReadinessExpression = `(() => ({
-  readyState: document.readyState || '',
-  visibilityState: document.visibilityState || '',
-  wasDiscarded: document.wasDiscarded === true
-}))()`
-
-func screenshotPaintBarrierExpression() string {
-	return fmt.Sprintf(`(() => new Promise((resolve) => {
-  let settled = false;
-  let domContentLoaded = null;
-  let firstFrame = null;
-  let secondFrame = null;
-  let timer = null;
-
-  const cleanup = () => {
-    if (domContentLoaded !== null) {
-      document.removeEventListener('DOMContentLoaded', domContentLoaded);
-    }
-    if (firstFrame !== null) {
-      cancelAnimationFrame(firstFrame);
-    }
-    if (secondFrame !== null) {
-      cancelAnimationFrame(secondFrame);
-    }
-    if (timer !== null) {
-      clearTimeout(timer);
-    }
-  };
-  const finish = (status) => {
-    if (settled) return;
-    settled = true;
-    cleanup();
-    resolve(status);
-  };
-  const waitForFrames = () => {
+const hydrationBarrierExpression = `(async () => {
+  const waitForFrames = () => new Promise((resolve) => {
+    let settled = false;
+    let firstFrame = null;
+    let secondFrame = null;
+    let timer = null;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (firstFrame !== null) cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) cancelAnimationFrame(secondFrame);
+      if (timer !== null) clearTimeout(timer);
+      resolve();
+    };
+    timer = setTimeout(finish, 250);
     firstFrame = requestAnimationFrame(() => {
       firstFrame = null;
       secondFrame = requestAnimationFrame(() => {
         secondFrame = null;
-        finish('confirmed');
+        finish();
       });
     });
-  };
-
-  timer = setTimeout(() => finish('timed_out'), %d);
-  if (document.readyState === 'loading') {
-    domContentLoaded = () => {
-      domContentLoaded = null;
-      waitForFrames();
-    };
-    document.addEventListener('DOMContentLoaded', domContentLoaded, {once: true});
-    if (document.readyState !== 'loading') {
-      document.removeEventListener('DOMContentLoaded', domContentLoaded);
-      domContentLoaded = null;
-      waitForFrames();
-    }
-  } else {
-    waitForFrames();
-  }
-}))()`, screenshotReadinessBarrierTimeout.Milliseconds())
-}
-
-const hydrationBarrierExpression = `(async () => {
+  });
   if (document.readyState === 'loading') {
     await new Promise((resolve) => document.addEventListener('DOMContentLoaded', resolve, {once: true}));
   }
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await waitForFrames();
   await new Promise((resolve) => {
     let timer;
     const observer = new MutationObserver(() => {
@@ -3011,7 +3279,7 @@ const hydrationBarrierExpression = `(async () => {
       resolve();
     }, 100);
   });
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await waitForFrames();
   return document.readyState;
 })()`
 
@@ -3235,26 +3503,6 @@ func (b *Backend) mouseNodeViaCDP(ctx context.Context, devtoolsURL string, actio
 	})
 }
 
-func dispatchKeyEventsWithProbe(ctx context.Context, action chromedp.Action) (int, bool, error) {
-	token := fmt.Sprintf("nexus-key-probe-%d", time.Now().UnixNano())
-	if err := chromedp.Run(ctx, chromedp.Evaluate(installKeyProbeExpression(token), nil)); err != nil {
-		return 0, false, err
-	}
-	if err := chromedp.Run(ctx, action); err != nil {
-		_ = chromedp.Run(ctx, chromedp.Evaluate(finishKeyProbeExpression(token), nil))
-		return 0, false, err
-	}
-
-	var count int
-	if err := chromedp.Run(ctx, chromedp.Evaluate(finishKeyProbeExpression(token), &count)); err != nil {
-		return 0, false, nil
-	}
-	if count < 0 {
-		return 0, false, nil
-	}
-	return count, true, nil
-}
-
 func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api.Action) (*api.ActionResult, error) {
 	if strings.TrimSpace(action.Text) == "" {
 		return nil, errors.New("type text is required")
@@ -3292,31 +3540,13 @@ func (b *Backend) typeViaCDP(ctx context.Context, devtoolsURL string, action api
 			"tag":  targetValue.Tag,
 			"text": action.Text,
 		}
-		keydownCount, verified, err := dispatchKeyEventsWithProbe(
+		if err := chromedp.Run(
 			targetCtx,
 			chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery),
-		)
-		if err != nil {
+		); err != nil {
 			return nil, err
 		}
-		if verified && keydownCount == 0 {
-			if err := b.activatePageTarget(targetCtx, targetInfo.ID); err != nil {
-				return nil, err
-			}
-			keydownCount, verified, err = dispatchKeyEventsWithProbe(
-				targetCtx,
-				chromedp.SendKeys(targetValue.Selector, action.Text, chromedp.ByQuery),
-			)
-			if err != nil {
-				return nil, err
-			}
-			if verified && keydownCount == 0 {
-				return nil, errors.New("type key events were not delivered to the page")
-			}
-		}
 		value["method"] = "key_events"
-		value["keydown_events"] = keydownCount
-		value["delivery_verified"] = verified
 
 		return &api.ActionResult{
 			OK:      true,
@@ -3376,31 +3606,14 @@ func (b *Backend) keyViaCDP(ctx context.Context, devtoolsURL string, action api.
 
 	return withBackendPageTargetContext(b, ctx, devtoolsURL, func(targetCtx context.Context, targetInfo pageTargetInfo) (*api.ActionResult, error) {
 		keyAction := chromedp.KeyEvent(keyValue, chromedp.KeyModifiers(modifiers...))
-		keydownCount, verified, err := dispatchKeyEventsWithProbe(targetCtx, keyAction)
-		if err != nil {
+		if err := chromedp.Run(targetCtx, keyAction); err != nil {
 			return nil, err
-		}
-		if verified && keydownCount == 0 {
-			if err := b.activatePageTarget(targetCtx, targetInfo.ID); err != nil {
-				return nil, err
-			}
-			keydownCount, verified, err = dispatchKeyEventsWithProbe(targetCtx, keyAction)
-			if err != nil {
-				return nil, err
-			}
-			if verified && keydownCount == 0 {
-				return nil, errors.New("key event was not delivered to the page")
-			}
 		}
 
 		return &api.ActionResult{
 			OK:      true,
 			Changed: true,
 			Message: fmt.Sprintf("sent keys %s", keySpec),
-			Value: map[string]interface{}{
-				"keydown_events":    keydownCount,
-				"delivery_verified": verified,
-			},
 			Meta: map[string]string{
 				"devtools_url":   devtoolsURL,
 				"page_target_id": targetInfo.ID,
@@ -3753,33 +3966,16 @@ func waitForHydration(ctx context.Context, timeout time.Duration) error {
 
 func waitForNavigation(ctx context.Context, timeout time.Duration) error {
 	var initialURL string
-	if err := chromedp.Run(ctx, chromedp.Location(&initialURL)); err != nil {
-		return err
-	}
-
-	deadline := time.Now().Add(timeout)
-	for {
+	initialized := false
+	return pollBrowserWait(ctx, timeout, func(waitCtx context.Context) (bool, error) {
 		var currentURL string
-		err := chromedp.Run(ctx, chromedp.Location(&currentURL))
-		if err == nil && currentURL != "" && currentURL != initialURL {
-			return nil
+		err := chromedp.Run(waitCtx, chromedp.Location(&currentURL))
+		if err == nil && !initialized {
+			initialURL, initialized = currentURL, true
+			return false, nil
 		}
-		if err != nil && !isRetryableWaitError(err) {
-			return err
-		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("wait timed out after %s", timeout)
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
+		return err == nil && currentURL != "" && currentURL != initialURL, err
+	})
 }
 
 func waitForFunction(ctx context.Context, source string, timeout time.Duration) error {
@@ -3787,27 +3983,42 @@ func waitForFunction(ctx context.Context, source string, timeout time.Duration) 
 }
 
 func waitForExpression(ctx context.Context, expression string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for {
+	return pollBrowserWait(ctx, timeout, func(waitCtx context.Context) (bool, error) {
 		var ready bool
-		err := chromedp.Run(ctx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue, awaitPromise))
+		err := chromedp.Run(waitCtx, chromedp.Evaluate(expression, &ready, chromedp.EvalAsValue, awaitPromise))
+		return ready, err
+	})
+}
+
+func pollBrowserWait(ctx context.Context, timeout time.Duration, check func(context.Context) (bool, error)) error {
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	timeoutError := func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("wait timed out after %s: %w", timeout, waitCtx.Err())
+	}
+	for {
+		if waitCtx.Err() != nil {
+			return timeoutError()
+		}
+		ready, err := check(waitCtx)
+		if waitCtx.Err() != nil {
+			return timeoutError()
+		}
 		if err == nil && ready {
 			return nil
 		}
 		if err != nil && !isRetryableWaitError(err) {
 			return err
 		}
-		if time.Now().After(deadline) {
-			if err != nil {
-				return err
-			}
-			return fmt.Errorf("wait timed out after %s", timeout)
-		}
-
+		timer := time.NewTimer(100 * time.Millisecond)
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(100 * time.Millisecond):
+		case <-waitCtx.Done():
+			timer.Stop()
+			return timeoutError()
+		case <-timer.C:
 		}
 	}
 }
@@ -3897,14 +4108,6 @@ func markTypeTargetSelectorExpression(selector string, token string) string {
 
 func clearMarkedTypeTargetExpression(token string) string {
 	return strings.ReplaceAll(clearMarkedTypeTargetJS, "$TOKEN$", strconv.Quote(token))
-}
-
-func installKeyProbeExpression(token string) string {
-	return strings.ReplaceAll(installKeyProbeJS, "$TOKEN$", strconv.Quote(token))
-}
-
-func finishKeyProbeExpression(token string) string {
-	return strings.ReplaceAll(finishKeyProbeJS, "$TOKEN$", strconv.Quote(token))
 }
 
 func typeExpression(nodeID int, text string) string {
@@ -4247,28 +4450,8 @@ func currentPageTarget(ctx context.Context, devtoolsURL string) (pageTargetInfo,
 }
 
 func currentPageTargetOnce(ctx context.Context, devtoolsURL string) (pageTargetInfo, error) {
-	baseURL, err := debugHTTPBaseURL(devtoolsURL)
+	targets, err := listDevToolsTargetsOnce(ctx, devtoolsURL)
 	if err != nil {
-		return pageTargetInfo{}, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
-	if err != nil {
-		return pageTargetInfo{}, err
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return pageTargetInfo{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return pageTargetInfo{}, errors.New("failed to list page targets")
-	}
-
-	var targets []pageTargetInfo
-	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
 		return pageTargetInfo{}, err
 	}
 
@@ -4279,6 +4462,109 @@ func currentPageTargetOnce(ctx context.Context, devtoolsURL string) (pageTargetI
 	}
 
 	return pageTargetInfo{}, errPageTargetNotFound
+}
+
+func listDevToolsTargetsOnce(ctx context.Context, devtoolsURL string) ([]pageTargetInfo, error) {
+	baseURL, err := debugHTTPBaseURL(devtoolsURL)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/json/list", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, errors.New("failed to list page targets")
+	}
+
+	var targets []pageTargetInfo
+	if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
+		return nil, err
+	}
+	return targets, nil
+}
+
+func shouldTracePageTargetSnapshot(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "capture screenshot") ||
+		strings.Contains(message, "no target with given id") ||
+		strings.Contains(message, "page target") ||
+		strings.Contains(message, "target closed") ||
+		strings.Contains(message, "target crashed") ||
+		strings.Contains(message, "target detached")
+}
+
+func (b *Backend) tracePageTargetSnapshot(ctx context.Context, devtoolsURL string, expectedTargetID string) {
+	trace := diagnostic.FromContext(ctx)
+	if trace == nil {
+		return
+	}
+
+	b.mu.Lock()
+	runCtx := b.runCtx
+	if strings.TrimSpace(expectedTargetID) == "" {
+		expectedTargetID = b.targetInfo.ID
+	}
+	b.mu.Unlock()
+
+	fields := []diagnostic.Field{
+		diagnostic.Value("expected_target", expectedTargetID),
+	}
+	trace.Event("page_target_snapshot", "start", fields...)
+	if runCtx == nil {
+		trace.Event("page_target_snapshot", "finish",
+			diagnostic.Value("expected_target", expectedTargetID),
+			diagnostic.Value("error", "chromium backend is not attached"),
+		)
+		return
+	}
+
+	snapshotParentCtx, release := operationContext(runCtx, ctx)
+	defer release()
+	snapshotCtx, cancel := context.WithTimeout(snapshotParentCtx, pageTargetSnapshotTimeout)
+	defer cancel()
+	targets, err := listDevToolsTargetsOnce(snapshotCtx, devtoolsURL)
+	if err != nil {
+		trace.Event("page_target_snapshot", "finish",
+			diagnostic.Value("expected_target", expectedTargetID),
+			diagnostic.Value("error", err),
+		)
+		return
+	}
+
+	pageTargetIDs := make([]string, 0, min(len(targets), maxPageTargetSnapshotIDs))
+	pageTargetCount := 0
+	expectedTargetPresent := false
+	for _, targetInfo := range targets {
+		if targetInfo.Type != "page" {
+			continue
+		}
+		pageTargetCount++
+		if len(pageTargetIDs) < maxPageTargetSnapshotIDs {
+			pageTargetIDs = append(pageTargetIDs, targetInfo.ID)
+		}
+		if targetInfo.ID == expectedTargetID {
+			expectedTargetPresent = true
+		}
+	}
+	trace.Event("page_target_snapshot", "finish",
+		diagnostic.Value("expected_target", expectedTargetID),
+		diagnostic.Value("expected_target_present", expectedTargetPresent),
+		diagnostic.Value("page_target_count", pageTargetCount),
+		diagnostic.Value("page_target_ids", strings.Join(pageTargetIDs, ",")),
+		diagnostic.Value("page_target_ids_truncated", pageTargetCount > len(pageTargetIDs)),
+	)
 }
 
 func activatePageTargetHTTP(ctx context.Context, devtoolsURL string, targetID string) error {
@@ -4355,6 +4641,7 @@ type rawNode struct {
 	Name           string                  `json:"name"`
 	Text           string                  `json:"text"`
 	Value          string                  `json:"value"`
+	States         map[string]string       `json:"states"`
 	Styles         map[string]string       `json:"styles"`
 	LayoutContext  []api.LayoutContextNode `json:"layout_context"`
 	Bounds         api.Rect                `json:"bounds"`
@@ -4395,6 +4682,7 @@ func parseTreeJSON(treeJSON string) ([]api.Node, error) {
 			Name:           strings.TrimSpace(node.Name),
 			Text:           strings.TrimSpace(node.Text),
 			Value:          strings.TrimSpace(node.Value),
+			States:         node.States,
 			Styles:         node.Styles,
 			LayoutContext:  normalizeLayoutContext(node.LayoutContext),
 			Bounds:         node.Bounds,

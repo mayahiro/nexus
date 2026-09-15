@@ -11,6 +11,8 @@ This is the main entry point for AI agents that use Nexus.
 ## Quick Links
 
 - Compare guide: [docs/ai/compare.md](compare.md)
+- Inspect guide: [docs/ai/inspect.md](inspect.md)
+- JavaScript dialogs: [docs/ai/dialogs.md](dialogs.md) ([Japanese](dialogs_ja.md))
 - Flow guide: [docs/ai/flow.md](flow.md)
 - Playbooks: [docs/ai/playbooks/README.md](playbooks/README.md)
 - Migration playbook: [docs/ai/playbooks/migration.md](playbooks/migration.md)
@@ -38,6 +40,7 @@ nxctl doctor
 nxctl browser setup
 nxctl open https://example.com
 nxctl state
+nxctl help inspect
 nxctl help compare
 nxctl help flow
 ```
@@ -58,7 +61,8 @@ nxctl help flow
 - Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional, because page changes can stale later refs
 - Use `batch --keep-going` only when later diagnostic steps remain useful after an earlier command fails
 - Add `wait` after actions that trigger async UI updates
-- Move to `inspect` when whole-page compare is too broad
+- Use `dialog get`, `dialog accept [--text <TEXT>]`, or `dialog dismiss` when a JavaScript dialog blocks a page operation; see the [dialog guide](dialogs.md) before repeating the triggering action
+- Move to `inspect` when one element needs computed styles or matched declaration sources
 
 Nexus serializes operations within one session. A queued operation still honors its own context deadline, so parallel callers fail by timeout instead of starting concurrent CDP work on the same tab.
 
@@ -74,7 +78,7 @@ For controlled forms:
 
 - Prefer `input` when the field is empty and the application needs real keyboard events
 - Prefer `fill` when replacing an existing value, then verify with `get value <NODE>` or `state`
-- `input`, `type`, and `keys` verify that a page-level `keydown` listener received an event when the probe can stay attached; a verified zero-delivery result is an error instead of a false success
+- `input`, `type`, and `keys` report CDP command success; verify with `get value`, `state`, or an application-specific assertion when the resulting page state matters
 - If a custom controlled component still restores the old value after `fill`, use a keyboard-oriented sequence that focuses and clears the field before `input`
 - Avoid `type` when focus may have moved after a modal, navigation, or rerender
 
@@ -93,7 +97,7 @@ Refs are generation checked. A ref is rejected when the main document loader or 
 
 ## Readiness and Eval Worlds
 
-Use `wait hydrated` when a page needs a generic post-load stabilization barrier before interaction. It waits for `DOMContentLoaded`, two animation frames, 100 ms without DOM mutations, and two more animation frames. It is a browser rendering heuristic and cannot prove that a framework attached every event handler.
+Use `wait hydrated` when a page needs a generic post-load stabilization barrier before interaction. It waits for `DOMContentLoaded`, two animation frames, 100 ms without DOM mutations, and two more animation frames. Each animation-frame pair falls back after 250 ms so a background or headless target cannot stall the entire wait. It is a browser rendering heuristic and cannot prove that a framework attached every event handler.
 
 Use `wait function <EXPRESSION>` when the application exposes a stronger readiness condition.
 
@@ -124,16 +128,16 @@ Rules:
 - `--full` is not supported together with `--locator`
 - viewport capture is the default; `--full` opts into a full-page capture
 - screenshot capture times out after 30000 ms by default; `screenshot --timeout <MS>` and `observe --screenshot --timeout <MS>` apply the overall deadline on both the client and daemon
-- each capture attempt, including its readiness check, is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
-- the paint-readiness barrier is best-effort and gets at most 1000 ms; when it does not complete, Nexus discards that operation context and calls `Page.captureScreenshot` through a fresh context
-- a successful fallback capture reports a warning because the frame may precede final rendering; direct text output prints it, flow reports keep side-specific messages in step `warnings`, and JSON observations expose `screenshot_readiness`, `screenshot_ready_state`, `screenshot_visibility_state`, `screenshot_was_discarded`, and the warning in `meta`
+- each capture attempt is capped at 10000 ms; a larger overall timeout budgets recovery work but does not extend an individual attempt
+- capture does not add an implicit rendering delay
 - use `wait hydrated` or a page-specific `wait function` before capture when visual readiness is part of the assertion
 - after a capture failure, Nexus creates one fresh CDP connection to the same target and retries without losing page state; repeated failures do not accumulate more connections
 - add `--recover-target` to permit a final tab replacement and URL reload when same-target recovery fails; Nexus prints a warning because transient page state is lost
-- add `--verbose` to `screenshot` or screenshot-enabled `observe` to write correlated readiness snapshot, paint barrier, capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`
+- failed daemon-backed commands automatically flush their bounded request stages and runtime, browser, CDP, and RPC transfer diagnostics to the active `nxd.<pid>.log`
+- add `--verbose` to `screenshot` or `observe` to emit those stages for a successful request as well
 - `--recover-target` is not supported together with `--locator`
 - full-page captures are rejected above 16384 px width, 50000 px height, or 120 million pixels
-- an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout
+- an open JavaScript alert, confirm, prompt, or beforeunload dialog is reported explicitly instead of being treated as a generic capture timeout; handle it with `dialog accept` or `dialog dismiss` in the same session before retrying
 - refresh the locator from a recent `state` output if the page changed after navigation or interaction
 - in flow manifests, use `{"action":"screenshot","path":"...","locator":"..."}` for the same targeted capture behavior
 
@@ -141,7 +145,7 @@ Mouse position is kept on the session target, so a viewport screenshot taken aft
 
 Canvas content, including map renderers, is captured visually but usually has no semantic DOM nodes for `find`, `state`, or coordinate assertions. Verify canvas internals through screenshot review or an application-specific JavaScript/API assertion.
 
-Auto-started daemon processes hold an exclusive lock on `nxd.pid` and write to PID-specific `nxd.<pid>.log` files in the Nexus state directory. Use the PID in `nxd.pid` to select the current log. An interactive `nxctl daemon --verbose` or `nxd --verbose` also logs request summaries for every operation.
+Concurrent `nxctl` processes coordinate a missing-daemon cold start through `nxd.start.lock`, then recheck the socket so only one process spawns `nxd`. The running daemon holds a separate exclusive lock on `nxd.pid` and writes to a PID-specific `nxd.<pid>.log` file in the Nexus state directory. Use the PID in `nxd.pid` to select the current log. Each request keeps a bounded trace across RPC, session serialization, backend work, and response transfer. Successful traces are discarded in normal mode; any command error, cancellation, transfer failure, or unexpected Chromium exit flushes the stages with Nexus, Go, OS version, architecture, browser, chromedp, and cdproto environment fields. An interactive `nxctl daemon --verbose` or `nxd --verbose` emits every stage for successful and failed operations.
 
 ## File Uploads
 
@@ -156,5 +160,6 @@ The selector must resolve to exactly one `input[type=file]`. Nexus resolves the 
 ## Which Guide To Open Next
 
 - Open [docs/ai/compare.md](compare.md) when the task is about compare timing, noise, or compare scope
+- Open [docs/ai/inspect.md](inspect.md) when one element needs computed styles, matched declarations, or source locations
 - Open [docs/ai/flow.md](flow.md) when the task requires login, session reuse, or multi-step navigation
 - Open [docs/ai/playbooks/migration.md](playbooks/migration.md) when the task is a legacy-to-new-system migration audit

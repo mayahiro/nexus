@@ -15,11 +15,16 @@ import (
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 )
 
 type testHandler struct{}
 
 type binaryTestHandler struct {
+	testHandler
+}
+
+type diagnosticBinaryTestHandler struct {
 	testHandler
 }
 
@@ -52,6 +57,21 @@ func newPipeListener(conn net.Conn) *pipeListener {
 		connections: connections,
 		closed:      make(chan struct{}),
 	}
+}
+
+func newPipeClient(connections ...net.Conn) *Client {
+	var mu sync.Mutex
+	next := 0
+	return newClient(func(context.Context) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if next >= len(connections) {
+			return nil, errors.New("unexpected extra dial")
+		}
+		conn := connections[next]
+		next++
+		return conn, nil
+	})
 }
 
 func (l *pipeListener) Accept() (net.Conn, error) {
@@ -91,6 +111,13 @@ func (binaryTestHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 			ScreenshotData: []byte{0, 1, 2, 3, 255},
 		},
 	}, nil
+}
+
+func (diagnosticBinaryTestHandler) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	diagnostic.FromContext(ctx).Event("browser_capture", "finish",
+		diagnostic.Value("bytes", 5),
+	)
+	return binaryTestHandler{}.ObserveSession(ctx, req)
 }
 
 func (h cancelTestHandler) ObserveSession(ctx context.Context, _ api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
@@ -151,6 +178,18 @@ func (testHandler) ObserveSession(_ context.Context, req api.ObserveSessionReque
 			SessionID:  req.SessionID,
 			TargetType: "browser",
 			Title:      "example",
+		},
+	}, nil
+}
+
+func (testHandler) InspectStyles(_ context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	return api.InspectStylesResponse{
+		Inspection: api.StyleInspection{
+			Computed:           map[string]string{"color": "rgb(0, 0, 0)"},
+			StyleSourcesStatus: api.StyleSourcesStatusComplete,
+			Properties: []api.StylePropertyInspection{
+				{Name: "color", Declarations: []api.StyleDeclaration{}},
+			},
 		},
 	}, nil
 }
@@ -224,6 +263,71 @@ func TestPing(t *testing.T) {
 	}
 }
 
+func TestClientSupportsConcurrentCalls(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	socketDir, err := os.MkdirTemp("/tmp", "nxrpc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(socketDir)
+	})
+	socket := filepath.Join(socketDir, "nxd.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- Serve(ctx, listener, testHandler{}, ServeOptions{})
+	}()
+
+	client, err := Dial(context.Background(), socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	const callers = 16
+	start := make(chan struct{})
+	results := make(chan error, callers)
+	for range callers {
+		go func() {
+			<-start
+			response, err := client.Ping(context.Background())
+			if err == nil && response.ProtocolVersion != api.ProtocolVersion {
+				err = errors.New("unexpected protocol version")
+			}
+			results <- err
+		}()
+	}
+	close(start)
+
+	for range callers {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
 func TestSessionRPC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -285,6 +389,18 @@ func TestSessionRPC(t *testing.T) {
 	}
 	if observed.Observation.SessionID != "web1" {
 		t.Fatalf("unexpected observe result: %+v", observed)
+	}
+
+	inspected, err := client.InspectStyles(context.Background(), api.InspectStylesRequest{
+		SessionID:     "web1",
+		NodeRef:       "@e1",
+		CSSProperties: []string{"color"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspected.Inspection.Computed["color"] != "rgb(0, 0, 0)" || inspected.Inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected style inspection result: %+v", inspected)
 	}
 
 	acted, err := client.ActSession(context.Background(), api.ActSessionRequest{
@@ -378,11 +494,7 @@ func TestBinaryObservationOverPipe(t *testing.T) {
 		close(done)
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	res, err := client.ObserveSession(context.Background(), api.ObserveSessionRequest{
 		SessionID: "web1",
 		Options:   api.ObserveOptions{WithScreenshot: true},
@@ -408,6 +520,56 @@ func TestBinaryObservationOverPipe(t *testing.T) {
 	}
 }
 
+func TestBinaryResponseWriteFailureFlushesRequestDiagnostics(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	var entries []string
+	opts := ServeOptions{
+		NewTrace: func(method string) *diagnostic.Trace {
+			return diagnostic.New(method, false, func(entry string) {
+				entries = append(entries, entry)
+			}, diagnostic.Value("daemon_version", "test-version"))
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		serveConn(context.Background(), serverConn, diagnosticBinaryTestHandler{}, opts)
+		close(done)
+	}()
+
+	writer := bufio.NewWriter(clientConn)
+	if err := writeJSONLine(writer, request{
+		ProtocolVersion: api.ProtocolVersion,
+		Method:          "observe_session",
+		Params: api.ObserveSessionRequest{
+			SessionID: "web1",
+			Options:   api.ObserveOptions{WithScreenshot: true},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clientConn.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("server did not stop after binary response write failure")
+	}
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`request="observe_session" event="failure"`,
+		`daemon_version="test-version"`,
+		`stage="browser_capture" event="finish" bytes=5`,
+		`stage="rpc_response" event="write_failure" binary_bytes=5`,
+		`error="write RPC response header:`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("RPC write failure diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
 func TestServeRecoversHandlerPanic(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	secondServerConn, secondClientConn := net.Pipe()
@@ -425,11 +587,7 @@ func TestServeRecoversHandlerPanic(t *testing.T) {
 		serverDone <- Serve(ctx, listener, panicTestHandler{}, ServeOptions{})
 	}()
 
-	firstClient := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-	}
+	firstClient := newPipeClient(firstClientConn)
 	_, err := firstClient.ActSession(context.Background(), api.ActSessionRequest{
 		SessionID: "web1",
 		Action:    api.Action{Kind: "eval", Text: "1+1"},
@@ -439,11 +597,7 @@ func TestServeRecoversHandlerPanic(t *testing.T) {
 	}
 	firstClient.Close()
 
-	secondClient := &Client{
-		conn:   secondClientConn,
-		reader: bufio.NewReader(secondClientConn),
-		writer: bufio.NewWriter(secondClientConn),
-	}
+	secondClient := newPipeClient(secondClientConn)
 	response, err := secondClient.Ping(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -509,11 +663,7 @@ func TestClientCallStopsWhenContextWithoutDeadlineIsCanceled(t *testing.T) {
 		}
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	defer client.Close()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -540,7 +690,7 @@ func TestClientCallStopsWhenContextWithoutDeadlineIsCanceled(t *testing.T) {
 	}
 }
 
-func TestClientReconnectsAfterCanceledCall(t *testing.T) {
+func TestClientUsesFreshConnectionAfterCanceledCall(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	defer firstServerConn.Close()
 	secondServerConn, secondClientConn := net.Pipe()
@@ -554,19 +704,7 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 		}
 	}()
 
-	dialed := false
-	client := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-		dial: func(context.Context) (net.Conn, error) {
-			if dialed {
-				return nil, errors.New("unexpected extra dial")
-			}
-			dialed = true
-			return secondClientConn, nil
-		},
-	}
+	client := newPipeClient(firstClientConn, secondClientConn)
 	ctx, cancel := context.WithCancel(context.Background())
 	firstCall := make(chan error, 1)
 	go func() {
@@ -595,10 +733,6 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 	if response.ProtocolVersion != api.ProtocolVersion {
 		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
 	}
-	if !dialed {
-		t.Fatal("client did not reconnect")
-	}
-
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -609,7 +743,7 @@ func TestClientReconnectsAfterCanceledCall(t *testing.T) {
 	}
 }
 
-func TestClientReconnectsAfterServerError(t *testing.T) {
+func TestClientUsesFreshConnectionAfterServerError(t *testing.T) {
 	firstServerConn, firstClientConn := net.Pipe()
 	secondServerConn, secondClientConn := net.Pipe()
 
@@ -619,19 +753,7 @@ func TestClientReconnectsAfterServerError(t *testing.T) {
 		close(firstServerDone)
 	}()
 
-	dialed := false
-	client := &Client{
-		conn:   firstClientConn,
-		reader: bufio.NewReader(firstClientConn),
-		writer: bufio.NewWriter(firstClientConn),
-		dial: func(context.Context) (net.Conn, error) {
-			if dialed {
-				return nil, errors.New("unexpected extra dial")
-			}
-			dialed = true
-			return secondClientConn, nil
-		},
-	}
+	client := newPipeClient(firstClientConn, secondClientConn)
 	if _, err := client.Ping(context.Background()); err == nil || err.Error() != "expected server error" {
 		t.Fatalf("unexpected first call error: %v", err)
 	}
@@ -652,9 +774,6 @@ func TestClientReconnectsAfterServerError(t *testing.T) {
 	}
 	if response.ProtocolVersion != api.ProtocolVersion {
 		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
-	}
-	if !dialed {
-		t.Fatal("client did not reconnect")
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
@@ -691,17 +810,24 @@ func TestClientDisconnectCancelsUnixSocketHandler(t *testing.T) {
 		entered:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
+	var diagnosticMu sync.Mutex
+	var diagnosticEntries []string
+	opts := ServeOptions{
+		NewTrace: func(method string) *diagnostic.Trace {
+			return diagnostic.New(method, false, func(entry string) {
+				diagnosticMu.Lock()
+				diagnosticEntries = append(diagnosticEntries, entry)
+				diagnosticMu.Unlock()
+			})
+		},
+	}
 	serverDone := make(chan struct{})
 	go func() {
-		serveConn(context.Background(), serverConn, handler, ServeOptions{})
+		serveConn(context.Background(), serverConn, handler, opts)
 		close(serverDone)
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
+	client := newPipeClient(clientConn)
 	callDone := make(chan error, 1)
 	go func() {
 		_, err := client.ObserveSession(context.Background(), api.ObserveSessionRequest{SessionID: "web1"})
@@ -732,6 +858,18 @@ func TestClientDisconnectCancelsUnixSocketHandler(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("server connection did not stop")
 	}
+	diagnosticMu.Lock()
+	joined := strings.Join(diagnosticEntries, "\n")
+	diagnosticMu.Unlock()
+	for _, expected := range []string{
+		`stage="rpc_connection" event="client_disconnected"`,
+		`stage="rpc_handler" event="failure" error="context canceled"`,
+		`stage="rpc_response" event="write_failure"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("client disconnect diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
 }
 
 func TestServeCancellationClosesIdleConnections(t *testing.T) {
@@ -744,17 +882,18 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 		serverDone <- Serve(ctx, listener, testHandler{}, ServeOptions{})
 	}()
 
-	client := &Client{
-		conn:   clientConn,
-		reader: bufio.NewReader(clientConn),
-		writer: bufio.NewWriter(clientConn),
-	}
-	response, err := client.Ping(context.Background())
-	if err != nil {
+	reader := bufio.NewReader(clientConn)
+	writer := bufio.NewWriter(clientConn)
+	if err := writeJSONLine(writer, request{
+		ProtocolVersion: api.ProtocolVersion,
+		Method:          "ping",
+		Params:          api.PingRequest{ProtocolVersion: api.ProtocolVersion},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	if response.ProtocolVersion != api.ProtocolVersion {
-		t.Fatalf("unexpected protocol version: %s", response.ProtocolVersion)
+	var res response
+	if err := readJSONLine(reader, &res); err != nil {
+		t.Fatal(err)
 	}
 
 	cancel()
@@ -766,7 +905,5 @@ func TestServeCancellationClosesIdleConnections(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("RPC server did not close its idle connection")
 	}
-	if err := client.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		t.Fatal(err)
-	}
+	clientConn.Close()
 }

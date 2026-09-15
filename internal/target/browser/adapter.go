@@ -57,26 +57,23 @@ func (a *Adapter) Observe(ctx context.Context, opts api.ObserveOptions) (*api.Ob
 	return obs, nil
 }
 
+// InspectStyles inspects computed styles and authored declarations for one
+// recently observed node when the backend supports targeted style inspection.
+func (a *Adapter) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error) {
+	if !a.backend.Capabilities().StyleInspection {
+		return nil, fmt.Errorf("%w: style-inspection", spec.ErrUnsupported)
+	}
+	inspector, ok := a.backend.(spec.StyleInspector)
+	if !ok {
+		return nil, fmt.Errorf("%w: style-inspection", spec.ErrUnsupported)
+	}
+	return inspector.InspectStyles(ctx, req)
+}
+
 func (a *Adapter) Act(ctx context.Context, action api.Action) (*api.ActionResult, error) {
 	if !a.backend.Capabilities().Act {
 		return nil, fmt.Errorf("%w: act", spec.ErrUnsupported)
 	}
 
 	return a.backend.Act(ctx, action)
-}
-
-func (a *Adapter) Screenshot(ctx context.Context, path string) error {
-	if !a.backend.Capabilities().Screenshot {
-		return fmt.Errorf("%w: screenshot", spec.ErrUnsupported)
-	}
-
-	return a.backend.Screenshot(ctx, path)
-}
-
-func (a *Adapter) Logs(ctx context.Context, opts api.LogOptions) ([]api.LogEntry, error) {
-	if !a.backend.Capabilities().Logs {
-		return nil, fmt.Errorf("%w: logs", spec.ErrUnsupported)
-	}
-
-	return a.backend.Logs(ctx, opts)
 }

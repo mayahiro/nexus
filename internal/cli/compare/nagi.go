@@ -13,7 +13,7 @@ import (
 	"github.com/mayahiro/nexus/internal/rpc"
 )
 
-const compareExecutionUsage = "[--backend chromium|lightpanda] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
+const compareExecutionUsage = "[--backend chromium] [--target-ref <path>] [--viewport <width>x<height>] [--match-mode exact|stable|heuristic|histogram] [--node-scope current|actionable|semantic|all] [--matching-debug] [--decisions-file <jsonl>] [--review-dir <dir>] [--wait-selector <css>] [--scope-selector <css>] [--old-scope-selector <css>] [--new-scope-selector <css>] [--wait-function <js>] [--wait-network-idle] [--wait-timeout <ms>] [--compare-css] [--all-css-properties] [--css-property <name>]... [--compare-layout] [--no-default-ignores] [--ignore-text-regex <regex>]... [--ignore-selector <rule>]... [--mask-selector <rule>]..."
 const compareDirectOutputUsage = "[--output-decisions-template <jsonl>] [--output-finding-decisions-template <jsonl>]"
 const compareReportOutputUsage = "[--output-json <file>] [--output-md <file>] [--json]"
 const compareURLUsage = "<old-url> <new-url> " + compareExecutionUsage + " " + compareDirectOutputUsage + " " + compareReportOutputUsage
@@ -343,9 +343,9 @@ func validateNagiCompareInvocation(invocation *nagicli.Invocation) *nagicli.Diag
 			WithTarget(nagicli.OptionTarget("css-property"))
 	}
 	switch strings.ToLower(strings.TrimSpace(arguments.Backend)) {
-	case "chromium", "lightpanda":
+	case "chromium":
 	default:
-		return nagiCompareValidationDiagnostic("backend must be chromium or lightpanda").
+		return nagiCompareValidationDiagnostic("backend must be chromium").
 			WithTarget(nagicli.OptionTarget("backend"))
 	}
 	if strings.TrimSpace(arguments.Viewport) != "" {

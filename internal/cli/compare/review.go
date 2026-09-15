@@ -293,14 +293,14 @@ func compareReviewFindingCrops(report compareReport, finding compareFinding, scr
 		crops = append(crops, compareReviewFindingCrop{
 			Side:       "old",
 			Screenshot: screenshots.Old,
-			Rect:       compareReviewFindingCropRect(report.Old.Nodes, finding),
+			Rect:       compareReviewFindingCropRect(report.Old.Nodes, finding, finding.OldRef),
 		})
 	}
 	if finding.Kind != "missing_node" {
 		crops = append(crops, compareReviewFindingCrop{
 			Side:       "new",
 			Screenshot: screenshots.New,
-			Rect:       compareReviewFindingCropRect(report.New.Nodes, finding),
+			Rect:       compareReviewFindingCropRect(report.New.Nodes, finding, finding.NewRef),
 		})
 	}
 	return crops
@@ -313,17 +313,23 @@ func compareReviewFindingCropsIncluded(finding compareFinding) bool {
 	return strings.TrimSpace(finding.FindingID) != ""
 }
 
-func compareReviewFindingCropRect(nodes []compareSnapshotNode, finding compareFinding) *api.Rect {
+func compareReviewFindingCropRect(nodes []compareSnapshotNode, finding compareFinding, ref string) *api.Rect {
 	bestScore := 0
 	var best *api.Rect
 	for i := range nodes {
 		node := nodes[i]
+		if ref != "" && node.Ref != ref {
+			continue
+		}
 		rect := node.CropBounds
 		if rect == nil {
 			rect = node.MatchBounds
 		}
 		if rect == nil || !compareRectValid(*rect) {
 			continue
+		}
+		if ref != "" {
+			return rect
 		}
 		score := compareReviewFindingNodeScore(node, finding)
 		if score > bestScore {
@@ -404,28 +410,22 @@ func compareReviewSafeFileToken(value string) string {
 
 func captureCompareReviewScreenshots(ctx context.Context, client *rpc.Client, oldSessionID string, newSessionID string) compareReviewScreenshots {
 	screenshots := compareReviewScreenshots{}
-	oldScreenshot, oldWarning, err := captureCompareReviewScreenshot(ctx, client, oldSessionID)
+	oldScreenshot, err := captureCompareReviewScreenshot(ctx, client, oldSessionID)
 	if err != nil {
 		screenshots.Warnings = append(screenshots.Warnings, "old screenshot: "+err.Error())
 	} else {
 		screenshots.Old = oldScreenshot
-		if oldWarning != "" {
-			screenshots.Warnings = append(screenshots.Warnings, "old screenshot: "+oldWarning)
-		}
 	}
-	newScreenshot, newWarning, err := captureCompareReviewScreenshot(ctx, client, newSessionID)
+	newScreenshot, err := captureCompareReviewScreenshot(ctx, client, newSessionID)
 	if err != nil {
 		screenshots.Warnings = append(screenshots.Warnings, "new screenshot: "+err.Error())
 	} else {
 		screenshots.New = newScreenshot
-		if newWarning != "" {
-			screenshots.Warnings = append(screenshots.Warnings, "new screenshot: "+newWarning)
-		}
 	}
 	return screenshots
 }
 
-func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, sessionID string) ([]byte, string, error) {
+func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, sessionID string) ([]byte, error) {
 	captureCtx, cancel := context.WithTimeout(ctx, compareReviewScreenshotTimeout)
 	defer cancel()
 
@@ -438,16 +438,16 @@ func captureCompareReviewScreenshot(ctx context.Context, client *rpc.Client, ses
 		},
 	})
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	screenshot, err := res.Observation.ScreenshotBytes()
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 	if len(screenshot) == 0 {
-		return nil, "", fmt.Errorf("empty screenshot")
+		return nil, fmt.Errorf("empty screenshot")
 	}
-	return screenshot, strings.TrimSpace(res.Observation.Meta["screenshot_readiness_warning"]), nil
+	return screenshot, nil
 }
 
 func writeCompareManifestReviewPacket(dir string, report compareManifestReport, pageDirectories []compareManifestReviewPageDirectory) error {

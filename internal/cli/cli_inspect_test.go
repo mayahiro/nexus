@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -312,6 +313,9 @@ func TestInspect(t *testing.T) {
 	if !strings.Contains(output, "changed") {
 		t.Fatalf("unexpected inspect output: %s", output)
 	}
+	if !strings.Contains(output, "style sources: old=complete new=complete") || !strings.Contains(output, "old declarations") {
+		t.Fatalf("unexpected inspect style source output: %s", output)
+	}
 
 	stdout.Reset()
 	if code := Run(context.Background(), []string{"inspect", `role button`, "--old-session", "old", "--new-session", "new", "--nth", "2", "--css-property", "color"}, &stdout, &stdout); code != 0 {
@@ -411,6 +415,195 @@ func TestInspect(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("rpc server did not stop")
 	}
+}
+
+func TestInspectSingleSessionStyleSourcesAndOptOut(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(paths.Socket), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	listener, err := net.Listen("unix", paths.Socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+
+	inspectRequests := make(chan api.InspectStylesRequest, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- rpc.Serve(ctx, listener, inspectRPCHandler{inspectRequests: inspectRequests}, rpc.ServeOptions{})
+	}()
+
+	var stdout bytes.Buffer
+	args := []string{
+		"inspect",
+		`role button --name "Submit"`,
+		"--session", "single",
+		"--css-property", "width",
+		"--json",
+	}
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected single-session inspect exit code: %d\n%s", code, stdout.String())
+	}
+
+	var report inspectSingleReport
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected single-session inspect json: %v\n%s", err, stdout.String())
+	}
+	if report.Session.SessionID != "single" || report.Session.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected single-session inspect status: %+v", report.Session)
+	}
+	if len(report.Properties) != 1 || report.Properties[0].Name != "width" || report.Properties[0].Value != "154px" {
+		t.Fatalf("unexpected single-session inspect properties: %+v", report.Properties)
+	}
+	if len(report.Properties[0].Declarations) != 1 {
+		t.Fatalf("unexpected single-session inspect declarations: %+v", report.Properties[0].Declarations)
+	}
+	declaration := report.Properties[0].Declarations[0]
+	if declaration.Value != "11em" || declaration.Selector != ".link-list" || declaration.Line != 412 || declaration.Column != 3 {
+		t.Fatalf("unexpected single-session declaration: %+v", declaration)
+	}
+
+	select {
+	case req := <-inspectRequests:
+		if req.SessionID != "single" || req.NodeRef != "@e1" {
+			t.Fatalf("unexpected style inspection request: %+v", req)
+		}
+	default:
+		t.Fatal("expected style inspection request")
+	}
+
+	stdout.Reset()
+	args = append(args[:len(args)-1], "--no-style-sources", "--json")
+	if code := Run(context.Background(), args, &stdout, &stdout); code != 0 {
+		t.Fatalf("unexpected opt-out inspect exit code: %d\n%s", code, stdout.String())
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unexpected opt-out inspect json: %v\n%s", err, stdout.String())
+	}
+	if report.Session.StyleSourcesStatus != api.StyleSourcesStatusDisabled {
+		t.Fatalf("unexpected opt-out style source status: %+v", report.Session)
+	}
+	if len(report.Properties) != 1 || report.Properties[0].Declarations == nil || len(report.Properties[0].Declarations) != 0 {
+		t.Fatalf("unexpected opt-out declarations: %+v", report.Properties)
+	}
+	select {
+	case req := <-inspectRequests:
+		t.Fatalf("opt-out unexpectedly requested style sources: %+v", req)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("rpc server did not stop")
+	}
+}
+
+func TestInspectSessionKeepsComputedStylesWhenSourcesAreUnavailable(t *testing.T) {
+	client := &styleInspectTestClient{
+		observation: api.Observation{
+			SessionID: "work",
+			Tree: []api.Node{{
+				ID:      1,
+				Ref:     "@e1",
+				Role:    "button",
+				Name:    "Submit",
+				Visible: true,
+				Enabled: true,
+				Styles:  map[string]string{"width": "160px"},
+			}},
+		},
+		inspectErr: errors.New("CSS domain unavailable"),
+	}
+
+	match, inspection, _, err := inspectSession(
+		context.Background(),
+		client,
+		"work",
+		inspectLocator{Kind: "role", Role: "button", Name: "Submit"},
+		nodeSelectionOptions{},
+		[]string{"width"},
+		"",
+		false,
+		nil,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.inspectCalls != 1 {
+		t.Fatalf("unexpected style inspection call count: %d", client.inspectCalls)
+	}
+	if match.Node.Styles["width"] != "160px" {
+		t.Fatalf("computed style fallback was lost: %+v", match.Node.Styles)
+	}
+	if inspection.StyleSourcesStatus != api.StyleSourcesStatusUnavailable || !strings.Contains(inspection.StyleSourcesError, "CSS domain unavailable") {
+		t.Fatalf("unexpected unavailable source status: %+v", inspection)
+	}
+}
+
+func TestInspectSessionPropagatesStyleSourceCancellation(t *testing.T) {
+	client := &styleInspectTestClient{
+		observation: api.Observation{
+			SessionID: "work",
+			Tree: []api.Node{{
+				ID:      1,
+				Ref:     "@e1",
+				Role:    "button",
+				Name:    "Submit",
+				Visible: true,
+				Enabled: true,
+				Styles:  map[string]string{"width": "160px"},
+			}},
+		},
+		inspectErr: context.Canceled,
+	}
+
+	_, _, _, err := inspectSession(
+		context.Background(),
+		client,
+		"work",
+		inspectLocator{Kind: "role", Role: "button", Name: "Submit"},
+		nodeSelectionOptions{},
+		[]string{"width"},
+		"",
+		false,
+		nil,
+		true,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected style source cancellation, got %v", err)
+	}
+}
+
+type styleInspectTestClient struct {
+	observation  api.Observation
+	inspection   api.StyleInspection
+	inspectErr   error
+	inspectCalls int
+}
+
+func (c *styleInspectTestClient) ObserveSession(_ context.Context, _ api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
+	return api.ObserveSessionResponse{Observation: c.observation}, nil
+}
+
+func (c *styleInspectTestClient) InspectStyles(_ context.Context, _ api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	c.inspectCalls++
+	return api.InspectStylesResponse{Inspection: c.inspection}, c.inspectErr
 }
 
 func TestInspectSideSpecificScopeSelectors(t *testing.T) {

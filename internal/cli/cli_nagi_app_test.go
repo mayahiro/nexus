@@ -30,6 +30,7 @@ func TestNagiApplicationSchema(t *testing.T) {
 		"compare",
 		"close",
 		"dblclick",
+		"dialog",
 		"eval",
 		"fill",
 		"find",
@@ -62,6 +63,42 @@ func TestNagiApplicationSchema(t *testing.T) {
 	}
 }
 
+func TestNagiChoiceCompletion(t *testing.T) {
+	engine, err := nagicli.NewCompletionEngine(newNagiApplication())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		args     []string
+		prefix   string
+		expected []string
+	}{
+		{name: "open backend", args: []string{"open", "--backend"}, expected: []string{"chromium"}},
+		{name: "attach backend", args: []string{"attach", "browser", "--backend"}, expected: []string{"chromium"}},
+		{name: "browser name", args: []string{"browser", "uninstall", "--name"}, expected: []string{"chromium"}},
+		{name: "eval world", args: []string{"eval", "--world"}, expected: []string{"main", "persistent"}},
+		{name: "wait state", args: []string{"wait", "selector", ".ready", "--state"}, expected: []string{"attached", "detached", "visible", "hidden"}},
+		{name: "scroll direction", args: []string{"scroll"}, prefix: "u", expected: []string{"up"}},
+		{name: "wait target", args: []string{"wait"}, prefix: "hyd", expected: []string{"hydrated"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := engine.Complete(t.Context(), nagicli.NewCompletionInput(test.args, test.prefix))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var values []string
+			for _, candidate := range result.Candidates() {
+				values = append(values, candidate.Value())
+			}
+			if !reflect.DeepEqual(values, test.expected) {
+				t.Fatalf("unexpected choice completion: got %v, want %v", values, test.expected)
+			}
+		})
+	}
+}
+
 func TestNagiApplicationRepresentativeInvocations(t *testing.T) {
 	application := newNagiApplication()
 	tests := []struct {
@@ -86,6 +123,9 @@ func TestNagiApplicationRepresentativeInvocations(t *testing.T) {
 		{name: "compare audit decisions", args: []string{"compare", "audit-decisions", "--decisions-file", "decisions.jsonl", "--compare-json", "compare.json"}},
 		{name: "close", args: []string{"close"}},
 		{name: "dblclick", args: []string{"dblclick", "@e1"}},
+		{name: "dialog get", args: []string{"dialog", "get", "--json"}},
+		{name: "dialog accept", args: []string{"dialog", "accept", "--text", ""}},
+		{name: "dialog dismiss", args: []string{"dialog", "dismiss", "--session", "work"}},
 		{name: "eval", args: []string{"eval", "globalThis.count", "--world", "persistent"}},
 		{name: "fill", args: []string{"fill", "@e1", "value"}},
 		{name: "find role", args: []string{"find", "role", "button", "click", "--name", "Save"}},
@@ -102,6 +142,9 @@ func TestNagiApplicationRepresentativeInvocations(t *testing.T) {
 		{name: "get node", args: []string{"get", "text", "@e1"}},
 		{name: "get refs", args: []string{"get", "attributes", "--refs", "@e1,@e2"}},
 		{name: "hover", args: []string{"hover", "@e1"}},
+		{name: "inspect single locator", args: []string{"inspect", `role button --name "Save"`, "--session", "work"}},
+		{name: "inspect single selector", args: []string{"inspect", "--selector", "main", "--session", "work", "--no-style-sources"}},
+		{name: "inspect single scope selector", args: []string{"inspect", "--scope-selector", "main", "--session", "work"}},
 		{name: "inspect locator", args: []string{"inspect", `role button --name "Save"`, "--old-session", "old", "--new-session", "new"}},
 		{name: "inspect selector", args: []string{"inspect", "--selector", "main", "--old-session", "old", "--new-session", "new"}},
 		{name: "inspect scope selector", args: []string{"inspect", "--scope-selector", "main", "--old-session", "old", "--new-session", "new"}},
@@ -155,6 +198,9 @@ func TestNagiApplicationUsageVariantContracts(t *testing.T) {
 		args      []string
 	}{
 		{name: "batch keep going", path: []string{"nxctl", "batch"}, variantID: "default", syntax: `--cmd "COMMAND" [--cmd "COMMAND"]... [--keep-going] [--json]`, args: []string{"batch", "--cmd", "help", "--keep-going"}},
+		{name: "dialog get", path: []string{"nxctl", "dialog", "get"}, variantID: "default", syntax: "[--session <ID>] [--json]", args: []string{"dialog", "get", "--session", "work", "--json"}},
+		{name: "dialog accept", path: []string{"nxctl", "dialog", "accept"}, variantID: "default", syntax: "[--text <TEXT>] [--session <ID>] [--json]", args: []string{"dialog", "accept", "--text", "", "--session", "work", "--json"}},
+		{name: "dialog dismiss", path: []string{"nxctl", "dialog", "dismiss"}, variantID: "default", syntax: "[--session <ID>] [--json]", args: []string{"dialog", "dismiss", "--session", "work", "--json"}},
 		{name: "find role action", path: []string{"nxctl", "find", "role"}, variantID: "action", syntax: "<QUERY> <click|input|fill|get> [VALUE] [--name <TEXT>] [--within <@eN>] [--nth <N>] [--session <ID>] [--json]", args: []string{"find", "role", "button", "click", "--name", "Save", "--within", "@e1"}},
 		{name: "find role all", path: []string{"nxctl", "find", "role"}, variantID: "all", syntax: "<QUERY> --all [--name <TEXT>] [--within <@eN>] [--session <ID>] [--json]", args: []string{"find", "role", "button", "--all", "--name", "Save", "--within", "@e1"}},
 		{name: "find text action", path: []string{"nxctl", "find", "text"}, variantID: "action", syntax: "<QUERY> <click|input|fill|get> [VALUE] [--within <@eN>] [--nth <N>] [--session <ID>] [--json]", args: []string{"find", "text", "Welcome", "get", "text", "--within", "@e1"}},
@@ -170,10 +216,13 @@ func TestNagiApplicationUsageVariantContracts(t *testing.T) {
 		{name: "get bbox selector", path: []string{"nxctl", "get"}, variantID: "bbox-selector", syntax: "bbox --selector <CSS> [--session <ID>] [--json]", args: []string{"get", "bbox", "--selector", ".hero"}},
 		{name: "get node", path: []string{"nxctl", "get"}, variantID: "node", syntax: "text|value|attributes|bbox <NODE> [--session <ID>] [--json]", args: []string{"get", "text", "@e1"}},
 		{name: "get refs", path: []string{"nxctl", "get"}, variantID: "refs", syntax: "text|value|attributes|bbox --refs <NODES> [--session <ID>] [--json]", args: []string{"get", "text", "--refs", "@e1,@e2"}},
-		{name: "inspect locator", path: []string{"nxctl", "inspect"}, variantID: "locator", syntax: "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]", args: []string{"inspect", "role button", "--old-session", "old", "--new-session", "new"}},
-		{name: "inspect selector", path: []string{"nxctl", "inspect"}, variantID: "selector", syntax: "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]", args: []string{"inspect", "--selector", "main", "--old-session", "old", "--new-session", "new"}},
-		{name: "inspect scope selector", path: []string{"nxctl", "inspect"}, variantID: "scope-selector", syntax: "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]", args: []string{"inspect", "--scope-selector", "main", "--old-session", "old", "--new-session", "new"}},
-		{name: "inspect scopes", path: []string{"nxctl", "inspect"}, variantID: "scopes", syntax: "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--layout-context] [--json]", args: []string{"inspect", "--old-scope-selector", "#old", "--new-scope-selector", "#new", "--old-session", "old", "--new-session", "new"}},
+		{name: "inspect single locator", path: []string{"nxctl", "inspect"}, variantID: "single-locator", syntax: "<LOCATOR> --session <ID> [--nth <N>] [--scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "role button", "--session", "work"}},
+		{name: "inspect single selector", path: []string{"nxctl", "inspect"}, variantID: "single-selector", syntax: "--selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "--selector", "main", "--session", "work"}},
+		{name: "inspect single scope selector", path: []string{"nxctl", "inspect"}, variantID: "single-scope-selector", syntax: "--scope-selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "--scope-selector", "main", "--session", "work"}},
+		{name: "inspect locator", path: []string{"nxctl", "inspect"}, variantID: "locator", syntax: "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "role button", "--old-session", "old", "--new-session", "new"}},
+		{name: "inspect selector", path: []string{"nxctl", "inspect"}, variantID: "selector", syntax: "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "--selector", "main", "--old-session", "old", "--new-session", "new"}},
+		{name: "inspect scope selector", path: []string{"nxctl", "inspect"}, variantID: "scope-selector", syntax: "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "--scope-selector", "main", "--old-session", "old", "--new-session", "new"}},
+		{name: "inspect scopes", path: []string{"nxctl", "inspect"}, variantID: "scopes", syntax: "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]", args: []string{"inspect", "--old-scope-selector", "#old", "--new-scope-selector", "#new", "--old-session", "old", "--new-session", "new"}},
 		{name: "wait selector", path: []string{"nxctl", "wait"}, variantID: "selector", syntax: "selector <CSS> [--state attached|detached|visible|hidden] [--timeout <MS>] [--session <ID>] [--json]", args: []string{"wait", "selector", ".ready"}},
 		{name: "wait text", path: []string{"nxctl", "wait"}, variantID: "text", syntax: "text <VALUE> [--timeout <MS>] [--session <ID>] [--json]", args: []string{"wait", "text", "Ready"}},
 		{name: "wait url", path: []string{"nxctl", "wait"}, variantID: "url", syntax: "url <VALUE> [--timeout <MS>] [--session <ID>] [--json]", args: []string{"wait", "url", "/dashboard"}},
@@ -216,15 +265,26 @@ func TestNagiApplicationRejectsInvalidForms(t *testing.T) {
 		args []string
 	}{
 		{name: "empty attach session", args: []string{"attach", "browser", "--session", " "}},
+		{name: "removed attach backend", args: []string{"attach", "browser", "--session", "work", "--backend", "lightpanda"}},
 		{name: "unknown attach backend", args: []string{"attach", "browser", "--session", "work", "--backend", "webkit"}},
 		{name: "empty batch command", args: []string{"batch", "--cmd", " "}},
+		{name: "removed browser name", args: []string{"browser", "uninstall", "--name", "lightpanda"}},
 		{name: "unknown browser name", args: []string{"browser", "uninstall", "--name", "webkit"}},
 		{name: "empty eval source", args: []string{"eval", ""}},
+		{name: "missing dialog operation", args: []string{"dialog"}},
+		{name: "unknown dialog operation", args: []string{"dialog", "close"}},
+		{name: "text on dialog get", args: []string{"dialog", "get", "--text", "value"}},
+		{name: "text on dialog dismiss", args: []string{"dialog", "dismiss", "--text", ""}},
+		{name: "missing dialog text", args: []string{"dialog", "accept", "--text"}},
+		{name: "extra dialog argument", args: []string{"dialog", "accept", "value"}},
 		{name: "empty find query", args: []string{"find", "role", "", "click"}},
 		{name: "invalid find within", args: []string{"find", "css", "button", "--all", "--within", "1"}},
 		{name: "invalid eval world", args: []string{"eval", "1", "--world", "shared"}},
 		{name: "invalid get refs", args: []string{"get", "text", "--refs", "@e0"}},
 		{name: "invalid inspect locator", args: []string{"inspect", "role", "--old-session", "old", "--new-session", "new"}},
+		{name: "missing inspect session mode", args: []string{"inspect", "role button"}},
+		{name: "mixed inspect session modes", args: []string{"inspect", "role button", "--session", "work", "--old-session", "old", "--new-session", "new"}},
+		{name: "single inspect side scope", args: []string{"inspect", "role button", "--session", "work", "--old-scope-selector", "#old"}},
 		{name: "one-sided inspect scope", args: []string{"inspect", "--old-scope-selector", "#old", "--old-session", "old", "--new-session", "new"}},
 		{name: "empty observe session", args: []string{"observe", "--session", " "}},
 		{name: "observe recovery without screenshot", args: []string{"observe", "--session", "work", "--recover-target"}},
@@ -232,6 +292,7 @@ func TestNagiApplicationRejectsInvalidForms(t *testing.T) {
 		{name: "observe invalid timeout", args: []string{"observe", "--session", "work", "--screenshot", "--timeout", "0"}},
 		{name: "upload selector without path", args: []string{"upload", "--selector", "input[type=file]"}},
 		{name: "upload without selector or node", args: []string{"upload", "artifact.txt"}},
+		{name: "removed open backend", args: []string{"open", "https://example.com", "--backend", "lightpanda"}},
 		{name: "unknown open backend", args: []string{"open", "https://example.com", "--backend", "webkit"}},
 		{name: "wait value missing", args: []string{"wait", "text"}},
 		{name: "wait state on text", args: []string{"wait", "text", "Ready", "--state", "visible"}},

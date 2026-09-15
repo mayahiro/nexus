@@ -3,18 +3,49 @@ package session
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 	"github.com/mayahiro/nexus/internal/target/browser"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
+const testBackendName spec.BackendName = "test"
+
+func TestSessionGateCancellationIsTraced(t *testing.T) {
+	var entries []string
+	trace := diagnostic.New("act_session", true, func(entry string) {
+		entries = append(entries, entry)
+	})
+	ctx, cancel := context.WithCancel(diagnostic.WithTrace(context.Background(), trace))
+	cancel()
+
+	sessionEntry := &entry{opGate: make(chan struct{}, 1)}
+	err := sessionEntry.acquire(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected canceled session gate, got %v", err)
+	}
+	trace.Finish(err)
+
+	joined := strings.Join(entries, "\n")
+	for _, expected := range []string{
+		`stage="session_gate" event="wait"`,
+		`stage="session_gate" event="canceled"`,
+		`error="context canceled"`,
+	} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("session gate diagnostic does not contain %q:\n%s", expected, joined)
+		}
+	}
+}
+
 func TestAttachListDetach(t *testing.T) {
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return fakeSessionBackend{}
 	})
 	defer restoreBackend()
 
@@ -23,7 +54,7 @@ func TestAttachListDetach(t *testing.T) {
 	first, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web2",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,7 +63,7 @@ func TestAttachListDetach(t *testing.T) {
 	second, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +78,7 @@ func TestAttachListDetach(t *testing.T) {
 		t.Fatalf("unexpected session order: %+v", sessions)
 	}
 
-	if first.Backend != "lightpanda" || second.Backend != "lightpanda" {
+	if first.Backend != "test" || second.Backend != "test" {
 		t.Fatalf("unexpected backend values: %+v %+v", first, second)
 	}
 
@@ -62,8 +93,8 @@ func TestAttachListDetach(t *testing.T) {
 }
 
 func TestAttachDuplicateSession(t *testing.T) {
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return fakeSessionBackend{}
 	})
 	defer restoreBackend()
 
@@ -72,7 +103,7 @@ func TestAttachDuplicateSession(t *testing.T) {
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +112,7 @@ func TestAttachDuplicateSession(t *testing.T) {
 	_, err = manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	})
 	if !errors.Is(err, ErrSessionExists) {
 		t.Fatalf("unexpected error: %v", err)
@@ -98,8 +129,8 @@ func TestDetachMissingSession(t *testing.T) {
 }
 
 func TestObserveSession(t *testing.T) {
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return fakeSessionBackend{}
 	})
 	defer restoreBackend()
 
@@ -108,8 +139,8 @@ func TestObserveSession(t *testing.T) {
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
-		TargetRef:  "/tmp/lightpanda",
+		Backend:    "test",
+		TargetRef:  "/tmp/test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,9 +161,44 @@ func TestObserveSession(t *testing.T) {
 	}
 }
 
+func TestInspectStyles(t *testing.T) {
+	backend := &styleSessionBackend{requests: make(chan api.InspectStylesRequest, 1)}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return backend
+	})
+	defer restoreBackend()
+
+	manager := NewManager()
+	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
+		TargetType: "browser",
+		SessionID:  "web1",
+		Backend:    "test",
+		TargetRef:  "/tmp/test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := api.InspectStylesRequest{
+		SessionID:     "web1",
+		NodeRef:       "@e1",
+		CSSProperties: []string{"width"},
+	}
+	inspection, err := manager.InspectStyles(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.Computed["width"] != "154px" || inspection.StyleSourcesStatus != api.StyleSourcesStatusComplete {
+		t.Fatalf("unexpected style inspection: %+v", inspection)
+	}
+	if got := <-backend.requests; got.NodeRef != "@e1" || got.SessionID != "web1" {
+		t.Fatalf("unexpected backend style inspection request: %+v", got)
+	}
+}
+
 func TestActSessionUnsupported(t *testing.T) {
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
+		return fakeSessionBackend{}
 	})
 	defer restoreBackend()
 
@@ -141,8 +207,8 @@ func TestActSessionUnsupported(t *testing.T) {
 	_, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
-		TargetRef:  "/tmp/lightpanda",
+		Backend:    "test",
+		TargetRef:  "/tmp/test",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -158,11 +224,11 @@ func TestActSessionUnsupported(t *testing.T) {
 }
 
 func TestOperationsForSameSessionAreSerialized(t *testing.T) {
-	backend := &serialLightpandaBackend{
+	backend := &serialSessionBackend{
 		entered: make(chan string, 2),
 		release: make(chan struct{}, 2),
 	}
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
 		return backend
 	})
 	defer restoreBackend()
@@ -171,7 +237,7 @@ func TestOperationsForSameSessionAreSerialized(t *testing.T) {
 	if _, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -217,11 +283,11 @@ func TestOperationsForSameSessionAreSerialized(t *testing.T) {
 }
 
 func TestOperationQueueHonorsContextCancellation(t *testing.T) {
-	backend := &serialLightpandaBackend{
+	backend := &serialSessionBackend{
 		entered: make(chan string, 2),
 		release: make(chan struct{}, 2),
 	}
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
+	restoreBackend := browser.SetBackendFactory(testBackendName, func() spec.Backend {
 		return backend
 	})
 	defer restoreBackend()
@@ -230,7 +296,7 @@ func TestOperationQueueHonorsContextCancellation(t *testing.T) {
 	if _, err := manager.Attach(context.Background(), api.AttachSessionRequest{
 		TargetType: "browser",
 		SessionID:  "web1",
-		Backend:    "lightpanda",
+		Backend:    "test",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -261,25 +327,25 @@ func TestOperationQueueHonorsContextCancellation(t *testing.T) {
 	}
 }
 
-type fakeLightpandaBackend struct{}
+type fakeSessionBackend struct{}
 
-func (fakeLightpandaBackend) Name() spec.BackendName {
-	return spec.BackendLightpanda
+func (fakeSessionBackend) Name() spec.BackendName {
+	return testBackendName
 }
 
-func (fakeLightpandaBackend) Capabilities() spec.Capabilities {
+func (fakeSessionBackend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{Observe: true}
 }
 
-func (fakeLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+func (fakeSessionBackend) Attach(context.Context, spec.SessionConfig) error {
 	return nil
 }
 
-func (fakeLightpandaBackend) Detach(context.Context) error {
+func (fakeSessionBackend) Detach(context.Context) error {
 	return nil
 }
 
-func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+func (fakeSessionBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
 	return &api.Observation{
 		URLOrScreen: "https://example.com",
 		Title:       "Example",
@@ -287,62 +353,63 @@ func (fakeLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.
 	}, nil
 }
 
-func (fakeLightpandaBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
+func (fakeSessionBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
 	return nil, errors.New("unsupported operation")
 }
 
-func (fakeLightpandaBackend) Screenshot(context.Context, string) error {
-	return nil
+type styleSessionBackend struct {
+	fakeSessionBackend
+	requests chan api.InspectStylesRequest
 }
 
-func (fakeLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
+func (*styleSessionBackend) Capabilities() spec.Capabilities {
+	return spec.Capabilities{Observe: true, StyleInspection: true}
 }
 
-type serialLightpandaBackend struct {
+func (b *styleSessionBackend) InspectStyles(_ context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error) {
+	b.requests <- req
+	return &api.StyleInspection{
+		Computed:           map[string]string{"width": "154px"},
+		StyleSourcesStatus: api.StyleSourcesStatusComplete,
+	}, nil
+}
+
+type serialSessionBackend struct {
 	active  atomic.Int32
 	maximum atomic.Int32
 	entered chan string
 	release chan struct{}
 }
 
-func (*serialLightpandaBackend) Name() spec.BackendName {
-	return spec.BackendLightpanda
+func (*serialSessionBackend) Name() spec.BackendName {
+	return testBackendName
 }
 
-func (*serialLightpandaBackend) Capabilities() spec.Capabilities {
+func (*serialSessionBackend) Capabilities() spec.Capabilities {
 	return spec.Capabilities{Observe: true, Act: true}
 }
 
-func (*serialLightpandaBackend) Attach(context.Context, spec.SessionConfig) error {
+func (*serialSessionBackend) Attach(context.Context, spec.SessionConfig) error {
 	return nil
 }
 
-func (*serialLightpandaBackend) Detach(context.Context) error {
+func (*serialSessionBackend) Detach(context.Context) error {
 	return nil
 }
 
-func (b *serialLightpandaBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
+func (b *serialSessionBackend) Observe(context.Context, api.ObserveOptions) (*api.Observation, error) {
 	b.begin("observe")
 	defer b.end()
 	return &api.Observation{}, nil
 }
 
-func (b *serialLightpandaBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
+func (b *serialSessionBackend) Act(context.Context, api.Action) (*api.ActionResult, error) {
 	b.begin("act")
 	defer b.end()
 	return &api.ActionResult{OK: true}, nil
 }
 
-func (*serialLightpandaBackend) Screenshot(context.Context, string) error {
-	return nil
-}
-
-func (*serialLightpandaBackend) Logs(context.Context, api.LogOptions) ([]api.LogEntry, error) {
-	return nil, nil
-}
-
-func (b *serialLightpandaBackend) begin(operation string) {
+func (b *serialSessionBackend) begin(operation string) {
 	active := b.active.Add(1)
 	for {
 		maximum := b.maximum.Load()
@@ -354,6 +421,6 @@ func (b *serialLightpandaBackend) begin(operation string) {
 	<-b.release
 }
 
-func (b *serialLightpandaBackend) end() {
+func (b *serialSessionBackend) end() {
 	b.active.Add(-1)
 }

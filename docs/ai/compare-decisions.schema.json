@@ -541,7 +541,7 @@
     {
       "schema_version": 1,
       "kind": "accepted_finding",
-      "finding_id": "text_changed:3fa21c9d4b2a",
+      "finding_id": "text_changed:v2:3fa21c9d4b2a819b2834edac",
       "reason": "approved copy change"
     },
     {

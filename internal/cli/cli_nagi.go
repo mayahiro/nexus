@@ -94,7 +94,7 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		Option(nagicli.Flag("full").Long("full").Help("capture full page")).
 		Option(nagicli.Flag("annotate").Long("annotate").Help("draw node refs on the screenshot")).
 		Option(nagicli.Flag("recover-target").Long("recover-target").Help("replace an unresponsive tab and retry, losing transient page state")).
-		Option(nagicli.Flag("verbose").Long("verbose").Help("write detailed capture and recovery diagnostics to the daemon output")).
+		Option(nagicli.Flag("verbose").Long("verbose").Help("write every request and capture stage to the daemon output")).
 		Option(
 			nagicli.ValueOption("locator").
 				Long("locator").
@@ -120,9 +120,8 @@ func newNagiScreenshotCommand(timeout int) *nagicli.Command {
 		Note("Locator forms include @eN, role, name, text, label, testid, and href").
 		Note("Viewport capture is the default; --full captures the full page within safety limits").
 		Note("Each capture attempt is capped at 10000 ms within the overall timeout").
-		Note("Paint readiness is best-effort for 1000 ms; capture continues with a warning on fallback").
 		Note("A failed capture automatically reattaches to the same target once; --recover-target additionally permits tab replacement").
-		Note("--verbose writes capture boundary events to the current daemon output")
+		Note("Failures always flush buffered diagnostics; --verbose also writes successful stages")
 }
 
 func newNagiCommandRoot(command *nagicli.Command) *nagicli.Command {

@@ -5,16 +5,12 @@ import (
 	"sync"
 
 	"github.com/mayahiro/nexus/internal/target/browser/chromium"
-	"github.com/mayahiro/nexus/internal/target/browser/lightpanda"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
 
 var backendFactoriesMu sync.RWMutex
 var backendFactories = map[spec.BackendName]func() spec.Backend{
 	spec.BackendChromium: func() spec.Backend { return chromium.New() },
-	spec.BackendLightpanda: func() spec.Backend {
-		return lightpanda.New()
-	},
 }
 
 func NewBackend(name spec.BackendName) (spec.Backend, error) {

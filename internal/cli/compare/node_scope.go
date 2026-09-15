@@ -3,6 +3,8 @@ package comparecmd
 import (
 	"errors"
 	"strings"
+
+	"github.com/mayahiro/nexus/internal/api"
 )
 
 const (
@@ -23,6 +25,16 @@ func normalizeCompareNodeScope(value string) (string, error) {
 	default:
 		return "", errors.New("node-scope must be current, actionable, semantic, or all")
 	}
+}
+
+// Evaluate scope membership before masking so content-based semantic candidates
+// keep their structural/state evidence after their text is removed.
+func compareObservedNodeInScope(node api.Node, scope string) bool {
+	return compareNodeInScope(compareSnapshotNode{
+		Role: node.Role, Name: node.Name, Text: node.Text, Href: node.Attrs["href"],
+		TestID: firstNonEmpty(node.Attrs["data-testid"], node.Attrs["data-test"]), IDAttr: node.Attrs["id"],
+		Editable: node.Editable, Selectable: node.Selectable, Invokable: node.Invokable,
+	}, scope)
 }
 
 func compareNodeInScope(node compareSnapshotNode, scope string) bool {

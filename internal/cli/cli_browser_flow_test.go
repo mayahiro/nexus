@@ -34,8 +34,8 @@ func TestBrowserUninstall(t *testing.T) {
 
 func TestAttachSessionsDetach(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -63,10 +63,10 @@ func TestAttachSessionsDetach(t *testing.T) {
 		return fakeBrowserManager{}
 	}
 
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda", "--url", "https://example.com", "--viewport", "1440x900"}, &attachOut, &attachOut); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "chromium", "--url", "https://example.com", "--viewport", "1440x900"}, &attachOut, &attachOut); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, attachOut.String())
 	}
-	if !strings.Contains(attachOut.String(), "attached browser web1 (lightpanda) /tmp/lightpanda") {
+	if !strings.Contains(attachOut.String(), "attached browser web1 (chromium) /tmp/chromium") {
 		t.Fatalf("unexpected attach output: %s", attachOut.String())
 	}
 
@@ -77,10 +77,10 @@ func TestAttachSessionsDetach(t *testing.T) {
 	if !strings.Contains(sessionsOut.String(), "\"id\": \"web1\"") {
 		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
-	if !strings.Contains(sessionsOut.String(), "\"backend\": \"lightpanda\"") {
+	if !strings.Contains(sessionsOut.String(), "\"backend\": \"chromium\"") {
 		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
-	if !strings.Contains(sessionsOut.String(), "/tmp/lightpanda") {
+	if !strings.Contains(sessionsOut.String(), "/tmp/chromium") {
 		t.Fatalf("unexpected sessions output: %s", sessionsOut.String())
 	}
 	if !strings.Contains(sessionsOut.String(), "\"initial_url\": \"https://example.com\"") {
@@ -115,8 +115,8 @@ func TestAttachSessionsDetach(t *testing.T) {
 
 func TestObserveJSON(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -144,7 +144,7 @@ func TestObserveJSON(t *testing.T) {
 	}
 
 	var attachOut bytes.Buffer
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda"}, &attachOut, &attachOut); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "chromium"}, &attachOut, &attachOut); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, attachOut.String())
 	}
 
@@ -174,8 +174,8 @@ func TestObserveJSON(t *testing.T) {
 
 func TestOpenAndState(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -203,10 +203,10 @@ func TestOpenAndState(t *testing.T) {
 	}
 
 	var openOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda", "--viewport", "1280x720"}, &openOut, &openOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "chromium", "--viewport", "1280x720"}, &openOut, &openOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, openOut.String())
 	}
-	if !strings.Contains(openOut.String(), "attached browser default (lightpanda) /tmp/lightpanda") {
+	if !strings.Contains(openOut.String(), "attached browser default (chromium) /tmp/chromium") {
 		t.Fatalf("unexpected open output: %s", openOut.String())
 	}
 
@@ -252,8 +252,8 @@ func TestOpenAndState(t *testing.T) {
 
 func TestOpenFlagsFirst(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -281,11 +281,11 @@ func TestOpenFlagsFirst(t *testing.T) {
 	}
 
 	var openOut bytes.Buffer
-	args := []string{"open", "--backend", "lightpanda", "--session", "flags-first", "https://example.com"}
+	args := []string{"open", "--backend", "chromium", "--session", "flags-first", "https://example.com"}
 	if code := Run(context.Background(), args, &openOut, &openOut); code != 0 {
 		t.Fatalf("unexpected open flags-first exit code: %d\n%s", code, openOut.String())
 	}
-	if !strings.Contains(openOut.String(), "attached browser flags-first (lightpanda) /tmp/lightpanda") {
+	if !strings.Contains(openOut.String(), "attached browser flags-first (chromium) /tmp/chromium") {
 		t.Fatalf("unexpected open flags-first output: %s", openOut.String())
 	}
 
@@ -346,7 +346,7 @@ func TestBrowserCommands(t *testing.T) {
 	if code := Run(context.Background(), []string{"browser", "status"}, &statusOut, &statusOut); code != 0 {
 		t.Fatalf("unexpected status exit code: %d\n%s", code, statusOut.String())
 	}
-	if !strings.Contains(statusOut.String(), "lightpanda\tv0.1.0\tinstalled") {
+	if !strings.Contains(statusOut.String(), "chromium\t1.0.0\tinstalled") {
 		t.Fatalf("unexpected status output: %s", statusOut.String())
 	}
 }

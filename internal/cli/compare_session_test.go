@@ -61,13 +61,13 @@ func TestCompare(t *testing.T) {
 	if report.Summary.Same {
 		t.Fatalf("expected differences, got same report: %s", stdout.String())
 	}
-	if report.Summary.TotalFindings != 6 {
+	if report.Summary.TotalFindings != 7 {
 		t.Fatalf("unexpected finding count: %+v", report.Summary)
 	}
-	if report.Summary.TitleChanged != 1 || report.Summary.TextChanged != 2 || report.Summary.MissingNodes != 1 || report.Summary.NewNodes != 1 || report.Summary.StateChanged != 1 {
+	if report.Summary.TitleChanged != 1 || report.Summary.TextChanged != 1 || report.Summary.MissingNodes != 2 || report.Summary.NewNodes != 2 || report.Summary.StateChanged != 1 {
 		t.Fatalf("unexpected summary: %+v", report.Summary)
 	}
-	if report.Summary.Critical != 1 || report.Summary.Warning != 5 || report.Summary.Info != 0 {
+	if report.Summary.Critical != 2 || report.Summary.Warning != 5 || report.Summary.Info != 0 {
 		t.Fatalf("unexpected severity summary: %+v", report.Summary)
 	}
 	if report.Summary.PageTextChanged != 0 {
@@ -79,13 +79,14 @@ func TestCompare(t *testing.T) {
 	if report.Findings[0].Severity == "" || report.Findings[0].Impact == "" {
 		t.Fatalf("expected severity and impact in findings: %+v", report.Findings[0])
 	}
-	if report.Findings[1].Locator != "" {
-		t.Fatalf("expected no shared locator for renamed button: %+v", report.Findings[1])
+	locators := map[string]bool{}
+	for _, finding := range report.Findings {
+		locators[finding.Locator] = true
+		if (finding.Field == "value" || finding.Field == "state") && finding.Locator != `label "Email"` {
+			t.Fatalf("expected label locator for email findings: %+v", finding)
+		}
 	}
-	if report.Findings[3].Locator != `label "Email"` {
-		t.Fatalf("expected label locator for email findings: %+v", report.Findings[3])
-	}
-	if report.Findings[4].Locator != `href "/legacy"` || report.Findings[5].Locator != `href "/next"` {
+	if !locators[`href "/legacy"`] || !locators[`href "/next"`] {
 		t.Fatalf("expected href locators for link findings: %+v", report.Findings)
 	}
 
@@ -895,13 +896,13 @@ func TestCompareIgnoreAndMaskSelectors(t *testing.T) {
 		t.Fatalf("unexpected compare selector json: %v\n%s", err, stdout.String())
 	}
 
-	if report.Summary.TotalFindings != 3 {
+	if report.Summary.TotalFindings != 4 {
 		t.Fatalf("unexpected compare selector findings: %+v", report.Summary)
 	}
-	if report.Summary.MissingNodes != 0 || report.Summary.NewNodes != 0 {
+	if report.Summary.MissingNodes != 1 || report.Summary.NewNodes != 1 {
 		t.Fatalf("unexpected compare selector node summary: %+v", report.Summary)
 	}
-	if report.Summary.TextChanged != 1 || report.Summary.StateChanged != 1 || report.Summary.TitleChanged != 1 {
+	if report.Summary.TextChanged != 0 || report.Summary.StateChanged != 1 || report.Summary.TitleChanged != 1 {
 		t.Fatalf("unexpected compare selector summary: %+v", report.Summary)
 	}
 	for _, finding := range report.Findings {
@@ -971,7 +972,7 @@ func TestCompareReportOutputs(t *testing.T) {
 	if err := json.Unmarshal(jsonBytes, &report); err != nil {
 		t.Fatalf("unexpected compare output json: %v\n%s", err, string(jsonBytes))
 	}
-	if report.Summary.TotalFindings != 6 {
+	if report.Summary.TotalFindings != 7 {
 		t.Fatalf("unexpected compare output summary: %+v", report.Summary)
 	}
 

@@ -9,19 +9,16 @@ import (
 
 type BackendName string
 
-const (
-	BackendChromium   BackendName = "chromium"
-	BackendLightpanda BackendName = "lightpanda"
-)
+const BackendChromium BackendName = "chromium"
 
 var ErrUnsupported = errors.New("unsupported operation")
 
 type Capabilities struct {
-	Observe       bool
-	Act           bool
-	Screenshot    bool
-	Logs          bool
-	LayoutContext bool
+	Observe         bool
+	Act             bool
+	Screenshot      bool
+	LayoutContext   bool
+	StyleInspection bool
 }
 
 type SessionConfig struct {
@@ -37,8 +34,12 @@ type Backend interface {
 	Detach(ctx context.Context) error
 	Observe(ctx context.Context, opts api.ObserveOptions) (*api.Observation, error)
 	Act(ctx context.Context, action api.Action) (*api.ActionResult, error)
-	Screenshot(ctx context.Context, path string) error
-	Logs(ctx context.Context, opts api.LogOptions) ([]api.LogEntry, error)
+}
+
+// StyleInspector is the optional browser backend boundary for targeted CSS
+// inspection.
+type StyleInspector interface {
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (*api.StyleInspection, error)
 }
 
 func CapabilityList(c Capabilities) []string {
@@ -52,11 +53,11 @@ func CapabilityList(c Capabilities) []string {
 	if c.Screenshot {
 		out = append(out, "screenshot")
 	}
-	if c.Logs {
-		out = append(out, "logs")
-	}
 	if c.LayoutContext {
 		out = append(out, "layout-context")
+	}
+	if c.StyleInspection {
+		out = append(out, "style-inspection")
 	}
 	return out
 }

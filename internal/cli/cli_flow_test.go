@@ -23,12 +23,11 @@ import (
 type flowRPCHandler struct {
 	noopRPCHandler
 
-	mu                sync.Mutex
-	attachRequests    []api.AttachSessionRequest
-	observeRequests   []api.ObserveSessionRequest
-	actRequests       []api.ActSessionRequest
-	detachIDs         []string
-	screenshotWarning string
+	mu              sync.Mutex
+	attachRequests  []api.AttachSessionRequest
+	observeRequests []api.ObserveSessionRequest
+	actRequests     []api.ActSessionRequest
+	detachIDs       []string
 }
 
 type flowLocatorScreenshotRPCHandler struct {
@@ -148,15 +147,10 @@ func (h *flowRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 	h.mu.Unlock()
 
 	if req.Options.WithScreenshot {
-		meta := map[string]string{}
-		if h.screenshotWarning != "" {
-			meta["screenshot_readiness_warning"] = h.screenshotWarning
-		}
 		return api.ObserveSessionResponse{
 			Observation: api.Observation{
 				SessionID:  req.SessionID,
 				Screenshot: base64.StdEncoding.EncodeToString([]byte("pngdata-" + req.SessionID)),
-				Meta:       meta,
 			},
 		}, nil
 	}
@@ -232,7 +226,7 @@ func TestFlowRunManifest(t *testing.T) {
 	}
 	defer listener.Close()
 
-	handler := &flowRPCHandler{screenshotWarning: "paint readiness was not confirmed"}
+	handler := &flowRPCHandler{}
 	done := make(chan error, 1)
 	go func() {
 		done <- rpc.Serve(ctx, listener, handler, rpc.ServeOptions{})
@@ -353,12 +347,6 @@ func TestFlowRunManifest(t *testing.T) {
 	if got := report.Scenarios[0].Steps[4].Screenshots["new"]; got == "" {
 		t.Fatalf("expected screenshot path in report: %+v", report.Scenarios[0].Steps)
 	}
-	if warnings := report.Scenarios[0].Steps[4].Warnings; len(warnings) != 2 ||
-		warnings[0] != "old: paint readiness was not confirmed" ||
-		warnings[1] != "new: paint readiness was not confirmed" {
-		t.Fatalf("expected side-specific screenshot warnings in report: %+v", warnings)
-	}
-
 	handler.mu.Lock()
 	defer handler.mu.Unlock()
 

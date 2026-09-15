@@ -17,10 +17,7 @@ import (
 	"github.com/mayahiro/nexus/internal/config"
 )
 
-const (
-	BrowserChromium   = "chromium"
-	BrowserLightpanda = "lightpanda"
-)
+const BrowserChromium = "chromium"
 
 var ErrUnsupportedPlatform = errors.New("unsupported platform")
 var ErrBrowserNotInstalled = errors.New("browser not installed")
@@ -58,11 +55,10 @@ type manifest struct {
 }
 
 type Manager struct {
-	paths               config.Paths
-	client              *http.Client
-	chromeVersionsURL   string
-	lightpandaLatestURL string
-	now                 func() time.Time
+	paths             config.Paths
+	client            *http.Client
+	chromeVersionsURL string
+	now               func() time.Time
 }
 
 type chromeVersionsResponse struct {
@@ -77,21 +73,12 @@ type chromeVersionsResponse struct {
 	} `json:"channels"`
 }
 
-type lightpandaRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name string `json:"name"`
-		URL  string `json:"browser_download_url"`
-	} `json:"assets"`
-}
-
 func New(paths config.Paths) *Manager {
 	return &Manager{
-		paths:               paths,
-		client:              &http.Client{Timeout: 2 * time.Minute},
-		chromeVersionsURL:   "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json",
-		lightpandaLatestURL: "https://api.github.com/repos/lightpanda-io/browser/releases/latest",
-		now:                 time.Now,
+		paths:             paths,
+		client:            &http.Client{Timeout: 2 * time.Minute},
+		chromeVersionsURL: "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json",
+		now:               time.Now,
 	}
 }
 
@@ -143,7 +130,7 @@ func (m *Manager) Status() (Status, error) {
 		return Status{}, err
 	}
 
-	names := []string{BrowserChromium, BrowserLightpanda}
+	names := []string{BrowserChromium}
 	browsers := make([]Installation, 0, len(names))
 	for _, name := range names {
 		installation := Installation{Name: name}
@@ -159,7 +146,7 @@ func (m *Manager) Status() (Status, error) {
 
 func (m *Manager) Resolve(name string) (Installation, error) {
 	switch name {
-	case BrowserChromium, BrowserLightpanda:
+	case BrowserChromium:
 	default:
 		return Installation{}, fmt.Errorf("%w: %s", ErrUnknownBrowser, name)
 	}
@@ -201,18 +188,12 @@ func (m *Manager) install(ctx context.Context, force bool) (SetupResult, error) 
 	}
 	manifest.Browsers[BrowserChromium] = chromium.installation
 
-	lightpanda, err := m.installLightpanda(ctx, manifest, force)
-	if err != nil {
-		return SetupResult{}, err
-	}
-	manifest.Browsers[BrowserLightpanda] = lightpanda.installation
-
 	if err := m.saveManifest(manifest); err != nil {
 		return SetupResult{}, err
 	}
 
 	return SetupResult{
-		Browsers: []InstallResult{chromium.result, lightpanda.result},
+		Browsers: []InstallResult{chromium.result},
 	}, nil
 }
 
@@ -233,7 +214,7 @@ func (m *Manager) installChromium(ctx context.Context, manifest manifest, force 
 		}, nil
 	}
 
-	archivePath, err := m.downloadFile(ctx, downloadURL, filepath.Join(m.downloadCacheDir(), "chromium-"+version+".zip"), false)
+	archivePath, err := m.downloadFile(ctx, downloadURL, filepath.Join(m.downloadCacheDir(), "chromium-"+version+".zip"))
 	if err != nil {
 		return installState{}, err
 	}
@@ -278,58 +259,6 @@ func (m *Manager) installChromium(ctx context.Context, manifest manifest, force 
 	}, nil
 }
 
-func (m *Manager) installLightpanda(ctx context.Context, manifest manifest, force bool) (installState, error) {
-	version, downloadURL, err := m.resolveLightpanda(ctx)
-	if err != nil {
-		return installState{}, err
-	}
-
-	if current, ok := manifest.Browsers[BrowserLightpanda]; ok && !force && current.Version == version && current.ExecutableExists() {
-		return installState{
-			installation: current,
-			result: InstallResult{
-				Name:           BrowserLightpanda,
-				Version:        current.Version,
-				ExecutablePath: current.ExecutablePath,
-			},
-		}, nil
-	}
-
-	stageDir, err := os.MkdirTemp(m.browserRootDir(), "lightpanda-stage-")
-	if err != nil {
-		return installState{}, err
-	}
-	defer os.RemoveAll(stageDir)
-
-	executablePath := filepath.Join(stageDir, "lightpanda")
-	if _, err := m.downloadFile(ctx, downloadURL, executablePath, true); err != nil {
-		return installState{}, err
-	}
-
-	targetDir := filepath.Join(m.browserRootDir(), BrowserLightpanda)
-	if err := replaceDir(stageDir, targetDir); err != nil {
-		return installState{}, err
-	}
-
-	installation := Installation{
-		Name:           BrowserLightpanda,
-		Version:        version,
-		ExecutablePath: filepath.Join(targetDir, "lightpanda"),
-		Installed:      true,
-		UpdatedAt:      m.now(),
-	}
-
-	return installState{
-		installation: installation,
-		result: InstallResult{
-			Name:           BrowserLightpanda,
-			Version:        version,
-			ExecutablePath: installation.ExecutablePath,
-			Changed:        true,
-		},
-	}, nil
-}
-
 type installState struct {
 	installation Installation
 	result       InstallResult
@@ -361,28 +290,6 @@ func (m *Manager) resolveChromium(ctx context.Context) (string, string, error) {
 	return "", "", errors.New("chromium download not found for current macos platform")
 }
 
-func (m *Manager) resolveLightpanda(ctx context.Context) (string, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, m.lightpandaLatestURL, nil)
-	if err != nil {
-		return "", "", err
-	}
-	req.Header.Set("User-Agent", "nexus")
-
-	var payload lightpandaRelease
-	if err := m.doJSON(req, &payload); err != nil {
-		return "", "", err
-	}
-
-	assetName := lightpandaAssetName()
-	for _, asset := range payload.Assets {
-		if asset.Name == assetName {
-			return payload.TagName, asset.URL, nil
-		}
-	}
-
-	return "", "", errors.New("lightpanda download not found for current macos platform")
-}
-
 func (m *Manager) doJSON(req *http.Request, target interface{}) error {
 	resp, err := m.client.Do(req)
 	if err != nil {
@@ -397,7 +304,7 @@ func (m *Manager) doJSON(req *http.Request, target interface{}) error {
 	return json.NewDecoder(resp.Body).Decode(target)
 }
 
-func (m *Manager) downloadFile(ctx context.Context, url string, path string, executable bool) (string, error) {
+func (m *Manager) downloadFile(ctx context.Context, url string, path string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
@@ -418,12 +325,7 @@ func (m *Manager) downloadFile(ctx context.Context, url string, path string, exe
 		return "", err
 	}
 
-	mode := os.FileMode(0o644)
-	if executable {
-		mode = 0o755
-	}
-
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return "", err
 	}
@@ -500,27 +402,16 @@ func chromePlatform() string {
 	}
 }
 
-func lightpandaAssetName() string {
-	switch runtime.GOARCH {
-	case "arm64":
-		return "lightpanda-aarch64-macos"
-	case "amd64":
-		return "lightpanda-x86_64-macos"
-	default:
-		return ""
-	}
-}
-
 func normalizeBrowserNames(names []string) ([]string, error) {
 	if len(names) == 0 {
-		return []string{BrowserChromium, BrowserLightpanda}, nil
+		return []string{BrowserChromium}, nil
 	}
 
 	targets := make([]string, 0, len(names))
 	seen := map[string]struct{}{}
 	for _, name := range names {
 		switch name {
-		case BrowserChromium, BrowserLightpanda:
+		case BrowserChromium:
 			if _, ok := seen[name]; ok {
 				continue
 			}

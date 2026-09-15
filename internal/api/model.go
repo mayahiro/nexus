@@ -63,6 +63,72 @@ type ObserveSessionResponse struct {
 	Observation Observation `json:"observation"`
 }
 
+const (
+	// StyleSourcesStatusComplete means the supported matched declaration data
+	// and its available source metadata were collected.
+	StyleSourcesStatusComplete = "complete"
+	// StyleSourcesStatusPartial means declaration data was collected but some
+	// stylesheet source metadata was unavailable.
+	StyleSourcesStatusPartial = "partial"
+	// StyleSourcesStatusUnavailable means matched declaration collection failed.
+	StyleSourcesStatusUnavailable = "unavailable"
+	// StyleSourcesStatusDisabled means matched declaration collection was skipped.
+	StyleSourcesStatusDisabled = "disabled"
+)
+
+// InspectStylesRequest identifies one recently observed node and the computed
+// CSS properties to inspect in its current document generation.
+type InspectStylesRequest struct {
+	SessionID     string   `json:"session_id"`
+	NodeRef       string   `json:"node_ref"`
+	CSSProperties []string `json:"css_properties"`
+}
+
+// InspectStylesResponse contains one targeted style inspection.
+type InspectStylesResponse struct {
+	Inspection StyleInspection `json:"inspection"`
+}
+
+// StyleInspection contains computed values and best-effort authored
+// declarations for one node.
+type StyleInspection struct {
+	Computed           map[string]string         `json:"computed"`
+	StyleSourcesStatus string                    `json:"style_sources_status"`
+	StyleSourcesError  string                    `json:"style_sources_error,omitempty"`
+	Properties         []StylePropertyInspection `json:"properties"`
+}
+
+// StylePropertyInspection groups authored declarations by requested computed
+// property without claiming which declaration wins the cascade.
+type StylePropertyInspection struct {
+	Name         string             `json:"name"`
+	Declarations []StyleDeclaration `json:"declarations"`
+}
+
+// StyleDeclaration describes one authored declaration reported by Chromium as
+// directly matched, inline, attribute-derived, shorthand-derived, or inherited.
+type StyleDeclaration struct {
+	Property          string   `json:"property"`
+	Value             string   `json:"value"`
+	ResolvedValue     string   `json:"resolved_value,omitempty"`
+	Text              string   `json:"text,omitempty"`
+	Selector          string   `json:"selector,omitempty"`
+	MatchingSelectors []string `json:"matching_selectors,omitempty"`
+	Origin            string   `json:"origin,omitempty"`
+	Relation          string   `json:"relation"`
+	Important         bool     `json:"important,omitempty"`
+	Disabled          bool     `json:"disabled,omitempty"`
+	Implicit          bool     `json:"implicit,omitempty"`
+	Inline            bool     `json:"inline,omitempty"`
+	Attribute         bool     `json:"attribute,omitempty"`
+	Inherited         bool     `json:"inherited,omitempty"`
+	AncestorDepth     int      `json:"ancestor_depth,omitempty"`
+	SourceURL         string   `json:"source_url,omitempty"`
+	SourceMapURL      string   `json:"source_map_url,omitempty"`
+	Line              int      `json:"line,omitempty"`
+	Column            int      `json:"column,omitempty"`
+}
+
 type ActSessionRequest struct {
 	SessionID string `json:"session_id"`
 	Action    Action `json:"action"`
@@ -90,10 +156,6 @@ type ObserveOptions struct {
 	Verbose           bool     `json:"verbose,omitempty"`
 }
 
-type LogOptions struct {
-	Limit int `json:"limit,omitempty"`
-}
-
 type Observation struct {
 	SessionID      string            `json:"session_id"`
 	TargetType     string            `json:"target_type"`
@@ -102,7 +164,6 @@ type Observation struct {
 	Text           string            `json:"text,omitempty"`
 	Tree           []Node            `json:"tree,omitempty"`
 	Screenshot     string            `json:"screenshot,omitempty"`
-	Logs           []LogEntry        `json:"logs,omitempty"`
 	Capabilities   []string          `json:"capabilities,omitempty"`
 	Meta           map[string]string `json:"meta,omitempty"`
 	ScreenshotData []byte            `json:"-"`
@@ -129,18 +190,21 @@ func (o Observation) ScreenshotBytes() ([]byte, error) {
 }
 
 type Node struct {
-	ID             int                 `json:"id"`
-	Ref            string              `json:"ref,omitempty"`
-	Fingerprint    string              `json:"fingerprint,omitempty"`
-	LocatorHints   []LocatorHint       `json:"locator_hints,omitempty"`
-	StructurePath  string              `json:"structure_path,omitempty"`
-	Selector       string              `json:"selector,omitempty"`
-	TextLength     int                 `json:"text_length,omitempty"`
-	Descendants    int                 `json:"descendants,omitempty"`
-	Role           string              `json:"role"`
-	Name           string              `json:"name,omitempty"`
-	Text           string              `json:"text,omitempty"`
-	Value          string              `json:"value,omitempty"`
+	ID            int           `json:"id"`
+	Ref           string        `json:"ref,omitempty"`
+	Fingerprint   string        `json:"fingerprint,omitempty"`
+	LocatorHints  []LocatorHint `json:"locator_hints,omitempty"`
+	StructurePath string        `json:"structure_path,omitempty"`
+	Selector      string        `json:"selector,omitempty"`
+	TextLength    int           `json:"text_length,omitempty"`
+	Descendants   int           `json:"descendants,omitempty"`
+	Role          string        `json:"role"`
+	Name          string        `json:"name,omitempty"`
+	Text          string        `json:"text,omitempty"`
+	Value         string        `json:"value,omitempty"`
+	// States holds current native control properties and explicitly present ARIA states.
+	// Missing keys are unobserved or inapplicable, distinct from "false" and "mixed".
+	States         map[string]string   `json:"states,omitempty"`
 	Styles         map[string]string   `json:"styles,omitempty"`
 	LayoutContext  []LayoutContextNode `json:"layout_context,omitempty"`
 	Bounds         Rect                `json:"bounds,omitempty"`
@@ -182,6 +246,10 @@ type Action struct {
 	Dir      string            `json:"dir,omitempty"`
 	Keys     []string          `json:"keys,omitempty"`
 	Args     map[string]string `json:"args,omitempty"`
+
+	// ExpectDialog waits for a new JavaScript dialog during invoke, fill, or
+	// navigate. Args["timeout_ms"] bounds the wait, defaulting to 30000 ms.
+	ExpectDialog bool `json:"expect_dialog,omitempty"`
 }
 
 type ActionResult struct {
@@ -191,12 +259,21 @@ type ActionResult struct {
 	Screenshot string            `json:"screenshot,omitempty"`
 	Value      interface{}       `json:"value"`
 	Meta       map[string]string `json:"meta,omitempty"`
+
+	// Dialog identifies the dialog that suspended an expected-dialog action.
+	// OK means the expected dialog opened, not that the page operation completed.
+	Dialog *DialogState `json:"dialog,omitempty"`
 }
 
-type LogEntry struct {
-	Time    time.Time `json:"time"`
-	Level   string    `json:"level"`
-	Message string    `json:"message"`
+// DialogState describes the currently open JavaScript dialog in one browser
+// session. Type is alert, confirm, prompt, or beforeunload when Open is true.
+// Message and DefaultPrompt preserve the text supplied by the page.
+type DialogState struct {
+	Open          bool   `json:"open"`
+	Type          string `json:"type,omitempty"`
+	Message       string `json:"message,omitempty"`
+	URL           string `json:"url,omitempty"`
+	DefaultPrompt string `json:"default_prompt,omitempty"`
 }
 
 type Rect struct {

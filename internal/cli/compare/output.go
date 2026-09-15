@@ -90,6 +90,9 @@ func printCompareReport(w io.Writer, report compareReport) {
 	if report.Summary.NewNodes > 0 {
 		fmt.Fprintf(w, "new_node: %d\n", report.Summary.NewNodes)
 	}
+	if report.Summary.AttributeChanged > 0 {
+		fmt.Fprintf(w, "attribute_changed: %d\n", report.Summary.AttributeChanged)
+	}
 	if report.Summary.StateChanged > 0 {
 		fmt.Fprintf(w, "state_changed: %d\n", report.Summary.StateChanged)
 	}
@@ -110,21 +113,21 @@ func printCompareReport(w io.Writer, report compareReport) {
 	for _, finding := range report.Findings {
 		switch finding.Kind {
 		case "title_changed":
-			fmt.Fprintf(w, "[%s] [title_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [title_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 		case "page_text_changed":
-			fmt.Fprintf(w, "[%s] [page_text_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			fmt.Fprintf(w, "[%s] [page_text_changed] %s: %q -> %q\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 		case "missing_node":
 			fmt.Fprintf(w, "[%s] [missing_node] %s %s %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, compareFindingPlainLocatorSuffix(finding))
 		case "new_node":
 			fmt.Fprintf(w, "[%s] [new_node] %s %s %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, compareFindingPlainLocatorSuffix(finding))
-		case "text_changed":
-			fmt.Fprintf(w, "[%s] [text_changed] %s %s %q %s: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
+		case "text_changed", "attribute_changed":
+			fmt.Fprintf(w, "[%s] [%s] %s %s %q %s: %q -> %q%s\n", finding.Severity, finding.Kind, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingPlainLocatorSuffix(finding))
 		case "state_changed":
-			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q: %s -> %s%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
+			fmt.Fprintf(w, "[%s] [state_changed] %s %s %q %s: %s -> %s%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingPlainLocatorSuffix(finding))
 		case "css_changed":
-			fmt.Fprintf(w, "[%s] [css_changed] %s %s %q %s: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
+			fmt.Fprintf(w, "[%s] [css_changed] %s %s %q %s: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingPlainLocatorSuffix(finding))
 		case "layout_changed":
-			fmt.Fprintf(w, "[%s] [layout_changed] %s %s %q: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingPlainLocatorSuffix(finding))
+			fmt.Fprintf(w, "[%s] [layout_changed] %s %s %q: %q -> %q%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingPlainLocatorSuffix(finding))
 		}
 	}
 }
@@ -353,19 +356,17 @@ func printCompareMarkdown(w io.Writer, report compareReport) {
 	for _, finding := range report.Findings {
 		switch finding.Kind {
 		case "title_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 		case "page_text_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 		case "missing_node", "new_node":
 			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, compareFindingMarkdownLocatorSuffix(finding))
-		case "text_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
-		case "state_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+		case "text_changed", "attribute_changed", "state_changed":
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 		case "css_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 		case "layout_changed":
-			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+			fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 		}
 	}
 }
@@ -413,19 +414,17 @@ func printCompareManifestMarkdown(w io.Writer, report compareManifestReport) {
 		for _, finding := range page.Report.Findings {
 			switch finding.Kind {
 			case "title_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 			case "page_text_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, finding.Old, finding.New)
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` -> `%s`\n", finding.Severity, finding.Impact, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New))
 			case "missing_node", "new_node":
 				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, compareFindingMarkdownLocatorSuffix(finding))
-			case "text_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
-			case "state_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+			case "text_changed", "attribute_changed", "state_changed":
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 			case "css_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Field, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 			case "layout_changed":
-				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, finding.Old, finding.New, compareFindingMarkdownLocatorSuffix(finding))
+				fmt.Fprintf(w, "- [%s] `%s`: `%s` `%s` `%s` -> `%s`%s\n", finding.Severity, finding.Impact, finding.Role, finding.Label, summarizeCompareValue(finding.Old), summarizeCompareValue(finding.New), compareFindingMarkdownLocatorSuffix(finding))
 			}
 		}
 	}

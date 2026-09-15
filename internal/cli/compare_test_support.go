@@ -226,6 +226,20 @@ func (compareRPCHandler) ObserveSession(_ context.Context, req api.ObserveSessio
 	}
 }
 
+func (compareRPCHandler) InspectStyles(_ context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	computed := map[string]string{}
+	for _, property := range req.CSSProperties {
+		if property == "color" {
+			if req.SessionID == "old" {
+				computed[property] = "rgb(0, 0, 0)"
+			} else {
+				computed[property] = "rgb(255, 0, 0)"
+			}
+		}
+	}
+	return api.InspectStylesResponse{Inspection: testStyleInspection(req, computed)}, nil
+}
+
 func (compareRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
 	if req.Action.Kind != "wait" {
 		return api.ActSessionResponse{}, nil
@@ -332,6 +346,39 @@ func (h *compareURLRPCHandler) ObserveSession(_ context.Context, req api.Observe
 		observation.Meta["scope_tag"] = "aside"
 	}
 	return api.ObserveSessionResponse{Observation: observation}, nil
+}
+
+func (h *compareURLRPCHandler) InspectStyles(_ context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	observation, ok := h.sessionObservations[req.SessionID]
+	if !ok {
+		observation = h.observations[h.sessionURLs[req.SessionID]]
+	}
+	computed := map[string]string{}
+	for _, node := range observation.Tree {
+		if node.Ref != req.NodeRef {
+			continue
+		}
+		for _, property := range req.CSSProperties {
+			computed[property] = node.Styles[property]
+		}
+		break
+	}
+	return api.InspectStylesResponse{Inspection: testStyleInspection(req, computed)}, nil
+}
+
+func testStyleInspection(req api.InspectStylesRequest, computed map[string]string) api.StyleInspection {
+	properties := make([]api.StylePropertyInspection, 0, len(req.CSSProperties))
+	for _, property := range req.CSSProperties {
+		properties = append(properties, api.StylePropertyInspection{Name: property, Declarations: []api.StyleDeclaration{}})
+	}
+	return api.StyleInspection{
+		Computed:           computed,
+		StyleSourcesStatus: api.StyleSourcesStatusComplete,
+		Properties:         properties,
+	}
 }
 
 func (h *compareURLRPCHandler) ActSession(_ context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {

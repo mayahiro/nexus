@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	nagicli "github.com/mayahiro/nagicli-go"
@@ -32,6 +33,7 @@ func newNagiApplication() *nagicli.Command {
 		Subcommand(comparecmd.NewNagiCommand(connectClient)).
 		Subcommand(newNagiCloseCommand()).
 		Subcommand(newNagiNodeActionCommand("dblclick", "Double-click one observed node", runDblclickInvocation)).
+		Subcommand(newNagiDialogCommand()).
 		Subcommand(newNagiEvalCommand()).
 		Subcommand(newNagiFillCommand()).
 		Subcommand(newNagiFindCommand()).
@@ -67,9 +69,9 @@ func newNagiAttachCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("browser").
 				About("Attach a browser session").
-				UsageVariant("default", "--session <ID> [--backend chromium|lightpanda] [--url <URL>] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
+				UsageVariant("default", "--session <ID> [--backend chromium] [--url <URL>] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
 				Option(nagiRequiredValueOption("session", "ID", "Session identifier")).
-				Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium", "lightpanda").Default("chromium")).
+				Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium").Default("chromium")).
 				Option(nagiValueOption("url", "URL", "Initial URL")).
 				Option(nagiViewportOption("viewport", "Browser viewport")).
 				Option(nagiValueOption("target-ref", "PATH", "Browser executable or target reference")).
@@ -124,8 +126,8 @@ func newNagiBrowserCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("uninstall").
 				About("Uninstall managed browsers").
-				UsageVariant("default", "[--name chromium|lightpanda]").
-				Option(nagiChoiceOption("name", "NAME", "Browser name", "chromium", "lightpanda")).
+				UsageVariant("default", "[--name chromium]").
+				Option(nagiChoiceOption("name", "NAME", "Browser name", "chromium")).
 				Handle(nagiRunHandler(runBrowserUninstallInvocation)),
 		)
 }
@@ -247,6 +249,7 @@ func newNagiFlowCommand() *nagicli.Command {
 		Subcommand(
 			nagicli.NewCommand("run").
 				About("Run a flow manifest").
+				Note("Use expect_dialog on click, fill, or navigate before a dialog get, accept, or dismiss step").
 				UsageVariant("default", "--manifest <FILE> [--scenario <NAME>] [--matrix <NAME>] [--continue-on-error] [--output-json <FILE>] [--json]").
 				Option(nagiRequiredValueOption("manifest", "FILE", "Flow manifest JSON")).
 				Option(nagiValueOption("scenario", "NAME", "Scenario name")).
@@ -278,27 +281,33 @@ func newNagiGetCommand() *nagicli.Command {
 
 func newNagiInspectCommand() *nagicli.Command {
 	return nagicli.NewCommand("inspect").
-		About("Compare one node across two sessions").
-		UsageVariant("locator", "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("selector", "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("scope-selector", "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--layout-context] [--json]").
-		UsageVariant("scopes", "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--layout-context] [--json]").
-		Option(nagiRequiredValueOption("old-session", "ID", "Old session identifier")).
-		Option(nagiRequiredValueOption("new-session", "ID", "New session identifier")).
+		About("Inspect one node in one session or compare it across two sessions").
+		UsageVariant("single-locator", "<LOCATOR> --session <ID> [--nth <N>] [--scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("single-selector", "--selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("single-scope-selector", "--scope-selector <CSS> --session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("locator", "<LOCATOR> --old-session <ID> --new-session <ID> [--nth <N>] [--scope-selector <CSS>] [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("selector", "--selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("scope-selector", "--scope-selector <CSS> --old-session <ID> --new-session <ID> [--old-scope-selector <CSS>] [--new-scope-selector <CSS>] [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		UsageVariant("scopes", "--old-scope-selector <CSS> --new-scope-selector <CSS> --old-session <ID> --new-session <ID> [--css-property <NAME>]... [--no-style-sources] [--layout-context] [--json]").
+		Option(nagiValueOption("session", "ID", "Session identifier for single-session inspection")).
+		Option(nagiValueOption("old-session", "ID", "Old session identifier")).
+		Option(nagiValueOption("new-session", "ID", "New session identifier")).
 		Option(nagiValueOption("selector", "CSS", "Raw CSS selector to inspect")).
 		Option(nagiValueOption("scope-selector", "CSS", "Common CSS scope")).
 		Option(nagiValueOption("old-scope-selector", "CSS", "Old-side CSS scope")).
 		Option(nagiValueOption("new-scope-selector", "CSS", "New-side CSS scope")).
 		Option(nagiRepeatedValueOption("css-property", "NAME", "Computed CSS property")).
 		Option(nagiIntOption("nth", "N", "Choose the nth matching node")).
+		Option(nagicli.Flag("no-style-sources").Long("no-style-sources").Help("Skip matched declaration and source location collection")).
 		Option(nagicli.Flag("layout-context").Long("layout-context").Help("Include ancestor layout context")).
 		Option(nagiJSONFlag()).
 		Argument(nagicli.Positional("locator").Parser(nagiInspectLocatorParser()).Help("Node locator")).
 		Validator(validateNagiInspectInvocation).
 		Handle(nagiRunHandler(runInspectInvocation)).
 		Note("Locator forms include @eN, role, text, label, testid, and href").
-		Note("A side-specific scope needs a common scope fallback or the other side-specific scope").
-		Link("Compare guide", aiCompareDocURL)
+		Note("Style sources are collected by default and do not claim a cascade winner").
+		Note("A side-specific scope is available only for old/new comparison").
+		Link("Inspect guide", aiInspectDocURL)
 }
 
 func newNagiKeysCommand() *nagicli.Command {
@@ -342,7 +351,7 @@ func newNagiObserveCommand() *nagicli.Command {
 		Option(nagicli.Flag("screenshot").Long("screenshot").Help("Include a screenshot")).
 		Option(nagicli.Flag("full").Long("full").Help("Capture a full-page screenshot")).
 		Option(nagicli.Flag("recover-target").Long("recover-target").Help("Replace an unresponsive tab and retry, losing transient page state")).
-		Option(nagicli.Flag("verbose").Long("verbose").Help("Write detailed request and capture diagnostics to the daemon output")).
+		Option(nagicli.Flag("verbose").Long("verbose").Help("Write every request and capture stage to the daemon output")).
 		Option(nagiIntOption("timeout", "MS", "Overall screenshot recovery timeout in milliseconds").Default("30000")).
 		Validator(validateNagiObserveInvocation).
 		Handle(nagiRunHandler(runObserveInvocation)).
@@ -352,9 +361,9 @@ func newNagiObserveCommand() *nagicli.Command {
 func newNagiOpenCommand() *nagicli.Command {
 	return nagicli.NewCommand("open").
 		About("Open a URL in a managed browser session").
-		UsageVariant("default", "<URL> [--session <ID>] [--backend chromium|lightpanda] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
+		UsageVariant("default", "<URL> [--session <ID>] [--backend chromium] [--viewport <WIDTHxHEIGHT>] [--target-ref <PATH>]").
 		Option(nagiSessionOption()).
-		Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium", "lightpanda").Default("chromium")).
+		Option(nagiChoiceOption("backend", "NAME", "Browser backend", "chromium").Default("chromium")).
 		Option(nagiViewportOption("viewport", "Browser viewport")).
 		Option(nagiValueOption("target-ref", "PATH", "Browser executable or target reference")).
 		Argument(nagiRequiredArgument("url", "URL", "Initial URL")).
@@ -466,9 +475,10 @@ func newNagiDaemonCommand() *nagicli.Command {
 	return nagicli.NewCommand("daemon").
 		About("Run the Nexus daemon").
 		UsageVariant("default", "[--verbose]").
-		Option(nagicli.Flag("verbose").Long("verbose").Help("Write detailed daemon request diagnostics")).
+		Option(nagicli.Flag("verbose").Long("verbose").Help("Write every stage for every daemon request")).
 		Handle(nagiRunHandler(runDaemonInvocation)).
-		Note("Auto-started daemon processes write to a PID-specific nxd.<pid>.log")
+		Note("Auto-started daemon processes write to a PID-specific nxd.<pid>.log").
+		Note("Failures flush buffered stages and environment details even without --verbose")
 }
 
 func newNagiDoctorCommand() *nagicli.Command {
@@ -590,8 +600,18 @@ func nagiInspectLocatorParser() nagicli.ValueParser {
 	})
 }
 
+type nagiChoiceValueParser struct {
+	nagicli.ValueParser
+	choices []string
+}
+
+func (p nagiChoiceValueParser) PossibleValues() []string {
+	return slices.Clone(p.choices)
+}
+
 func nagiChoiceParser(metavar string, choices ...string) nagicli.ValueParser {
-	return nagicli.CustomParser(metavar, func(raw string) (string, error) {
+	choices = slices.Clone(choices)
+	parser := nagicli.CustomParser(metavar, func(raw string) (string, error) {
 		for _, choice := range choices {
 			if raw == choice {
 				return raw, nil
@@ -599,6 +619,7 @@ func nagiChoiceParser(metavar string, choices ...string) nagicli.ValueParser {
 		}
 		return "", fmt.Errorf("must be one of %s", strings.Join(choices, ", "))
 	})
+	return nagiChoiceValueParser{ValueParser: parser, choices: choices}
 }
 
 func nagiNonEmptyParser(metavar string) nagicli.ValueParser {
@@ -809,12 +830,39 @@ func validateNagiUploadInvocation(invocation *nagicli.Invocation) *nagicli.Diagn
 }
 
 func validateNagiInspectInvocation(invocation *nagicli.Invocation) *nagicli.Diagnostic {
+	session := strings.TrimSpace(nagiRawValue(invocation, "session"))
+	oldSession := strings.TrimSpace(nagiRawValue(invocation, "old-session"))
+	newSession := strings.TrimSpace(nagiRawValue(invocation, "new-session"))
 	locator := strings.TrimSpace(nagiRawValue(invocation, "locator"))
 	selector := strings.TrimSpace(nagiRawValue(invocation, "selector"))
 	scope := strings.TrimSpace(nagiRawValue(invocation, "scope-selector"))
 	oldScope := strings.TrimSpace(nagiRawValue(invocation, "old-scope-selector"))
 	newScope := strings.TrimSpace(nagiRawValue(invocation, "new-scope-selector"))
 	nth := nagiIntValue(invocation, "nth")
+	if session != "" {
+		if oldSession != "" || newSession != "" {
+			return nagiDiagnostic(
+				"inspect can not combine --session with --old-session or --new-session",
+				nagicli.OptionTarget("session"),
+				nagicli.OptionTarget("old-session"),
+				nagicli.OptionTarget("new-session"),
+			)
+		}
+		if oldScope != "" || newScope != "" {
+			return nagiDiagnostic(
+				"inspect --old-scope-selector and --new-scope-selector require old/new comparison",
+				nagicli.OptionTarget("old-scope-selector"),
+				nagicli.OptionTarget("new-scope-selector"),
+			)
+		}
+	} else if oldSession == "" || newSession == "" {
+		return nagiDiagnostic(
+			"inspect requires --session, or both --old-session and --new-session",
+			nagicli.OptionTarget("session"),
+			nagicli.OptionTarget("old-session"),
+			nagicli.OptionTarget("new-session"),
+		)
+	}
 	if locator == "" && selector == "" && scope == "" && oldScope == "" && newScope == "" {
 		return nagiDiagnostic("inspect requires a locator or selector scope", nagicli.ArgumentTarget("locator"))
 	}
@@ -838,17 +886,19 @@ func validateNagiInspectInvocation(invocation *nagicli.Invocation) *nagicli.Diag
 	if locator == "" && nth > 0 {
 		return nagiDiagnostic("inspect selector mode does not support --nth", nagicli.OptionTarget("nth"))
 	}
-	commonScope := scope
-	if locator == "" {
-		commonScope = firstNonEmpty(selector, scope)
-	}
-	if _, _, err := resolveInspectScopeSelectors(commonScope, oldScope, newScope); err != nil {
-		return nagiDiagnostic(
-			err.Error(),
-			nagicli.OptionTarget("scope-selector"),
-			nagicli.OptionTarget("old-scope-selector"),
-			nagicli.OptionTarget("new-scope-selector"),
-		)
+	if session == "" {
+		commonScope := scope
+		if locator == "" {
+			commonScope = firstNonEmpty(selector, scope)
+		}
+		if _, _, err := resolveInspectScopeSelectors(commonScope, oldScope, newScope); err != nil {
+			return nagiDiagnostic(
+				err.Error(),
+				nagicli.OptionTarget("scope-selector"),
+				nagicli.OptionTarget("old-scope-selector"),
+				nagicli.OptionTarget("new-scope-selector"),
+			)
+		}
 	}
 	return nil
 }

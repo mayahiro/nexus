@@ -36,6 +36,7 @@ type compareSnapshotNode struct {
 	Name             string            `json:"name,omitempty"`
 	Text             string            `json:"text,omitempty"`
 	Value            string            `json:"value,omitempty"`
+	States           map[string]string `json:"states,omitempty"`
 	Href             string            `json:"href,omitempty"`
 	TestID           string            `json:"testid,omitempty"`
 	CSS              map[string]string `json:"css,omitempty"`
@@ -47,12 +48,13 @@ type compareSnapshotNode struct {
 	Invokable        bool              `json:"invokable"`
 	ID               int               `json:"id,omitempty"`
 	Children         []int             `json:"children,omitempty"`
-	OriginalIndex    int               `json:"-"`
+	OriginalIndex    int               `json:"original_index"`
+	StructurePath    string            `json:"structure_path,omitempty"`
 	Tag              string            `json:"-"`
 	IDAttr           string            `json:"-"`
 	NameAttr         string            `json:"-"`
-	TypeAttr         string            `json:"-"`
-	Placeholder      string            `json:"-"`
+	TypeAttr         string            `json:"type,omitempty"`
+	Placeholder      string            `json:"placeholder,omitempty"`
 	AriaLabel        string            `json:"-"`
 	MatchBounds      *api.Rect         `json:"-"`
 	CropBounds       *api.Rect         `json:"-"`
@@ -66,6 +68,7 @@ type compareSummary struct {
 	MissingNodes            int  `json:"missing_nodes"`
 	NewNodes                int  `json:"new_nodes"`
 	StateChanged            int  `json:"state_changed"`
+	AttributeChanged        int  `json:"attribute_changed"`
 	CSSChanged              int  `json:"css_changed"`
 	LayoutChanged           int  `json:"layout_changed"`
 	PageTextChanged         int  `json:"page_text_changed"`
@@ -94,8 +97,12 @@ type compareScope struct {
 }
 
 type compareFinding struct {
-	Kind             string   `json:"kind"`
-	FindingID        string   `json:"finding_id,omitempty"`
+	Kind             string `json:"kind"`
+	FindingID        string `json:"finding_id,omitempty"`
+	OldRef           string `json:"old_ref,omitempty"`
+	NewRef           string `json:"new_ref,omitempty"`
+	oldNodeKey       string
+	newNodeKey       string
 	Severity         string   `json:"severity,omitempty"`
 	Impact           string   `json:"impact,omitempty"`
 	DecisionKind     string   `json:"decision_kind,omitempty"`
@@ -454,12 +461,13 @@ type compareMatchingDebugCandidateOption struct {
 }
 
 type compareReport struct {
-	Old           compareSnapshot       `json:"old"`
-	New           compareSnapshot       `json:"new"`
-	Scope         *compareScope         `json:"scope,omitempty"`
-	Summary       compareSummary        `json:"summary"`
-	Findings      []compareFinding      `json:"findings"`
-	MatchingDebug *compareMatchingDebug `json:"matching_debug,omitempty"`
+	FindingIDVersion int                   `json:"finding_id_version,omitempty"`
+	Old              compareSnapshot       `json:"old"`
+	New              compareSnapshot       `json:"new"`
+	Scope            *compareScope         `json:"scope,omitempty"`
+	Summary          compareSummary        `json:"summary"`
+	Findings         []compareFinding      `json:"findings"`
+	MatchingDebug    *compareMatchingDebug `json:"matching_debug,omitempty"`
 }
 
 type compareManifest struct {

@@ -52,7 +52,7 @@ Recommended passes:
 ## Noise Control
 
 - Keep `--ignore-text-regex` minimal
-- Use `--mask-selector` for sensitive values, timestamps, and IDs that are expected to differ
+- Use `--mask-selector` for node text, form values, and timestamps that are expected to differ; review the [filter and redaction limits](compare-contract.md#filters) before sharing reports
 - Use `--ignore-selector` only for nodes that are truly outside the compare target
 - Use `tag=<value>` or `attr:<name>=<value>` selector rules for structural noise that lacks role/name/text identity
 - With `--node-scope all`, rely on default structural ignores first, then use `--no-default-ignores` only when ignored nodes are the review target
@@ -102,12 +102,15 @@ nxctl compare --old-session old --new-session new --wait-function 'document.quer
 Targeted inspection:
 
 ```text
+nxctl inspect 'role button --name "Submit"' --session work
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect --selector 'aside.filters' --old-session old --new-session new --css-property width
 nxctl inspect --old-scope-selector '#legacy-filters' --new-scope-selector 'aside.filters' --old-session old --new-session new --css-property width
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new --layout-context
 ```
+
+`inspect` collects matched declarations and compiled CSS source locations by default without claiming a cascade winner. See the [inspect guide](inspect.md) for one-session mode, JSON fields, status values, and `--no-style-sources`
 
 Style-focused compare:
 
@@ -143,7 +146,7 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 - use `histogram` with `--node-scope all --scope-selector <css>` for focused subtree work where wrapper `div` and layout containers matter
 - if a heuristic result looks suspicious, rerun with `--match-mode exact` or narrow the scope further
 
-JSON findings include a stable `finding_id`. Findings produced from stable, heuristic, or histogram node pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`.
+JSON reports use `finding_id_version: 2`. A `finding_id` identifies the page/scope, node occurrence, and full normalized change; it is repeatable for unchanged inputs. Regenerate and review finding decisions made with older IDs. Findings from node pairs include `old_ref` and `new_ref` when available; stable, heuristic, and histogram pairs include `matched_by`, and heuristic findings include `match_score` and `match_reasons`. See the [comparison contract](compare-contract.md) ([日本語](compare-contract_ja.md)) for compared attributes/states, filtering, and report compatibility.
 
 ## Node Scope Selection
 
@@ -156,7 +159,7 @@ Use the narrowest node scope that still covers the migration risk.
 
 `--node-scope all` requires `--scope-selector` or both `--old-scope-selector` and `--new-scope-selector`. Use it when wrapper elements, layout containers, or anonymous DOM structure are part of what changed, for example one hero, one sidebar, one card grid, or one migrated component root. Do not use it as a broad page-wide starting point; repeated anonymous wrappers, decorative elements, and SVG internals can produce more review work than signal.
 
-When `all` is used, compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings. `structure_key` is a DOM-order structural path. `subtree_signature` summarizes the node role/tag, text-length bucket, descendant-count bucket, direct child-count bucket, first child role/tag, and width bucket. Histogram matching can use these low-occurrence structural values as anchors without changing the base fingerprint, which keeps normal fingerprint behavior stable while making anonymous containers easier to reason about in debug output.
+When `all` is used, compare adds `structure_key` and `subtree_signature` to nodes, matching debug entries, and missing/new findings. `structure_key` is a DOM-order structural path. `subtree_signature` summarizes the node role/tag, text-length bucket, descendant-count bucket, direct child-count bucket, first child role/tag, and width bucket. Histogram matching can use these low-occurrence structural values as anchors. When filters or default `all` exclusions are enabled, comparison fingerprints are derived from the filtered values; raw observation fingerprints remain unchanged. Manual pairs are retained even when they cross other matches, while only noncrossing pairs define histogram regions.
 
 Default `all` ignores suppress common structural noise before matching: SVG descendants below the root `<svg>`, `script`, `style`, `link`, `meta`, `noscript`, `[hidden]`, `[aria-hidden="true"]`, and `[data-nxctl-skip="true"]`. This keeps decorative icons, hidden DOM, and tool-specific skip markers from dominating unmatched-node review. Add `--no-default-ignores` when the ignored nodes are the target, such as reviewing the internal geometry of one SVG asset.
 
@@ -186,8 +189,8 @@ Each line is one JSON object. Validate each line against `docs/ai/compare-decisi
 {"kind":"pair","old":"@e9","new":"?","confidence":"unknown","reason":"needs review"}
 {"kind":"accepted_removed","old":"@e45","reason":"legacy-only footer link intentionally removed"}
 {"kind":"accepted_added","new":"@e88","reason":"new skip-link"}
-{"kind":"accepted_finding","finding_id":"text_changed:3fa21c9d4b2a","reason":"approved copy change"}
-{"kind":"regression_finding","finding_id":"layout_changed:4d2aa4107e9f","reason":"primary CTA moved below the fold"}
+{"kind":"accepted_finding","finding_id":"text_changed:v2:3fa21c9d4b2a819b2834edac","reason":"approved copy change"}
+{"kind":"regression_finding","finding_id":"layout_changed:v2:4d2aa4107e9f5834fa2cc345","reason":"primary CTA moved below the fold"}
 {"kind":"accepted_finding_cluster","cluster_key":"warning | layout_changed | layout_changed |  | bounds |  |  |  | ","confidence":"high","reason":"same repeated acceptable layout shift"}
 ```
 
@@ -296,13 +299,15 @@ If the new page looks incomplete:
 
 ## Inspect Selector Rules
 
-- `inspect --selector` accepts a raw CSS selector and compares the computed styles for exactly one matched element on each side
-- `inspect --scope-selector` limits semantic locator inspection to exactly one matched subtree on each side
+- `inspect --session` inspects one selected element in one existing session
+- `inspect --selector` accepts a raw CSS selector and inspects exactly one matched element in each selected session
+- `inspect --scope-selector` limits semantic locator inspection to exactly one matched subtree in each selected session
 - `inspect --old-scope-selector` and `inspect --new-scope-selector` override the inspect subtree per side
-- when no semantic locator is provided, side-specific scope selectors identify the inspected roots
+- side-specific scope selectors are available only in old/new comparison mode
+- when no semantic locator is provided, common or side-specific scope selectors identify the inspected roots
 - positional selectors such as `:nth-child()` and `:nth-of-type()` are allowed
 - do not combine `--selector` with a positional inspect locator
 - do not combine `--selector` with `--nth`
 - if an inspect selector or inspect scope selector matches multiple elements, the error includes up to five candidate hints
 - use `inspect --layout-context` when ancestor layout CSS may explain the target element's size, position, wrapping, or overflow
-- `--layout-context` is capability-based; Chromium returns DOM ancestor layout CSS, and unsupported backends fail explicitly
+- `--layout-context` returns DOM ancestor layout CSS from Chromium

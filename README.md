@@ -9,16 +9,15 @@ It is inspired by Browser Use CLI, but it is not a compatibility project. Nexus 
 Nexus is currently in an early usable stage.
 
 - macOS only
-- Chromium is the primary backend
-- Lightpanda is supported as an experimental backend for observation-oriented workflows
+- Chromium is the supported browser backend
 - The current install path is `go install`
 
 ## Install
 
 Prerequisites:
 
-- macOS
-- Go 1.26.1
+- macOS 13 Ventura or later, as required by [Go 1.27](https://go.dev/doc/go1.27#darwin)
+- Go 1.27.1 or later
 - `$(go env GOPATH)/bin` or `~/go/bin` on `PATH`
 
 Install:
@@ -55,7 +54,9 @@ Nexus is built around sessions.
 
 Before using an existing daemon, `nxctl` checks both the RPC protocol and daemon build identifier. The identifier includes the VCS revision and dirty state when Go build information provides them. An incompatible daemon is stopped and replaced, and the `nxd` beside the running `nxctl` is preferred over an older `PATH` entry. Each request also carries the protocol version, and `nxd` rejects a missing or mismatched version before decoding the operation.
 
-An auto-started daemon holds an exclusive lock on `nxd.pid`, so another current `nxd` refuses to start even if the Unix socket path was removed while the first listener is still alive. Auto-started daemon output is written beside the state log base as `nxd.<pid>.log`; the active PID is stored in `nxd.pid`. A daemon started interactively with `nxctl daemon` or `nxd` keeps writing to its terminal.
+Concurrent `nxctl` processes coordinate a missing-daemon cold start through `nxd.start.lock`, then recheck the socket so only one process spawns `nxd`. The running daemon holds a separate exclusive lock on `nxd.pid`, so another current `nxd` refuses to start even if the Unix socket path was removed while the first listener is still alive. Auto-started daemon output is written beside the state log base as `nxd.<pid>.log`; the active PID is stored in `nxd.pid`. A daemon started interactively with `nxctl daemon` or `nxd` keeps writing to its terminal.
+
+Each daemon request has one bounded diagnostic trace spanning RPC decode, session serialization, backend work, and response transfer. In normal mode, successful traces are discarded. A command error, canceled request, RPC write failure, or unexpected Chromium exit flushes the buffered stages with the Nexus build, Go runtime, OS version and architecture, browser product and protocol when available, chromedp and cdproto versions, and bounded recent browser output. Start an interactive daemon with `nxctl daemon --verbose` or `nxd --verbose` to emit every stage for successful and failed requests. `screenshot --verbose` and `observe --verbose` can enable the same behavior for one request.
 
 The primary interaction loop is:
 
@@ -69,6 +70,8 @@ Refs belong to the latest observed page generation. Nexus rejects a ref after na
 Use `fill` to replace a node value, `input` to type into a specific node, and `type` to type into the currently focused editable element.
 See the [AI usage guide](docs/ai/usage.md#choosing-fill-input-or-type) for the controlled-form decision matrix.
 `batch` runs commands in order and stops at the first non-zero exit status unless `--keep-going` is set.
+
+Use `dialog get`, `dialog accept`, or `dialog dismiss` for JavaScript `alert`, `confirm`, `prompt`, and `beforeunload` dialogs. `dialog accept --text "Alice"` submits a prompt response; omitting `--text` preserves its initial value, and `--text ""` submits an empty string. Page operations interrupted by a dialog return an explicit error while keeping the session available for handling. The triggering action may already have partially executed; inspect the page after handling before repeating it. See the [dialog guide](docs/ai/dialogs.md) ([Japanese](docs/ai/dialogs_ja.md)), including how to capture dialogs during initial page load.
 
 When you want a meaning-based locator instead of a ref, use `find`:
 
@@ -98,8 +101,8 @@ nxctl browser uninstall
 
 Current behavior:
 
-- `browser setup` installs stable Chromium and stable Lightpanda
-- `browser update` refreshes both
+- `browser setup` installs stable Chromium
+- `browser update` refreshes Chromium
 - `browser uninstall` removes managed browser installs
 - download archives are not kept after successful install or update
 
@@ -160,10 +163,13 @@ nxctl compare https://old.example.com/orders https://new.example.com/orders --co
 nxctl compare https://old.example.com/orders https://new.example.com/orders --css-property color --css-property pointer-events
 nxctl compare https://old.example.com/orders https://new.example.com/orders --all-css-properties
 nxctl compare https://old.example.com/orders https://new.example.com/orders --compare-layout
-nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector role=link&text=Legacy --mask-selector role=textbox&name=Email
+nxctl compare https://old.example.com/orders https://new.example.com/orders --ignore-selector 'role=link&text=Legacy' --mask-selector 'role=textbox&name=Email'
 nxctl compare https://old.example.com/orders https://new.example.com/orders --output-json compare.json --output-md compare.md
 nxctl compare --manifest migration-pages.json --output-md compare.md
 nxctl flow run --manifest login-flow.json --json
+nxctl inspect 'role button --name "Submit"' --session work
+nxctl inspect --selector ".link-list" --session work --css-property width --json
+nxctl inspect --selector ".link-list" --session work --css-property width --no-style-sources
 nxctl inspect 'role button --name "Submit"' --old-session old --new-session new
 nxctl inspect 'role button' --old-session old --new-session new --nth 2 --css-property color
 nxctl inspect 'text "Sign In"' --old-session old --new-session new --css-property color
@@ -186,7 +192,7 @@ nxctl viewport 1280x720
 nxctl close
 ```
 
-In compare manifests, `backend`, `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page. `all_css_properties: true` and `css_property` cannot coexist in the same object; a page-level property list may override exhaustive mode inherited from defaults.
+In compare manifests, `backend` (currently `chromium`), `viewport`, `match_mode`, `node_scope`, `matching_debug`, `decisions_file`, `scope_selector`, `old_scope_selector`, `new_scope_selector`, `compare_css`, `all_css_properties`, `compare_layout`, `no_default_ignores`, and `css_property` can be set in `defaults` and overridden per page. `all_css_properties: true` and `css_property` cannot coexist in the same object; a page-level property list may override exhaustive mode inherited from defaults.
 
 `flow run` executes a scenario manifest while keeping old/new sessions alive across ordered steps. Use it for login flows, multi-step journeys, and responsive checks that should repeat the same flow across matrices such as desktop and mobile.
 
@@ -194,9 +200,8 @@ Available command groups include:
 
 - browser management: `browser setup`, `browser update`, `browser status`, `browser uninstall`
 - navigation: `open`, `navigate`, `back`, `scroll`
-- inspection: `state`, `observe`, `get`, `screenshot`
-- targeted style diff: `inspect`
-- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`
+- inspection: `state`, `observe`, `get`, `screenshot`, `inspect`
+- interaction: `click`, `hover`, `dblclick`, `rightclick`, `type`, `fill`, `input`, `keys`, `select`, `upload`, `eval`, `find`, `dialog get|accept|dismiss`
 - migration diff: `compare`
 - scenario flow: `flow run`
 - automation flow: `batch`
@@ -206,6 +211,7 @@ Run `nxctl help <command> [subcommand]` for command-specific usage.
 Run `nxctl --help` or `nxctl -h` for the top-level command list and documentation links.
 
 The `nxctl` command surface is defined by one Nagi command graph. Parsing, validation diagnostics, nested help, and command execution use that same schema, so generated help is the canonical reference for accepted arguments and options.
+Help lists possible values for finite choices declared in the graph. The [CLI reference](docs/cli-reference.md) is generated from the same graph; use the installed command's help when working with a different version.
 Usage errors are rendered as structured messages such as `error[missing-required]: ...` followed by the relevant generated usage line.
 
 Most command flags can be placed before or after positional arguments.
@@ -241,27 +247,29 @@ Use `--all-css-properties` when the task requires an exhaustive computed-style p
 Use `--compare-layout` when you want opt-in viewport-relative bounds findings for matching nodes, such as a button moving from center to left. Layout findings report observed placement changes; use `inspect --layout-context` when you need ancestor CSS context to investigate why the movement happened.
 Node-level compare findings include a best-effort `locator` when Nexus can infer a reusable selector from shared attributes such as `label`, `testid`, or `href`.
 Color-valued computed styles are normalized to sRGB `rgb(...)` or `rgba(...)` before comparison to reduce notation-only diffs from values such as `lab(...)` or `oklab(...)`.
-Use `inspect` when you already have two sessions and want computed-style values for one semantic locator instead of a whole-page diff.
+Use `inspect --session <ID>` when one element needs computed values and authored declaration sources. Use both `--old-session` and `--new-session` for a focused comparison instead of a whole-page diff.
+Style sources are collected by default for the selected node and requested properties. JSON retains all collected declarations and their best-effort selector, origin, compiled CSS URL, one-based line and column, and source map URL metadata. The list does not claim a cascade winner, and Nexus does not resolve source maps back to SCSS. Use `--no-style-sources` to skip this collection while keeping computed-style inspection.
 Use `inspect --selector` when you need the computed styles for one CSS-selected container rather than a semantic locator.
-`inspect --selector` accepts a raw CSS selector, requires exactly one match on each side, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
+`inspect --selector` accepts a raw CSS selector, requires exactly one match in each selected session, allows positional selectors such as `:nth-child()` and `:nth-of-type()`, and does not support `--nth`.
 When an inspect selector or inspect scope selector matches multiple elements, Nexus reports up to five matched candidates as hints.
 Use `inspect --scope-selector` to resolve a semantic locator inside one CSS-selected subtree, or `--old-scope-selector` and `--new-scope-selector` when the old and new subtree selectors differ.
-When `inspect` has no semantic locator, side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior for different DOM structures.
-Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist; unsupported backends fail with a capability error.
+When `inspect` has no semantic locator, common or side-specific scope selectors identify the inspected roots, matching `inspect --selector` behavior.
+Use `inspect --layout-context` when the target element is affected by ancestor layout. Chromium returns DOM ancestor context with a focused layout CSS allowlist.
 Use `--nth` with `find` or `inspect` when repeated controls intentionally share the same semantic locator.
 Use `get bbox --selector <css>` when you need the viewport-relative bounds for any CSS-selected element without running ad hoc JavaScript.
 Use `get text|value|attributes|bbox --refs <@eN,@eN,...>` when you need read-only values for several recent refs in one command.
 Use `click --refs <@eN,@eN,...>` only when sequential clicks are intentional; Nexus stops at the first failed click.
 
-`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `viewport`, `screenshot`, and `compare` steps.
+`flow run` currently supports `wait`, `navigate`, `click`, `fill`, `dialog`, `viewport`, `screenshot`, and `compare` steps.
+Set `expect_dialog: true` on a `click`, `fill`, or `navigate` step that opens a JavaScript dialog, then handle it with an `action: "dialog"` step and `target: "get"`, `"accept"`, or `"dismiss"`. Prompt acceptance supports `text`, including an empty string. See the [flow dialog guide](docs/ai/dialogs.md#in-flows).
 Scenarios can define `old` and `new` endpoints, optional `matrix` names, and string variables for simple `{{ name }}` substitution.
 Existing sessions can be reused through `old.session` and `new.session`, and scenario-start viewport overrides are applied even when a session already exists.
 Screenshot steps write PNG files to the provided `path`. When `side` is omitted and both sessions are captured, Nexus writes `-old` and `-new` suffixed files automatically.
 Screenshot steps can also target one element with `locator` and optional `nth`, using the same selector DSL as flow `click` and `fill`.
 Viewport capture is the default and `--full` opts into full-page capture.
-Screenshot capture times out after 30000 ms by default. `screenshot` and screenshot-enabled `observe` apply the same overall timeout on both the client request and daemon capture. Each capture attempt is capped at 10000 ms so a stuck target cannot monopolize the session. Before capture, Nexus gives its paint-readiness barrier a separate best-effort budget of 1000 ms. If that barrier does not complete, Nexus discards its operation context, captures with a fresh one, and emits a warning because the saved frame may precede final rendering. A failed capture automatically reconnects to the same tab once and preserves page state. Use `--recover-target` to permit a final tab replacement when that reconnect also fails; replacement reloads the current URL and loses transient page state. `--recover-target` is not supported with `--locator`.
+Screenshot capture times out after 30000 ms by default. `screenshot` and screenshot-enabled `observe` apply the same overall timeout on both the client request and daemon capture. Each capture attempt is capped at 10000 ms so a stuck target cannot monopolize the session. Capture does not add an implicit rendering delay; use `wait hydrated` or a page-specific `wait function` before capture when visual readiness is part of the assertion. A failed capture automatically reconnects to the same tab once and preserves page state. Use `--recover-target` to permit a final tab replacement when that reconnect also fails; replacement reloads the current URL and loses transient page state. `--recover-target` is not supported with `--locator`.
 Full-page capture rejects pages above Nexus's safety limits instead of attempting an unbounded PNG transfer. Use `nxctl screenshot --timeout <ms>` or a flow screenshot step `timeout` value to budget enough time for same-target reconnect; increasing it does not extend one capture attempt beyond 10000 ms. For direct screenshots, `--recover-target` uses the remaining budget for optional tab replacement.
-Use `nxctl screenshot --verbose` or `nxctl observe --screenshot --verbose` to write correlated readiness, capture boundary, timeout, reattach, target creation, and state restoration events to the active `nxd.<pid>.log`. Run an interactive daemon with `nxctl daemon --verbose` or `nxd --verbose` to log request summaries for every operation as well. When final visual readiness matters, use `wait hydrated` or a page-specific `wait function` before capture instead of relying only on the paint-readiness barrier.
+Capture failures always flush correlated request, timeout, reattach, target creation, state restoration, environment, and RPC transfer diagnostics to the active `nxd.<pid>.log`. Use `nxctl screenshot --verbose` or `nxctl observe --screenshot --verbose` to emit the same stages for a successful capture. An interactive `nxctl daemon --verbose` or `nxd --verbose` emits every stage for every daemon request.
 
 Canvas-rendered content such as map tiles is visible in screenshots, but it usually does not expose semantic nodes or DOM coordinates that Nexus can validate. Treat screenshot review or an application-specific API assertion as the source of truth for canvas internals.
 
@@ -306,7 +314,11 @@ Fallbacks:
 
 ## Documentation
 
+- CLI reference: [`docs/cli-reference.md`](docs/cli-reference.md)
+- CLI reference (Japanese guide): [`docs/cli-reference_ja.md`](docs/cli-reference_ja.md)
 - AI guide: [`docs/ai/usage.md`](docs/ai/usage.md)
+- AI inspect guide: [`docs/ai/inspect.md`](docs/ai/inspect.md)
+- AI inspect guide (Japanese): [`docs/ai/inspect_ja.md`](docs/ai/inspect_ja.md)
 - AI compare guide: [`docs/ai/compare.md`](docs/ai/compare.md)
 - Compare decision schema: [`docs/ai/compare-decisions.schema.json`](docs/ai/compare-decisions.schema.json)
 - AI flow guide: [`docs/ai/flow.md`](docs/ai/flow.md)

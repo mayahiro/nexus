@@ -154,13 +154,12 @@ func TestScreenshotRejectsNonPositiveTimeout(t *testing.T) {
 
 func TestWriteScreenshotWarnings(t *testing.T) {
 	meta := map[string]string{
-		"screenshot_recovery_warning":  "target was replaced",
-		"screenshot_readiness_warning": "paint readiness was not confirmed",
+		"screenshot_recovery_warning": "target was replaced",
 	}
 	var output bytes.Buffer
 	writeScreenshotWarnings(&output, meta)
 
-	expected := "warning: target was replaced\nwarning: paint readiness was not confirmed\n"
+	expected := "warning: target was replaced\n"
 	if output.String() != expected {
 		t.Fatalf("unexpected screenshot warnings: %q", output.String())
 	}
@@ -171,9 +170,7 @@ func TestWriteScreenshotWarnings(t *testing.T) {
 			captured = append(captured, message)
 		},
 	}, meta)
-	if len(captured) != 2 ||
-		captured[0] != "target was replaced" ||
-		captured[1] != "paint readiness was not confirmed" {
+	if len(captured) != 1 || captured[0] != "target was replaced" {
 		t.Fatalf("unexpected captured warning messages: %+v", captured)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -18,6 +19,101 @@ import (
 	"github.com/mayahiro/nexus/internal/target/browser"
 	"github.com/mayahiro/nexus/internal/target/browser/spec"
 )
+
+func TestEnsureDaemonConcurrentStartRunsOnce(t *testing.T) {
+	configureXDGTestEnv(t)
+
+	paths, err := config.DefaultPaths()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	original := startDaemonProcess
+	defer func() {
+		startDaemonProcess = original
+	}()
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+
+	var starts atomic.Int32
+	done := make(chan error, 1)
+	startDaemonProcess = func(daemonPaths config.Paths) error {
+		if count := starts.Add(1); count != 1 {
+			return errors.New("daemon start invoked more than once")
+		}
+		go func() {
+			done <- daemon.Run(runCtx, daemonPaths, daemon.RunOptions{})
+		}()
+		return nil
+	}
+
+	type result struct {
+		started bool
+		err     error
+	}
+	const callers = 12
+	start := make(chan struct{})
+	results := make(chan result, callers)
+	for range callers {
+		go func() {
+			<-start
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			client, started, err := ensureDaemon(ctx, paths)
+			if client != nil {
+				client.Close()
+			}
+			results <- result{started: started, err: err}
+		}()
+	}
+	close(start)
+
+	startedCount := 0
+	var firstErr error
+	for range callers {
+		result := <-results
+		if result.err != nil && firstErr == nil {
+			firstErr = result.err
+		}
+		if result.started {
+			startedCount++
+		}
+	}
+	if firstErr != nil {
+		t.Fatal(firstErr)
+	}
+	if starts.Load() != 1 {
+		t.Fatalf("unexpected daemon start count: %d", starts.Load())
+	}
+	if startedCount != 1 {
+		t.Fatalf("unexpected started result count: %d", startedCount)
+	}
+
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelStop()
+	client, _, err := ensureDaemon(stopCtx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.StopDaemon(stopCtx); err != nil {
+		client.Close()
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("daemon did not stop")
+	}
+}
 
 func TestDoctorStartsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
@@ -72,8 +168,8 @@ func TestDoctorStartsDaemon(t *testing.T) {
 func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 	configureXDGTestEnv(t)
 
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return autoStartLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return autoStartChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -104,10 +200,10 @@ func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 	}
 
 	var openOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda", "--session", "auto"}, &openOut, &openOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "chromium", "--session", "auto"}, &openOut, &openOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, openOut.String())
 	}
-	if !strings.Contains(openOut.String(), "attached browser auto (lightpanda) /tmp/lightpanda") {
+	if !strings.Contains(openOut.String(), "attached browser auto (chromium) /tmp/chromium") {
 		t.Fatalf("unexpected open output: %s", openOut.String())
 	}
 
@@ -141,8 +237,8 @@ func TestAutoStartedDaemonPersistsAcrossCommands(t *testing.T) {
 
 func TestCloseStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -170,7 +266,7 @@ func TestCloseStopsDaemon(t *testing.T) {
 	}
 
 	var attachOut bytes.Buffer
-	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "lightpanda"}, &attachOut, &attachOut); code != 0 {
+	if code := Run(context.Background(), []string{"open", "https://example.com", "--backend", "chromium"}, &attachOut, &attachOut); code != 0 {
 		t.Fatalf("unexpected open exit code: %d\n%s", code, attachOut.String())
 	}
 
@@ -194,8 +290,8 @@ func TestCloseStopsDaemon(t *testing.T) {
 
 func TestCloseAllStopsDaemon(t *testing.T) {
 	configureXDGTestEnv(t)
-	restoreBackend := browser.SetBackendFactory(spec.BackendLightpanda, func() spec.Backend {
-		return fakeLightpandaBackend{}
+	restoreBackend := browser.SetBackendFactory(spec.BackendChromium, func() spec.Backend {
+		return fakeChromiumBackend{}
 	})
 	defer restoreBackend()
 
@@ -223,12 +319,12 @@ func TestCloseAllStopsDaemon(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "lightpanda"}, &out, &out); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web1", "--backend", "chromium"}, &out, &out); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, out.String())
 	}
 
 	out.Reset()
-	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web2", "--backend", "lightpanda"}, &out, &out); code != 0 {
+	if code := Run(context.Background(), []string{"attach", "browser", "--session", "web2", "--backend", "chromium"}, &out, &out); code != 0 {
 		t.Fatalf("unexpected attach exit code: %d\n%s", code, out.String())
 	}
 

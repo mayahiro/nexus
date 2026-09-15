@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mayahiro/nexus/internal/api"
+	"github.com/mayahiro/nexus/internal/diagnostic"
 )
 
 type Handler interface {
@@ -24,24 +25,23 @@ type Handler interface {
 	DetachSession(ctx context.Context, req api.DetachSessionRequest) (api.DetachSessionResponse, error)
 	StopDaemon(ctx context.Context, req api.StopDaemonRequest) (api.StopDaemonResponse, error)
 	ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error)
+	InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error)
 	ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error)
 }
 
 type ServeOptions struct {
 	OnActivity func()
+	NewTrace   func(method string) *diagnostic.Trace
 }
 
 const maxBinaryResponseSize int64 = 512 << 20
 const connectionShutdownGrace = 100 * time.Millisecond
 
 type Client struct {
-	conn    net.Conn
-	reader  *bufio.Reader
-	writer  *bufio.Writer
-	dial    func(context.Context) (net.Conn, error)
-	closed  bool
-	callMu  sync.Mutex
-	stateMu sync.Mutex
+	mu     sync.Mutex
+	dial   func(context.Context) (net.Conn, error)
+	active map[net.Conn]struct{}
+	closed bool
 }
 
 type request struct {
@@ -65,88 +65,85 @@ func Dial(ctx context.Context, path string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := conn.Close(); err != nil {
+		return nil, err
+	}
 
-	return &Client{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
-		writer: bufio.NewWriter(conn),
-		dial:   dial,
-	}, nil
+	return newClient(dial), nil
 }
 
 func (c *Client) Close() error {
-	c.stateMu.Lock()
-
-	c.closed = true
-	if c.conn == nil {
-		c.stateMu.Unlock()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
 		return nil
 	}
-	conn := c.conn
-	c.clearConnectionLocked(conn)
-	c.stateMu.Unlock()
-	return conn.Close()
+	c.closed = true
+	connections := make([]net.Conn, 0, len(c.active))
+	for conn := range c.active {
+		connections = append(connections, conn)
+	}
+	c.active = nil
+	c.mu.Unlock()
+
+	var closeErr error
+	for _, conn := range connections {
+		if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			closeErr = errors.Join(closeErr, err)
+		}
+	}
+	return closeErr
 }
 
 func (c *Client) Ping(ctx context.Context) (api.PingResponse, error) {
-	var res api.PingResponse
-	err := c.call(ctx, "ping", api.PingRequest{ProtocolVersion: api.ProtocolVersion}, &res)
-	return res, err
+	return c.callFor[api.PingResponse](ctx, "ping", api.PingRequest{ProtocolVersion: api.ProtocolVersion})
 }
 
 func (c *Client) AttachSession(ctx context.Context, req api.AttachSessionRequest) (api.AttachSessionResponse, error) {
-	var res api.AttachSessionResponse
-	err := c.call(ctx, "attach_session", req, &res)
-	return res, err
+	return c.callFor[api.AttachSessionResponse](ctx, "attach_session", req)
 }
 
 func (c *Client) ListSessions(ctx context.Context) (api.ListSessionsResponse, error) {
-	var res api.ListSessionsResponse
-	err := c.call(ctx, "list_sessions", api.ListSessionsRequest{}, &res)
-	return res, err
+	return c.callFor[api.ListSessionsResponse](ctx, "list_sessions", api.ListSessionsRequest{})
 }
 
 func (c *Client) DetachSession(ctx context.Context, req api.DetachSessionRequest) (api.DetachSessionResponse, error) {
-	var res api.DetachSessionResponse
-	err := c.call(ctx, "detach_session", req, &res)
-	return res, err
+	return c.callFor[api.DetachSessionResponse](ctx, "detach_session", req)
 }
 
 func (c *Client) StopDaemon(ctx context.Context) (api.StopDaemonResponse, error) {
-	var res api.StopDaemonResponse
-	err := c.call(ctx, "stop_daemon", api.StopDaemonRequest{}, &res)
-	return res, err
+	return c.callFor[api.StopDaemonResponse](ctx, "stop_daemon", api.StopDaemonRequest{})
 }
 
 func (c *Client) ObserveSession(ctx context.Context, req api.ObserveSessionRequest) (api.ObserveSessionResponse, error) {
-	var res api.ObserveSessionResponse
-	err := c.call(ctx, "observe_session", req, &res)
-	return res, err
+	return c.callFor[api.ObserveSessionResponse](ctx, "observe_session", req)
+}
+
+// InspectStyles requests one targeted style inspection from the daemon.
+func (c *Client) InspectStyles(ctx context.Context, req api.InspectStylesRequest) (api.InspectStylesResponse, error) {
+	return c.callFor[api.InspectStylesResponse](ctx, "inspect_styles", req)
 }
 
 func (c *Client) ActSession(ctx context.Context, req api.ActSessionRequest) (api.ActSessionResponse, error) {
-	var res api.ActSessionResponse
-	err := c.call(ctx, "act_session", req, &res)
+	return c.callFor[api.ActSessionResponse](ctx, "act_session", req)
+}
+
+func (c *Client) callFor[T any](ctx context.Context, method string, params any) (T, error) {
+	var res T
+	err := c.call(ctx, method, params, &res)
 	return res, err
 }
 
 func (c *Client) call(ctx context.Context, method string, params interface{}, result interface{}) error {
-	c.callMu.Lock()
-	defer c.callMu.Unlock()
-
-	conn, reader, writer, err := c.connection(ctx)
+	conn, err := c.openConnection(ctx)
 	if err != nil {
 		return err
 	}
-	healthy := true
-	defer func() {
-		if !healthy {
-			c.discardConnection(conn)
-		}
-	}()
+	defer c.releaseConnection(conn)
+	reader := bufio.NewReader(conn)
+	writer := bufio.NewWriter(conn)
 
 	if err := setDeadline(ctx, conn); err != nil {
-		healthy = false
 		return err
 	}
 	cancelFinished := make(chan struct{})
@@ -157,7 +154,6 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 	defer func() {
 		if !stopCancel() {
 			<-cancelFinished
-			healthy = false
 		}
 		clearDeadline(conn)
 	}()
@@ -167,93 +163,92 @@ func (c *Client) call(ctx context.Context, method string, params interface{}, re
 		Method:          method,
 		Params:          params,
 	}); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 
 	var res response
 	if err := readJSONLine(reader, &res); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 	if res.Error != "" {
-		healthy = false
 		return errors.New(res.Error)
 	}
 	if result != nil {
 		if err := json.Unmarshal(res.Result, result); err != nil {
-			healthy = false
 			return err
 		}
 	}
 	if res.BinarySize < 0 {
-		healthy = false
 		return fmt.Errorf("invalid RPC binary response size: %d", res.BinarySize)
 	}
 	if res.BinarySize == 0 {
 		return nil
 	}
 	if res.BinarySize > maxBinaryResponseSize {
-		healthy = false
 		return fmt.Errorf("RPC binary response is too large: %d bytes", res.BinarySize)
 	}
 	if result == nil {
-		healthy = false
 		return errors.New("unexpected binary RPC response")
 	}
 
 	data := make([]byte, res.BinarySize)
 	if _, err := io.ReadFull(reader, data); err != nil {
-		healthy = false
 		return requestError(ctx, err)
 	}
 	switch value := result.(type) {
 	case *api.ObserveSessionResponse:
 		value.Observation.ScreenshotData = data
 	default:
-		healthy = false
 		return fmt.Errorf("binary RPC response is unsupported for %T", result)
 	}
 	return nil
 }
 
-func (c *Client) connection(ctx context.Context) (net.Conn, *bufio.Reader, *bufio.Writer, error) {
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
+func newClient(dial func(context.Context) (net.Conn, error)) *Client {
+	return &Client{
+		dial:   dial,
+		active: map[net.Conn]struct{}{},
+	}
+}
 
+func (c *Client) openConnection(ctx context.Context) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
 	if c.closed {
-		return nil, nil, nil, net.ErrClosed
+		c.mu.Unlock()
+		return nil, net.ErrClosed
 	}
-	if c.conn != nil {
-		return c.conn, c.reader, c.writer, nil
+	dial := c.dial
+	c.mu.Unlock()
+	if dial == nil {
+		return nil, net.ErrClosed
 	}
-	if c.dial == nil {
-		return nil, nil, nil, net.ErrClosed
-	}
-	conn, err := c.dial(ctx)
+
+	conn, err := dial(ctx)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
-	c.conn = conn
-	c.reader = bufio.NewReader(conn)
-	c.writer = bufio.NewWriter(conn)
-	return c.conn, c.reader, c.writer, nil
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		conn.Close()
+		return nil, net.ErrClosed
+	}
+	if c.active == nil {
+		c.active = map[net.Conn]struct{}{}
+	}
+	c.active[conn] = struct{}{}
+	c.mu.Unlock()
+	return conn, nil
 }
 
-func (c *Client) discardConnection(conn net.Conn) {
-	c.stateMu.Lock()
-	c.clearConnectionLocked(conn)
-	c.stateMu.Unlock()
+func (c *Client) releaseConnection(conn net.Conn) {
+	c.mu.Lock()
+	delete(c.active, conn)
+	c.mu.Unlock()
 	conn.Close()
-}
-
-func (c *Client) clearConnectionLocked(conn net.Conn) {
-	if c.conn != conn {
-		return
-	}
-	c.conn = nil
-	c.reader = nil
-	c.writer = nil
 }
 
 func requestError(ctx context.Context, err error) error {
@@ -298,16 +293,14 @@ func Serve(ctx context.Context, listener net.Listener, handler Handler, opts Ser
 		connectionsMu.Lock()
 		connections[conn] = struct{}{}
 		connectionsMu.Unlock()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			defer func() {
 				connectionsMu.Lock()
 				delete(connections, conn)
 				connectionsMu.Unlock()
 			}()
 			serveConn(ctx, conn, handler, opts)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -321,158 +314,182 @@ func serveConn(ctx context.Context, conn net.Conn, handler Handler, opts ServeOp
 	writer := bufio.NewWriter(conn)
 	defer recoverHandlerPanic(writer)
 
+	handledRequests := 0
 	for {
 		if err := setDeadline(ctx, conn); err != nil {
-			writeError(writer, err)
+			if handledRequests > 0 {
+				return
+			}
+			trace := newRequestTrace(opts, "unknown")
+			trace.Event("rpc_deadline", "failure", diagnostic.Value("error", err))
+			writeErr := writeError(writer, err)
+			trace.Finish(errors.Join(err, writeErr))
 			return
 		}
 
 		var req request
 		if err := readJSONLine(reader, &req); err != nil {
+			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
+				trace := newRequestTrace(opts, "unknown")
+				trace.Event("rpc_request", "decode_failure", diagnostic.Value("error", err))
+				trace.Finish(err)
+			}
 			return
 		}
-		if req.ProtocolVersion != api.ProtocolVersion {
-			writeError(writer, fmt.Errorf(
-				"RPC protocol mismatch: client=%q daemon=%q",
-				req.ProtocolVersion,
-				api.ProtocolVersion,
-			))
-			return
-		}
+
+		trace := newRequestTrace(opts, req.Method)
+		trace.Event("rpc_request", "decoded",
+			diagnostic.Value("protocol_version", req.ProtocolVersion),
+		)
 
 		if opts.OnActivity != nil {
 			opts.OnActivity()
 		}
 
-		requestCtx, finishRequest := contextForRequest(ctx, conn)
-		var responseErr error
-		switch req.Method {
-		case "ping":
-			params, err := decodeParams[api.PingRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
+		requestCtx, finishRequest := contextForRequest(ctx, conn, trace)
+		requestCtx = diagnostic.WithTrace(requestCtx, trace)
 
-			res, err := handler.Ping(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
+		var result interface{}
+		var binary []byte
+		var requestErr error
+		if req.ProtocolVersion != api.ProtocolVersion {
+			requestErr = fmt.Errorf(
+				"RPC protocol mismatch: client=%q daemon=%q",
+				req.ProtocolVersion,
+				api.ProtocolVersion,
+			)
+		} else {
+			result, binary, requestErr = dispatchRequestSafely(requestCtx, req, handler)
+		}
 
-			responseErr = writeResult(writer, res, nil)
-		case "attach_session":
-			params, err := decodeParams[api.AttachSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
+		if requestErr != nil {
+			if ctx.Err() != nil {
+				trace.Event("rpc_connection", "server_context_canceled",
+					diagnostic.Value("error", ctx.Err()),
+				)
 			}
-
-			res, err := handler.AttachSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
+			trace.Event("rpc_handler", "failure", diagnostic.Value("error", requestErr))
+			writeErr := writeError(writer, requestErr)
+			if writeErr != nil {
+				trace.Event("rpc_response", "write_failure", diagnostic.Value("error", writeErr))
 			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "list_sessions":
-			params, err := decodeParams[api.ListSessionsRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ListSessions(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "detach_session":
-			params, err := decodeParams[api.DetachSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.DetachSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "stop_daemon":
-			params, err := decodeParams[api.StopDaemonRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.StopDaemon(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		case "observe_session":
-			params, err := decodeParams[api.ObserveSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ObserveSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			screenshot := res.Observation.ScreenshotData
-			res.Observation.ScreenshotData = nil
-			if len(screenshot) > 0 {
-				res.Observation.Screenshot = ""
-			}
-			responseErr = writeResult(writer, res, screenshot)
-		case "act_session":
-			params, err := decodeParams[api.ActSessionRequest](req.Params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			res, err := handler.ActSession(requestCtx, params)
-			if err != nil {
-				writeError(writer, err)
-				finishRequest()
-				return
-			}
-
-			responseErr = writeResult(writer, res, nil)
-		default:
-			writeError(writer, fmt.Errorf("unknown method: %s", req.Method))
 			finishRequest()
+			trace.Finish(errors.Join(requestErr, writeErr))
 			return
 		}
+
+		trace.Event("rpc_handler", "finish",
+			diagnostic.Value("binary_bytes", len(binary)),
+		)
+		responseErr := writeResult(writer, result, binary)
+		if responseErr != nil {
+			trace.Event("rpc_response", "write_failure",
+				diagnostic.Value("binary_bytes", len(binary)),
+				diagnostic.Value("error", responseErr),
+			)
+		} else {
+			trace.Event("rpc_response", "finish",
+				diagnostic.Value("binary_bytes", len(binary)),
+			)
+		}
 		finishRequest()
+		trace.Finish(responseErr)
 		if responseErr != nil {
 			return
 		}
+		handledRequests++
+	}
+}
+
+func newRequestTrace(opts ServeOptions, method string) *diagnostic.Trace {
+	if opts.NewTrace != nil {
+		if trace := opts.NewTrace(method); trace != nil {
+			return trace
+		}
+	}
+	return diagnostic.New(method, false, nil)
+}
+
+func dispatchRequestSafely(ctx context.Context, req request, handler Handler) (result interface{}, binary []byte, resultErr error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("RPC handler panic: %v\n%s", recovered, debug.Stack())
+			result = nil
+			binary = nil
+			resultErr = errors.New("internal daemon error")
+		}
+	}()
+	return dispatchRequest(ctx, req, handler)
+}
+
+func dispatchRequest(ctx context.Context, req request, handler Handler) (interface{}, []byte, error) {
+	switch req.Method {
+	case "ping":
+		params, err := decodeParams[api.PingRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.Ping(ctx, params)
+		return res, nil, err
+	case "attach_session":
+		params, err := decodeParams[api.AttachSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.AttachSession(ctx, params)
+		return res, nil, err
+	case "list_sessions":
+		params, err := decodeParams[api.ListSessionsRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ListSessions(ctx, params)
+		return res, nil, err
+	case "detach_session":
+		params, err := decodeParams[api.DetachSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.DetachSession(ctx, params)
+		return res, nil, err
+	case "stop_daemon":
+		params, err := decodeParams[api.StopDaemonRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.StopDaemon(ctx, params)
+		return res, nil, err
+	case "observe_session":
+		params, err := decodeParams[api.ObserveSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ObserveSession(ctx, params)
+		if err != nil {
+			return nil, nil, err
+		}
+		screenshot := res.Observation.ScreenshotData
+		res.Observation.ScreenshotData = nil
+		if len(screenshot) > 0 {
+			res.Observation.Screenshot = ""
+		}
+		return res, screenshot, nil
+	case "inspect_styles":
+		params, err := decodeParams[api.InspectStylesRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.InspectStyles(ctx, params)
+		return res, nil, err
+	case "act_session":
+		params, err := decodeParams[api.ActSessionRequest](req.Params)
+		if err != nil {
+			return nil, nil, err
+		}
+		res, err := handler.ActSession(ctx, params)
+		return res, nil, err
+	default:
+		return nil, nil, fmt.Errorf("unknown method: %s", req.Method)
 	}
 }
 
@@ -485,10 +502,13 @@ func recoverHandlerPanic(writer *bufio.Writer) {
 	writeError(writer, errors.New("internal daemon error"))
 }
 
-func writeError(writer *bufio.Writer, err error) {
-	writeJSONLine(writer, struct {
+func writeError(writer *bufio.Writer, err error) error {
+	if writeErr := writeJSONLine(writer, struct {
 		Error string `json:"error"`
-	}{Error: err.Error()})
+	}{Error: err.Error()}); writeErr != nil {
+		return fmt.Errorf("write RPC error response: %w", writeErr)
+	}
+	return nil
 }
 
 func writeResult(writer *bufio.Writer, result interface{}, binary []byte) error {
@@ -499,15 +519,19 @@ func writeResult(writer *bufio.Writer, result interface{}, binary []byte) error 
 		Result     interface{} `json:"result"`
 		BinarySize int         `json:"binary_size,omitempty"`
 	}{Result: result, BinarySize: len(binary)}); err != nil {
-		return err
+		return fmt.Errorf("write RPC response header: %w", err)
 	}
 	if len(binary) == 0 {
 		return nil
 	}
-	if _, err := writer.Write(binary); err != nil {
-		return err
+	written, err := writer.Write(binary)
+	if err != nil {
+		return fmt.Errorf("write RPC binary response: wrote %d of %d bytes: %w", written, len(binary), err)
 	}
-	return writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return fmt.Errorf("flush RPC binary response: %d bytes: %w", len(binary), err)
+	}
+	return nil
 }
 
 func decodeParams[T any](value interface{}) (T, error) {
@@ -558,7 +582,7 @@ func readJSONLine(reader *bufio.Reader, value interface{}) error {
 	return json.Unmarshal(data, value)
 }
 
-func contextForRequest(parent context.Context, conn net.Conn) (context.Context, func()) {
+func contextForRequest(parent context.Context, conn net.Conn, trace *diagnostic.Trace) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	var once sync.Once
@@ -568,12 +592,13 @@ func contextForRequest(parent context.Context, conn net.Conn) (context.Context, 
 		defer ticker.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-parent.Done():
 				return
 			case <-done:
 				return
 			case <-ticker.C:
 				if connectionClosed(conn) {
+					trace.Event("rpc_connection", "client_disconnected")
 					cancel()
 					return
 				}

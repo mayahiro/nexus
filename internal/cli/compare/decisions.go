@@ -1259,6 +1259,12 @@ func compareReportHasNodeDecisionFinding(findings []compareFinding, kind string,
 }
 
 func compareFindingMatchesNode(finding compareFinding, node compareSnapshotNode) bool {
+	if finding.Kind == "missing_node" && finding.OldRef != "" {
+		return finding.OldRef == node.Ref
+	}
+	if finding.Kind == "new_node" && finding.NewRef != "" {
+		return finding.NewRef == node.Ref
+	}
 	if finding.Fingerprint != "" && node.Fingerprint != "" && finding.Fingerprint != node.Fingerprint {
 		return false
 	}
