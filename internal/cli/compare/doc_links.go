@@ -10,6 +10,7 @@ const docsBaseURL = "https://github.com/mayahiro/nexus/blob/main/docs/"
 const (
 	aiUsageDocURL           = docsBaseURL + "ai/usage.md"
 	aiCompareDocURL         = docsBaseURL + "ai/compare.md"
+	aiCompareIdentityDocURL = docsBaseURL + "ai/compare-identity.md"
 	migrationPlaybookDocURL = docsBaseURL + "ai/playbooks/migration.md"
 )
 

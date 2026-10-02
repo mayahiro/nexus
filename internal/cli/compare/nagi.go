@@ -98,6 +98,7 @@ func buildNagiCompareCommand(connectClient func(context.Context) (*rpc.Client, e
 	materializeDecisions := newNagiMaterializeDecisionsCommand()
 	repairDecisions := newNagiRepairDecisionsCommand()
 	auditDecisions := newNagiAuditDecisionsCommand()
+	suggestDecisions := newNagiSuggestDecisionsCommand()
 	command := nagicli.NewCommand("compare").
 		About("Compare browser interfaces and manage matching decisions").
 		UsageVariant("url-pair", compareURLUsage).
@@ -162,7 +163,8 @@ func buildNagiCompareCommand(connectClient func(context.Context) (*rpc.Client, e
 		Subcommand(normalizeDecisions).
 		Subcommand(materializeDecisions).
 		Subcommand(repairDecisions).
-		Subcommand(auditDecisions)
+		Subcommand(auditDecisions).
+		Subcommand(suggestDecisions)
 	if withHandlers {
 		command.Handle(nagiCompareHandler(connectClient, runNagiCompare))
 		validateDecisions.Handle(nagiCompareHandler(connectClient, runNagiCompareValidateDecisions))
@@ -170,6 +172,7 @@ func buildNagiCompareCommand(connectClient func(context.Context) (*rpc.Client, e
 		materializeDecisions.Handle(nagiCompareHandler(connectClient, runNagiCompareMaterializeDecisions))
 		repairDecisions.Handle(nagiCompareHandler(connectClient, runNagiCompareRepairDecisions))
 		auditDecisions.Handle(nagiCompareHandler(connectClient, runNagiCompareAuditDecisions))
+		suggestDecisions.Handle(nagiCompareHandler(connectClient, runNagiCompareSuggestDecisions))
 	}
 	return command
 }

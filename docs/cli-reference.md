@@ -27,6 +27,7 @@ Maintainers: edit the command graph, then run `mise run docs` from the repositor
 - [nxctl compare materialize-decisions](#nxctl-compare-materialize-decisions)
 - [nxctl compare repair-decisions](#nxctl-compare-repair-decisions)
 - [nxctl compare audit-decisions](#nxctl-compare-audit-decisions)
+- [nxctl compare suggest-decisions](#nxctl-compare-suggest-decisions)
 - [nxctl close](#nxctl-close)
 - [nxctl dblclick](#nxctl-dblclick)
 - [nxctl dialog](#nxctl-dialog)
@@ -307,6 +308,8 @@ Compare browser interfaces and manage matching decisions
 
     nxctl compare audit-decisions --decisions-file <jsonl> --compare-json <file> [--json]
 
+    nxctl compare suggest-decisions --compare-json <file> [--output <jsonl>] [--output-json <file>] [--model <id>] [--min-probability <number>] [--min-margin <number>] [--limit <n>] [--max-candidates <n>] [--timeout <ms>] [--promote] [--dry-run] [--json]
+
 ### Commands
 
 - **validate\-decisions**: Validate compare decision records
@@ -314,6 +317,7 @@ Compare browser interfaces and manage matching decisions
 - **materialize\-decisions**: Materialize decision selectors as observed refs
 - **repair\-decisions**: Repair stale refs in compare decision records
 - **audit\-decisions**: Audit compare decisions against one report
+- **suggest\-decisions**: Suggest element pairs by sending bounded compare context to Jev
 
 ### Arguments
 
@@ -483,6 +487,45 @@ Audit compare decisions against one report
 
 ### Links
 
+- [Compare guide](<https://github.com/mayahiro/nexus/blob/main/docs/ai/compare.md>)
+
+## nxctl compare suggest\-decisions
+
+Suggest element pairs by sending bounded compare context to Jev
+
+### Usage
+
+    nxctl compare suggest-decisions --compare-json <file> [--output <jsonl>] [--output-json <file>] [--model <id>] [--min-probability <number>] [--min-margin <number>] [--limit <n>] [--max-candidates <n>] [--timeout <ms>] [--promote] [--dry-run] [--json]
+
+### Options
+
+- **\-\-compare\-json \<FILE\>**: single\-page compare JSON with matching debug
+- **\-\-output \<FILE\>**: new decisions JSONL file\; required unless \-\-dry\-run
+- **\-\-output\-json \<FILE\>**: new review JSON file\; defaults to \<output\>\.review\.json
+- **\-\-model \<ID\>**: Jev model ID or alias \[default\: jev\-1\.13\.0\]
+- **\-\-min\-probability \<NUMBER\>**: minimum choice and same\-element probabilities for promotion \[default\: 0\.95\]
+- **\-\-min\-margin \<NUMBER\>**: minimum choice probability margin for promotion \[default\: 0\.20\]
+- **\-\-limit \<N\>**: maximum old nodes to consider \(1\-200\) \[default\: 20\]
+- **\-\-max\-candidates \<N\>**: maximum new candidates per old node \(1\-20\) \[default\: 5\]
+- **\-\-timeout \<MS\>**: total remote evaluation timeout in milliseconds \(1\-300000\) \[default\: 30000\]
+- **\-\-promote**: emit high\-confidence pairs that pass probability thresholds
+- **\-\-dry\-run**: print exact request payloads as JSON without sending or writing decisions
+- **\-\-json**: print the review report as JSON
+- **\-h\, \-\-help**: Print help
+
+### Notes
+
+Remote evaluation uses TYPESAFE\_API\_KEY and the official TypeSafe endpoint\; invoking this command opts in to sending page context
+
+Suggestions remain tentative unless \-\-promote is supplied\; thresholds are experimental and are not calibrated on your pages
+
+Only unmatched nodes are considered\; conflicting proposals stay unknown and existing output files are never overwritten
+
+Dry\-run needs no API key and includes outgoing page text\; inspect it before sharing or sending
+
+### Links
+
+- [Identity suggestions](<https://github.com/mayahiro/nexus/blob/main/docs/ai/compare-identity.md>)
 - [Compare guide](<https://github.com/mayahiro/nexus/blob/main/docs/ai/compare.md>)
 
 ## nxctl close

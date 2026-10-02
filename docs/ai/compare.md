@@ -7,6 +7,7 @@ Related docs:
 - README command overview: [README.md](../../README.md)
 - migration execution order: [playbooks/migration.md](playbooks/migration.md)
 - decision JSONL schema: [compare-decisions.schema.json](compare-decisions.schema.json)
+- optional Jev element pairing: [compare-identity.md](compare-identity.md) ([日本語](compare-identity_ja.md))
 
 ## Default Approach
 
@@ -176,6 +177,8 @@ SVGs deserve special care in `all` mode. Nexus treats the `<svg>` root as the de
 ## Pair Decisions
 
 Use `--decisions-file <jsonl>` when an AI or human has reviewed ambiguous candidates and wants compare to reuse high-confidence pairings.
+
+Use `compare suggest-decisions` for experimental Jev suggestions from a saved single-page compare JSON with matching debug. Preview outgoing context with `--dry-run`; actual evaluation explicitly sends page context to TypeSafe and needs `TYPESAFE_API_KEY`. Suggestions are tentative by default. See the [identity suggestion guide](compare-identity.md) ([日本語](compare-identity_ja.md)) for review, optional promotion, and data limits.
 
 Each line is one JSON object. Validate each line against `docs/ai/compare-decisions.schema.json`. Compare applies high-confidence `pair` and `subtree_pair` entries before automatic matching:
 

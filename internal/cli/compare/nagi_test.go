@@ -26,6 +26,7 @@ const expectedNormalizeDecisionsUsage = "--decisions-file <jsonl> [--compare-jso
 const expectedMaterializeDecisionsUsage = "--decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]"
 const expectedRepairDecisionsUsage = "--decisions-file <jsonl> --compare-json <file> [--old-session <id>] [--new-session <id>] [--output <jsonl>] [--json]"
 const expectedAuditDecisionsUsage = "--decisions-file <jsonl> --compare-json <file> [--json]"
+const expectedSuggestDecisionsUsage = "--compare-json <file> [--output <jsonl>] [--output-json <file>] [--model <id>] [--min-probability <number>] [--min-margin <number>] [--limit <n>] [--max-candidates <n>] [--timeout <ms>] [--promote] [--dry-run] [--json]"
 
 func TestNagiCompareSchema(t *testing.T) {
 	root := newNagiCompareRoot()
@@ -50,6 +51,7 @@ func TestNagiCompareSchema(t *testing.T) {
 		"nxctl/compare/materialize-decisions:default",
 		"nxctl/compare/repair-decisions:default",
 		"nxctl/compare/audit-decisions:default",
+		"nxctl/compare/suggest-decisions:default",
 	}
 	if !reflect.DeepEqual(variantIDs, expected) {
 		t.Fatalf("unexpected usage variants: %#v", variantIDs)
@@ -108,6 +110,12 @@ func TestNagiCompareUsageVariantContract(t *testing.T) {
 			Command: "audit-decisions",
 			Syntax:  "audit-decisions " + expectedAuditDecisionsUsage,
 			Args:    []string{"compare", "audit-decisions", "--decisions-file", "decisions.jsonl", "--compare-json", "compare.json"},
+		},
+		{
+			ID:      "suggest-decisions",
+			Command: "suggest-decisions",
+			Syntax:  "suggest-decisions " + expectedSuggestDecisionsUsage,
+			Args:    []string{"compare", "suggest-decisions", "--compare-json", "compare.json", "--output", "suggestions.jsonl"},
 		},
 	}
 	for index := range contracts {

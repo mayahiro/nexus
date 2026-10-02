@@ -121,6 +121,7 @@ func TestNagiApplicationRepresentativeInvocations(t *testing.T) {
 		{name: "compare materialize decisions", args: []string{"compare", "materialize-decisions", "--decisions-file", "decisions.jsonl", "--compare-json", "compare.json"}},
 		{name: "compare repair decisions", args: []string{"compare", "repair-decisions", "--decisions-file", "decisions.jsonl", "--compare-json", "compare.json"}},
 		{name: "compare audit decisions", args: []string{"compare", "audit-decisions", "--decisions-file", "decisions.jsonl", "--compare-json", "compare.json"}},
+		{name: "compare suggest decisions", args: []string{"compare", "suggest-decisions", "--compare-json", "compare.json", "--output", "suggestions.jsonl"}},
 		{name: "close", args: []string{"close"}},
 		{name: "dblclick", args: []string{"dblclick", "@e1"}},
 		{name: "dialog get", args: []string{"dialog", "get", "--json"}},
